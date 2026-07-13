@@ -2,6 +2,7 @@ export type CliCommand =
   | { command: 'editors' }
   | { command: 'state'; projectId: string; editorInstanceId?: string }
   | { command: 'assets'; projectId: string; editorInstanceId?: string; pattern: string; uuid?: string }
+  | { command: 'open-asset'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'hierarchy'; projectId: string; editorInstanceId?: string; depth: number }
   | { command: 'node'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'component'; projectId: string; editorInstanceId?: string; uuid: string }
@@ -48,6 +49,7 @@ export function parseCommand(argv: string[]): CliCommand {
     }
     case 'node':
     case 'component':
+    case 'open-asset':
       return {
         command,
         ...selector,

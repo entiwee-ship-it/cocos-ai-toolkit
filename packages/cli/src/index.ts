@@ -10,6 +10,7 @@ const HELP = `用法:
   cocos-ai-probe editors
   cocos-ai-probe state --project-id <id> [--editor-instance-id <id>]
   cocos-ai-probe assets --project-id <id> --pattern <text> [--uuid <uuid>] [--editor-instance-id <id>]
+  cocos-ai-probe open-asset --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe hierarchy --project-id <id> [--editor-instance-id <id>] [--depth <n>]
   cocos-ai-probe node --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe component --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
@@ -76,6 +77,8 @@ function toRequest(command: CliCommand): [string, unknown] {
       return ['probe.node', { selector, params: { uuid: command.uuid } }];
     case 'component':
       return ['probe.component', { selector, params: { uuid: command.uuid } }];
+    case 'open-asset':
+      return ['probe.openAsset', { selector, params: { uuid: command.uuid } }];
     case 'prefab':
       return ['probe.prefab', { selector, params: { nodeUuid: command.nodeUuid } }];
     case 'save-report':

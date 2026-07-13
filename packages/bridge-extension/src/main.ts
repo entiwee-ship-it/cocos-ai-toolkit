@@ -40,6 +40,12 @@ export function load(): void {
     handlers: {
       'probe.editorState': () => probeEditorState(),
       'probe.assets': (payload) => probeAssets(payload),
+      'probe.openAsset': async (payload) => {
+        const request = payload as { uuid?: unknown };
+        if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');
+        await Editor.Message.request('asset-db', 'open-asset', request.uuid);
+        return { opened: true, uuid: request.uuid };
+      },
       ...Object.fromEntries(Object.entries(sceneMethods)
         .filter(([method]) => method !== 'probe.editorState' && method !== 'probe.assets')
         .map(([method, sceneMethod]) => [

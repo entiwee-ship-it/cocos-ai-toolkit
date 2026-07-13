@@ -1,0 +1,5 @@
+{
+  "status": "unresolved",
+  "reason": "The verified ClubView prefab sample did not expose an isNested=true node through Creator 3.8.8 query-node-tree.",
+  "requiredEvidence": ["source prefab uuid", "instance node uuid", "file id", "override list", "effective values"]
+}
