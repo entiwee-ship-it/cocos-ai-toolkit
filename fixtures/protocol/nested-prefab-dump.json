@@ -1,5 +1,4871 @@
 {
-  "status": "unresolved",
-  "reason": "The verified ClubView prefab sample did not expose an isNested=true node through Creator 3.8.8 query-node-tree.",
-  "requiredEvidence": ["source prefab uuid", "instance node uuid", "file id", "override list", "effective values"]
+  "fixtureVersion": 1,
+  "creatorVersion": "3.8.8",
+  "sample": {
+    "ownerAssetUrl": "db://assets/qyq/club/ClubView.prefab",
+    "ownerAssetUuid": "808284d7-cc42-4337-926a-bb29c4e04296",
+    "sourceAssetUrl": "db://assets/qyq/club/dataItems/tableItem.prefab",
+    "sourceAssetUuid": "6b67227b-2d27-4cc4-99c1-c32c712d52ea",
+    "nodePath": "should_hide_in_hierarchy/ClubView/Body/Content_body/tableContent/TB_content/tableItem"
+  },
+  "document": {
+    "assetUuid": "808284d7-cc42-4337-926a-bb29c4e04296",
+    "nodeUuid": "59+8Aq44ZFmZPgaj4LrZZc",
+    "source": "message-api"
+  },
+  "source": "message-api",
+  "data": {
+    "ownerDocumentAssetUuid": "808284d7-cc42-4337-926a-bb29c4e04296",
+    "sourcePrefabAssetUuid": "6b67227b-2d27-4cc4-99c1-c32c712d52ea",
+    "instanceRootObjectUuid": "59+8Aq44ZFmZPgaj4LrZZc",
+    "sourceObjectFileId": "c46/YsCPVOJYA4mWEpNYRx",
+    "instanceFileId": "ebUQ1XI5JB6qQNhlsAh8vI",
+    "prefabRootNodeUuid": "ab7FHoFOBFbKzYbwA7Kucm",
+    "sync": true,
+    "state": {
+      "state": 2,
+      "isUnwrappable": true,
+      "isRevertable": true,
+      "isApplicable": true,
+      "isAddedChild": false,
+      "isNested": true,
+      "assetUuid": "6b67227b-2d27-4cc4-99c1-c32c712d52ea"
+    },
+    "instanceChain": [
+      {
+        "depth": 0,
+        "assetUuid": "808284d7-cc42-4337-926a-bb29c4e04296",
+        "instanceNodeUuid": "ab7FHoFOBFbKzYbwA7Kucm",
+        "state": 1,
+        "isNested": false
+      },
+      {
+        "depth": 1,
+        "assetUuid": "6b67227b-2d27-4cc4-99c1-c32c712d52ea",
+        "instanceNodeUuid": "59+8Aq44ZFmZPgaj4LrZZc",
+        "state": 2,
+        "isNested": true
+      }
+    ],
+    "propertyOverrides": [
+      {
+        "index": 0,
+        "targetLocalIds": [
+          "c46/YsCPVOJYA4mWEpNYRx"
+        ],
+        "propertyPath": [
+          "_name"
+        ],
+        "declaredType": "String",
+        "sourceValue": "tableItem",
+        "overrideValue": "tableItem",
+        "effectiveValue": "tableItem"
+      },
+      {
+        "index": 1,
+        "targetLocalIds": [
+          "c46/YsCPVOJYA4mWEpNYRx"
+        ],
+        "propertyPath": [
+          "_lpos"
+        ],
+        "declaredType": "cc.Vec3",
+        "sourceValue": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "overrideValue": {
+          "x": 240,
+          "y": -185,
+          "z": 0
+        },
+        "effectiveValue": {
+          "x": 240,
+          "y": -185,
+          "z": 0
+        }
+      },
+      {
+        "index": 2,
+        "targetLocalIds": [
+          "c46/YsCPVOJYA4mWEpNYRx"
+        ],
+        "propertyPath": [
+          "_lrot"
+        ],
+        "declaredType": "cc.Quat",
+        "sourceValue": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "overrideValue": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "effectiveValue": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        }
+      },
+      {
+        "index": 3,
+        "targetLocalIds": [
+          "c46/YsCPVOJYA4mWEpNYRx"
+        ],
+        "propertyPath": [
+          "_euler"
+        ],
+        "declaredType": "cc.Vec3",
+        "sourceValue": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "overrideValue": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "effectiveValue": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        }
+      },
+      {
+        "index": 4,
+        "targetLocalIds": [
+          "09PZE7netP2Jm1aukr3ZJm"
+        ],
+        "propertyPath": [
+          "_contentSize"
+        ],
+        "declaredType": "cc.Size",
+        "sourceValue": {
+          "width": 330,
+          "height": 230
+        },
+        "overrideValue": {
+          "width": 400,
+          "height": 250
+        },
+        "effectiveValue": {
+          "width": 400,
+          "height": 250
+        }
+      },
+      {
+        "index": 5,
+        "targetLocalIds": [
+          "20gGO2iK9IsKoY0VNnd1Rx"
+        ],
+        "propertyPath": [
+          "_contentSize"
+        ],
+        "declaredType": "cc.Size",
+        "sourceValue": {
+          "width": 330,
+          "height": 230
+        },
+        "overrideValue": {
+          "width": 400,
+          "height": 250
+        },
+        "effectiveValue": {
+          "width": 400,
+          "height": 250
+        }
+      },
+      {
+        "index": 6,
+        "targetLocalIds": [
+          "cepv6tBaRKtZO+AQwOrnal"
+        ],
+        "propertyPath": [
+          "_contentSize"
+        ],
+        "declaredType": "cc.Size",
+        "sourceValue": {
+          "width": 221,
+          "height": 178
+        },
+        "overrideValue": {
+          "width": 225,
+          "height": 184
+        },
+        "effectiveValue": {
+          "width": 225,
+          "height": 184
+        }
+      },
+      {
+        "index": 7,
+        "targetLocalIds": [
+          "edIzvueQRNRo7DcYKxR/RW"
+        ],
+        "propertyPath": [
+          "_active"
+        ],
+        "declaredType": "Boolean",
+        "sourceValue": true,
+        "overrideValue": false,
+        "effectiveValue": false
+      },
+      {
+        "index": 8,
+        "targetLocalIds": [
+          "c4q+pPAORNx7o8N/QDdr5E"
+        ],
+        "propertyPath": [
+          "_active"
+        ],
+        "declaredType": "Boolean",
+        "sourceValue": true,
+        "overrideValue": false,
+        "effectiveValue": false
+      },
+      {
+        "index": 9,
+        "targetLocalIds": [
+          "dcOPUHe3hMSZDTrRmSL0gr"
+        ],
+        "propertyPath": [
+          "_active"
+        ],
+        "declaredType": "Boolean",
+        "sourceValue": true,
+        "overrideValue": false,
+        "effectiveValue": false
+      },
+      {
+        "index": 10,
+        "targetLocalIds": [
+          "06oXNWuI5JNLrD5TMS74YF"
+        ],
+        "propertyPath": [
+          "_active"
+        ],
+        "declaredType": "Boolean",
+        "sourceValue": true,
+        "overrideValue": false,
+        "effectiveValue": false
+      },
+      {
+        "index": 11,
+        "targetLocalIds": [
+          "c7afGbORpKU6fOzWtCQ520"
+        ],
+        "propertyPath": [
+          "_active"
+        ],
+        "declaredType": "Boolean",
+        "sourceValue": true,
+        "overrideValue": false,
+        "effectiveValue": false
+      },
+      {
+        "index": 12,
+        "targetLocalIds": [
+          "b0jZrAAUVB3I2KlshWWAyL"
+        ],
+        "propertyPath": [
+          "_active"
+        ],
+        "declaredType": "Boolean",
+        "sourceValue": false,
+        "overrideValue": false,
+        "effectiveValue": false
+      },
+      {
+        "index": 13,
+        "targetLocalIds": [
+          "c4q+pPAORNx7o8N/QDdr5E"
+        ],
+        "propertyPath": [
+          "_lpos"
+        ],
+        "declaredType": "cc.Vec3",
+        "sourceValue": {
+          "x": -120,
+          "y": 120,
+          "z": 0
+        },
+        "overrideValue": {
+          "x": -140,
+          "y": 20,
+          "z": 0
+        },
+        "effectiveValue": {
+          "x": -140,
+          "y": 20,
+          "z": 0
+        }
+      },
+      {
+        "index": 14,
+        "targetLocalIds": [
+          "dcOPUHe3hMSZDTrRmSL0gr"
+        ],
+        "propertyPath": [
+          "_lpos"
+        ],
+        "declaredType": "cc.Vec3",
+        "sourceValue": {
+          "x": 120,
+          "y": 120,
+          "z": 0
+        },
+        "overrideValue": {
+          "x": 140,
+          "y": 20,
+          "z": 0
+        },
+        "effectiveValue": {
+          "x": 140,
+          "y": 20,
+          "z": 0
+        }
+      },
+      {
+        "index": 15,
+        "targetLocalIds": [
+          "06oXNWuI5JNLrD5TMS74YF"
+        ],
+        "propertyPath": [
+          "_lpos"
+        ],
+        "declaredType": "cc.Vec3",
+        "sourceValue": {
+          "x": -120,
+          "y": -90,
+          "z": 0
+        },
+        "overrideValue": {
+          "x": 0,
+          "y": 90,
+          "z": 0
+        },
+        "effectiveValue": {
+          "x": 0,
+          "y": 90,
+          "z": 0
+        }
+      },
+      {
+        "index": 16,
+        "targetLocalIds": [
+          "c7afGbORpKU6fOzWtCQ520"
+        ],
+        "propertyPath": [
+          "_lpos"
+        ],
+        "declaredType": "cc.Vec3",
+        "sourceValue": {
+          "x": 120,
+          "y": -90,
+          "z": 0
+        },
+        "overrideValue": {
+          "x": 0,
+          "y": -90,
+          "z": 0
+        },
+        "effectiveValue": {
+          "x": 0,
+          "y": -90,
+          "z": 0
+        }
+      },
+      {
+        "index": 17,
+        "targetLocalIds": [
+          "c7afGbORpKU6fOzWtCQ520"
+        ],
+        "propertyPath": [
+          "_name"
+        ],
+        "declaredType": "String",
+        "sourceValue": "yizi2",
+        "overrideValue": "yizi3",
+        "effectiveValue": "yizi3"
+      },
+      {
+        "index": 18,
+        "targetLocalIds": [
+          "dcOPUHe3hMSZDTrRmSL0gr"
+        ],
+        "propertyPath": [
+          "_name"
+        ],
+        "declaredType": "String",
+        "sourceValue": "yizi3",
+        "overrideValue": "yizi2",
+        "effectiveValue": "yizi2"
+      },
+      {
+        "index": 19,
+        "targetLocalIds": [
+          "c81/Fes1dMaKFHP9zVaIGW"
+        ],
+        "propertyPath": [
+          "_lockFlags"
+        ],
+        "declaredType": "Number",
+        "sourceValue": 18,
+        "overrideValue": 2,
+        "effectiveValue": 2
+      },
+      {
+        "index": 20,
+        "targetLocalIds": [
+          "7aK/wfvrdLD6U9rH+YxTud"
+        ],
+        "propertyPath": [
+          "_lpos"
+        ],
+        "declaredType": "cc.Vec3",
+        "sourceValue": {
+          "x": 0,
+          "y": 6.5,
+          "z": 0
+        },
+        "overrideValue": {
+          "x": 0,
+          "y": 16,
+          "z": 0
+        },
+        "effectiveValue": {
+          "x": 0,
+          "y": 16,
+          "z": 0
+        }
+      },
+      {
+        "index": 21,
+        "targetLocalIds": [
+          "c81/Fes1dMaKFHP9zVaIGW"
+        ],
+        "propertyPath": [
+          "_horizontalCenter"
+        ],
+        "declaredType": "Number",
+        "sourceValue": 0,
+        "overrideValue": 0,
+        "effectiveValue": 0
+      },
+      {
+        "index": 22,
+        "targetLocalIds": [
+          "c81/Fes1dMaKFHP9zVaIGW"
+        ],
+        "propertyPath": [
+          "_verticalCenter"
+        ],
+        "declaredType": "Number",
+        "sourceValue": 6.5,
+        "overrideValue": 16,
+        "effectiveValue": 16
+      },
+      {
+        "index": 23,
+        "targetLocalIds": [
+          "69lM2NIW9OsZvm0NZsy8EU"
+        ],
+        "propertyPath": [
+          "_contentSize"
+        ],
+        "declaredType": "cc.Size",
+        "sourceValue": {
+          "width": 128.4099578857422,
+          "height": 61.5
+        },
+        "overrideValue": {
+          "width": 128.4099578857422,
+          "height": 50
+        },
+        "effectiveValue": {
+          "width": 128.4099578857422,
+          "height": 48.9
+        }
+      },
+      {
+        "index": 24,
+        "targetLocalIds": [
+          "39JuUefjhLVa/MYhf2NXmA"
+        ],
+        "propertyPath": [
+          "_lineHeight"
+        ],
+        "declaredType": "Number",
+        "sourceValue": 21,
+        "overrideValue": 15,
+        "effectiveValue": 15
+      },
+      {
+        "index": 25,
+        "targetLocalIds": [
+          "39JuUefjhLVa/MYhf2NXmA"
+        ],
+        "propertyPath": [
+          "_fontSize"
+        ],
+        "declaredType": "Number",
+        "sourceValue": 30,
+        "overrideValue": 24,
+        "effectiveValue": 24
+      }
+    ],
+    "targetOverrides": [],
+    "mountedChildren": [
+      {
+        "value": {
+          "targetInfo": {
+            "name": "targetInfo",
+            "value": {
+              "localID": {
+                "name": "localID",
+                "value": [
+                  {
+                    "value": "c46/YsCPVOJYA4mWEpNYRx",
+                    "default": "",
+                    "type": "String",
+                    "readonly": false,
+                    "visible": true,
+                    "animatable": true,
+                    "extends": []
+                  }
+                ],
+                "default": [],
+                "type": "String",
+                "readonly": false,
+                "visible": false,
+                "animatable": true,
+                "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                "isArray": true,
+                "elementTypeData": {
+                  "value": "",
+                  "default": "",
+                  "type": "String",
+                  "readonly": false,
+                  "visible": true,
+                  "animatable": true,
+                  "extends": []
+                },
+                "extends": []
+              }
+            },
+            "default": null,
+            "type": "cc.TargetInfo",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.tooltip",
+            "extends": []
+          },
+          "nodes": {
+            "name": "nodes",
+            "value": [
+              {
+                "value": {
+                  "uuid": "7d//rIE/1GrZMv03+1xhn2"
+                },
+                "default": null,
+                "type": "cc.Node",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": [
+                  "cc.Object"
+                ]
+              }
+            ],
+            "default": [],
+            "type": "cc.Node",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.tooltip",
+            "isArray": true,
+            "elementTypeData": {
+              "value": {
+                "uuid": ""
+              },
+              "default": null,
+              "type": "cc.Node",
+              "readonly": false,
+              "visible": true,
+              "animatable": true,
+              "extends": [
+                "cc.Object"
+              ]
+            },
+            "extends": [
+              "cc.Object"
+            ]
+          }
+        },
+        "default": {
+          "type": "cc.MountedChildrenInfo",
+          "value": {
+            "targetInfo": {
+              "name": "targetInfo",
+              "value": null,
+              "default": null,
+              "type": "cc.TargetInfo",
+              "readonly": false,
+              "visible": false,
+              "animatable": true,
+              "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.displayName",
+              "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.tooltip",
+              "extends": []
+            },
+            "nodes": {
+              "name": "nodes",
+              "value": [],
+              "default": [],
+              "type": "cc.Node",
+              "readonly": false,
+              "visible": false,
+              "animatable": true,
+              "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.displayName",
+              "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.tooltip",
+              "isArray": true,
+              "elementTypeData": {
+                "value": {
+                  "uuid": ""
+                },
+                "default": null,
+                "type": "cc.Node",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": [
+                  "cc.Object"
+                ]
+              },
+              "extends": [
+                "cc.Object"
+              ]
+            }
+          }
+        },
+        "type": "cc.MountedChildrenInfo",
+        "readonly": false,
+        "visible": true,
+        "animatable": true,
+        "extends": []
+      }
+    ],
+    "mountedComponents": [
+      {
+        "value": {
+          "targetInfo": {
+            "name": "targetInfo",
+            "value": {
+              "localID": {
+                "name": "localID",
+                "value": [
+                  {
+                    "value": "c46/YsCPVOJYA4mWEpNYRx",
+                    "default": "",
+                    "type": "String",
+                    "readonly": false,
+                    "visible": true,
+                    "animatable": true,
+                    "extends": []
+                  }
+                ],
+                "default": [],
+                "type": "String",
+                "readonly": false,
+                "visible": false,
+                "animatable": true,
+                "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                "isArray": true,
+                "elementTypeData": {
+                  "value": "",
+                  "default": "",
+                  "type": "String",
+                  "readonly": false,
+                  "visible": true,
+                  "animatable": true,
+                  "extends": []
+                },
+                "extends": []
+              }
+            },
+            "default": null,
+            "type": "cc.TargetInfo",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.tooltip",
+            "extends": []
+          },
+          "components": {
+            "name": "components",
+            "value": [
+              {
+                "value": {
+                  "uuid": "e8jwrFT3BInboLCT/X++Le"
+                },
+                "default": null,
+                "type": "ListItem",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": [
+                  "cc.Component",
+                  "cc.Object"
+                ]
+              }
+            ],
+            "default": [],
+            "type": "cc.Component",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.tooltip",
+            "isArray": true,
+            "elementTypeData": {
+              "value": {
+                "uuid": ""
+              },
+              "default": null,
+              "type": "cc.Component",
+              "readonly": false,
+              "visible": true,
+              "animatable": true,
+              "extends": [
+                "cc.Object"
+              ]
+            },
+            "extends": [
+              "cc.Object"
+            ]
+          }
+        },
+        "default": {
+          "type": "cc.MountedComponentsInfo",
+          "value": {
+            "targetInfo": {
+              "name": "targetInfo",
+              "value": null,
+              "default": null,
+              "type": "cc.TargetInfo",
+              "readonly": false,
+              "visible": false,
+              "animatable": true,
+              "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.displayName",
+              "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.tooltip",
+              "extends": []
+            },
+            "components": {
+              "name": "components",
+              "value": [],
+              "default": [],
+              "type": "cc.Component",
+              "readonly": false,
+              "visible": false,
+              "animatable": true,
+              "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.displayName",
+              "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.tooltip",
+              "isArray": true,
+              "elementTypeData": {
+                "value": {
+                  "uuid": ""
+                },
+                "default": null,
+                "type": "cc.Component",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": [
+                  "cc.Object"
+                ]
+              },
+              "extends": [
+                "cc.Object"
+              ]
+            }
+          }
+        },
+        "type": "cc.MountedComponentsInfo",
+        "readonly": false,
+        "visible": true,
+        "animatable": true,
+        "extends": []
+      }
+    ],
+    "removedComponents": [],
+    "unresolved": [],
+    "rawPrefabInfo": {
+      "uuid": "6b67227b-2d27-4cc4-99c1-c32c712d52ea",
+      "fileId": "c46/YsCPVOJYA4mWEpNYRx",
+      "rootUuid": "59+8Aq44ZFmZPgaj4LrZZc",
+      "sync": true,
+      "prefabStateInfo": {
+        "state": 2,
+        "isUnwrappable": true,
+        "isRevertable": true,
+        "isApplicable": true,
+        "isAddedChild": false,
+        "isNested": true,
+        "assetUuid": "6b67227b-2d27-4cc4-99c1-c32c712d52ea"
+      },
+      "instance": {
+        "value": {
+          "fileId": {
+            "name": "fileId",
+            "value": "ebUQ1XI5JB6qQNhlsAh8vI",
+            "default": "",
+            "type": "String",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.PrefabInstance.properties.fileId.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.PrefabInstance.properties.fileId.tooltip",
+            "extends": []
+          },
+          "prefabRootNode": {
+            "name": "prefabRootNode",
+            "value": {
+              "uuid": "ab7FHoFOBFbKzYbwA7Kucm"
+            },
+            "type": "cc.Node",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.PrefabInstance.properties.prefabRootNode.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.PrefabInstance.properties.prefabRootNode.tooltip",
+            "extends": [
+              "cc.Object"
+            ]
+          },
+          "mountedChildren": {
+            "name": "mountedChildren",
+            "value": [
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c46/YsCPVOJYA4mWEpNYRx",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.tooltip",
+                    "extends": []
+                  },
+                  "nodes": {
+                    "name": "nodes",
+                    "value": [
+                      {
+                        "value": {
+                          "uuid": "7d//rIE/1GrZMv03+1xhn2"
+                        },
+                        "default": null,
+                        "type": "cc.Node",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": [
+                          "cc.Object"
+                        ]
+                      }
+                    ],
+                    "default": [],
+                    "type": "cc.Node",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.tooltip",
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": {
+                        "uuid": ""
+                      },
+                      "default": null,
+                      "type": "cc.Node",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": [
+                        "cc.Object"
+                      ]
+                    },
+                    "extends": [
+                      "cc.Object"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "cc.MountedChildrenInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.displayName",
+                      "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.tooltip",
+                      "extends": []
+                    },
+                    "nodes": {
+                      "name": "nodes",
+                      "value": [],
+                      "default": [],
+                      "type": "cc.Node",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.displayName",
+                      "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.tooltip",
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": {
+                          "uuid": ""
+                        },
+                        "default": null,
+                        "type": "cc.Node",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": [
+                          "cc.Object"
+                        ]
+                      },
+                      "extends": [
+                        "cc.Object"
+                      ]
+                    }
+                  }
+                },
+                "type": "cc.MountedChildrenInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              }
+            ],
+            "default": [],
+            "type": "cc.MountedChildrenInfo",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.PrefabInstance.properties.mountedChildren.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.PrefabInstance.properties.mountedChildren.tooltip",
+            "isArray": true,
+            "elementTypeData": {
+              "value": {
+                "targetInfo": {
+                  "name": "targetInfo",
+                  "value": null,
+                  "default": null,
+                  "type": "cc.TargetInfo",
+                  "readonly": false,
+                  "visible": false,
+                  "animatable": true,
+                  "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.displayName",
+                  "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.tooltip",
+                  "extends": []
+                },
+                "nodes": {
+                  "name": "nodes",
+                  "value": [],
+                  "default": [],
+                  "type": "cc.Node",
+                  "readonly": false,
+                  "visible": false,
+                  "animatable": true,
+                  "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.displayName",
+                  "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.tooltip",
+                  "isArray": true,
+                  "elementTypeData": {
+                    "value": {
+                      "uuid": ""
+                    },
+                    "default": null,
+                    "type": "cc.Node",
+                    "readonly": false,
+                    "visible": true,
+                    "animatable": true,
+                    "extends": [
+                      "cc.Object"
+                    ]
+                  },
+                  "extends": [
+                    "cc.Object"
+                  ]
+                }
+              },
+              "default": {
+                "type": "cc.MountedChildrenInfo",
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": null,
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.targetInfo.tooltip",
+                    "extends": []
+                  },
+                  "nodes": {
+                    "name": "nodes",
+                    "value": [],
+                    "default": [],
+                    "type": "cc.Node",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.MountedChildrenInfo.properties.nodes.tooltip",
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": {
+                        "uuid": ""
+                      },
+                      "default": null,
+                      "type": "cc.Node",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": [
+                        "cc.Object"
+                      ]
+                    },
+                    "extends": [
+                      "cc.Object"
+                    ]
+                  }
+                }
+              },
+              "type": "cc.MountedChildrenInfo",
+              "readonly": false,
+              "visible": true,
+              "animatable": true,
+              "extends": []
+            },
+            "extends": []
+          },
+          "mountedComponents": {
+            "name": "mountedComponents",
+            "value": [
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c46/YsCPVOJYA4mWEpNYRx",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.tooltip",
+                    "extends": []
+                  },
+                  "components": {
+                    "name": "components",
+                    "value": [
+                      {
+                        "value": {
+                          "uuid": "e8jwrFT3BInboLCT/X++Le"
+                        },
+                        "default": null,
+                        "type": "ListItem",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": [
+                          "cc.Component",
+                          "cc.Object"
+                        ]
+                      }
+                    ],
+                    "default": [],
+                    "type": "cc.Component",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.tooltip",
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": {
+                        "uuid": ""
+                      },
+                      "default": null,
+                      "type": "cc.Component",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": [
+                        "cc.Object"
+                      ]
+                    },
+                    "extends": [
+                      "cc.Object"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "cc.MountedComponentsInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.displayName",
+                      "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.tooltip",
+                      "extends": []
+                    },
+                    "components": {
+                      "name": "components",
+                      "value": [],
+                      "default": [],
+                      "type": "cc.Component",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.displayName",
+                      "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.tooltip",
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": {
+                          "uuid": ""
+                        },
+                        "default": null,
+                        "type": "cc.Component",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": [
+                          "cc.Object"
+                        ]
+                      },
+                      "extends": [
+                        "cc.Object"
+                      ]
+                    }
+                  }
+                },
+                "type": "cc.MountedComponentsInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              }
+            ],
+            "default": [],
+            "type": "cc.MountedComponentsInfo",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.PrefabInstance.properties.mountedComponents.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.PrefabInstance.properties.mountedComponents.tooltip",
+            "isArray": true,
+            "elementTypeData": {
+              "value": {
+                "targetInfo": {
+                  "name": "targetInfo",
+                  "value": null,
+                  "default": null,
+                  "type": "cc.TargetInfo",
+                  "readonly": false,
+                  "visible": false,
+                  "animatable": true,
+                  "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.displayName",
+                  "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.tooltip",
+                  "extends": []
+                },
+                "components": {
+                  "name": "components",
+                  "value": [],
+                  "default": [],
+                  "type": "cc.Component",
+                  "readonly": false,
+                  "visible": false,
+                  "animatable": true,
+                  "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.displayName",
+                  "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.tooltip",
+                  "isArray": true,
+                  "elementTypeData": {
+                    "value": {
+                      "uuid": ""
+                    },
+                    "default": null,
+                    "type": "cc.Component",
+                    "readonly": false,
+                    "visible": true,
+                    "animatable": true,
+                    "extends": [
+                      "cc.Object"
+                    ]
+                  },
+                  "extends": [
+                    "cc.Object"
+                  ]
+                }
+              },
+              "default": {
+                "type": "cc.MountedComponentsInfo",
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": null,
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.targetInfo.tooltip",
+                    "extends": []
+                  },
+                  "components": {
+                    "name": "components",
+                    "value": [],
+                    "default": [],
+                    "type": "cc.Component",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.MountedComponentsInfo.properties.components.tooltip",
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": {
+                        "uuid": ""
+                      },
+                      "default": null,
+                      "type": "cc.Component",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": [
+                        "cc.Object"
+                      ]
+                    },
+                    "extends": [
+                      "cc.Object"
+                    ]
+                  }
+                }
+              },
+              "type": "cc.MountedComponentsInfo",
+              "readonly": false,
+              "visible": true,
+              "animatable": true,
+              "extends": []
+            },
+            "extends": []
+          },
+          "propertyOverrides": {
+            "name": "propertyOverrides",
+            "value": [
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c46/YsCPVOJYA4mWEpNYRx",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_name",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": "tableItem",
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c46/YsCPVOJYA4mWEpNYRx",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lpos",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "x": 240,
+                      "y": -185,
+                      "z": 0
+                    },
+                    "type": "cc.Vec3",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c46/YsCPVOJYA4mWEpNYRx",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lrot",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "x": 0,
+                      "y": 0,
+                      "z": 0,
+                      "w": 1
+                    },
+                    "type": "cc.Quat",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c46/YsCPVOJYA4mWEpNYRx",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_euler",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "x": 0,
+                      "y": 0,
+                      "z": 0
+                    },
+                    "type": "cc.Vec3",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "09PZE7netP2Jm1aukr3ZJm",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_contentSize",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "width": 400,
+                      "height": 250
+                    },
+                    "type": "cc.Size",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "20gGO2iK9IsKoY0VNnd1Rx",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_contentSize",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "width": 400,
+                      "height": 250
+                    },
+                    "type": "cc.Size",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "cepv6tBaRKtZO+AQwOrnal",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_contentSize",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "width": 225,
+                      "height": 184
+                    },
+                    "type": "cc.Size",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "edIzvueQRNRo7DcYKxR/RW",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_active",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": false,
+                    "type": "Boolean",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c4q+pPAORNx7o8N/QDdr5E",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_active",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": false,
+                    "type": "Boolean",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "dcOPUHe3hMSZDTrRmSL0gr",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_active",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": false,
+                    "type": "Boolean",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "06oXNWuI5JNLrD5TMS74YF",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_active",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": false,
+                    "type": "Boolean",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c7afGbORpKU6fOzWtCQ520",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_active",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": false,
+                    "type": "Boolean",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "b0jZrAAUVB3I2KlshWWAyL",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_active",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": false,
+                    "type": "Boolean",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c4q+pPAORNx7o8N/QDdr5E",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lpos",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "x": -140,
+                      "y": 20,
+                      "z": 0
+                    },
+                    "type": "cc.Vec3",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "dcOPUHe3hMSZDTrRmSL0gr",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lpos",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "x": 140,
+                      "y": 20,
+                      "z": 0
+                    },
+                    "type": "cc.Vec3",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "06oXNWuI5JNLrD5TMS74YF",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lpos",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "x": 0,
+                      "y": 90,
+                      "z": 0
+                    },
+                    "type": "cc.Vec3",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c7afGbORpKU6fOzWtCQ520",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lpos",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "x": 0,
+                      "y": -90,
+                      "z": 0
+                    },
+                    "type": "cc.Vec3",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c7afGbORpKU6fOzWtCQ520",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_name",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": "yizi3",
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "dcOPUHe3hMSZDTrRmSL0gr",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_name",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": "yizi2",
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c81/Fes1dMaKFHP9zVaIGW",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lockFlags",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": 2,
+                    "type": "Number",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "7aK/wfvrdLD6U9rH+YxTud",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lpos",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "x": 0,
+                      "y": 16,
+                      "z": 0
+                    },
+                    "type": "cc.Vec3",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c81/Fes1dMaKFHP9zVaIGW",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_horizontalCenter",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": 0,
+                    "type": "Number",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "c81/Fes1dMaKFHP9zVaIGW",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_verticalCenter",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": 16,
+                    "type": "Number",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "69lM2NIW9OsZvm0NZsy8EU",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_contentSize",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": {
+                      "width": 128.4099578857422,
+                      "height": 50
+                    },
+                    "type": "cc.Size",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": [
+                      "cc.ValueType"
+                    ]
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "39JuUefjhLVa/MYhf2NXmA",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_lineHeight",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": 15,
+                    "type": "Number",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              },
+              {
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": {
+                      "localID": {
+                        "name": "localID",
+                        "value": [
+                          {
+                            "value": "39JuUefjhLVa/MYhf2NXmA",
+                            "default": "",
+                            "type": "String",
+                            "readonly": false,
+                            "visible": true,
+                            "animatable": true,
+                            "extends": []
+                          }
+                        ],
+                        "default": [],
+                        "type": "String",
+                        "readonly": false,
+                        "visible": false,
+                        "animatable": true,
+                        "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                        "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                        "isArray": true,
+                        "elementTypeData": {
+                          "value": "",
+                          "default": "",
+                          "type": "String",
+                          "readonly": false,
+                          "visible": true,
+                          "animatable": true,
+                          "extends": []
+                        },
+                        "extends": []
+                      }
+                    },
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [
+                      {
+                        "value": "_fontSize",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      }
+                    ],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  },
+                  "value": {
+                    "name": "value",
+                    "value": 24,
+                    "type": "Number",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  }
+                },
+                "default": {
+                  "type": "CCPropertyOverrideInfo",
+                  "value": {
+                    "targetInfo": {
+                      "name": "targetInfo",
+                      "value": null,
+                      "default": null,
+                      "type": "cc.TargetInfo",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "propertyPath": {
+                      "name": "propertyPath",
+                      "value": [],
+                      "default": [],
+                      "type": "String",
+                      "readonly": false,
+                      "visible": false,
+                      "animatable": true,
+                      "isArray": true,
+                      "elementTypeData": {
+                        "value": "",
+                        "default": "",
+                        "type": "String",
+                        "readonly": false,
+                        "visible": true,
+                        "animatable": true,
+                        "extends": []
+                      },
+                      "extends": []
+                    }
+                  }
+                },
+                "type": "CCPropertyOverrideInfo",
+                "readonly": false,
+                "visible": true,
+                "animatable": true,
+                "extends": []
+              }
+            ],
+            "default": [],
+            "type": "CCPropertyOverrideInfo",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.PrefabInstance.properties.propertyOverrides.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.PrefabInstance.properties.propertyOverrides.tooltip",
+            "isArray": true,
+            "elementTypeData": {
+              "value": {
+                "targetInfo": {
+                  "name": "targetInfo",
+                  "value": null,
+                  "default": null,
+                  "type": "cc.TargetInfo",
+                  "readonly": false,
+                  "visible": false,
+                  "animatable": true,
+                  "extends": []
+                },
+                "propertyPath": {
+                  "name": "propertyPath",
+                  "value": [],
+                  "default": [],
+                  "type": "String",
+                  "readonly": false,
+                  "visible": false,
+                  "animatable": true,
+                  "isArray": true,
+                  "elementTypeData": {
+                    "value": "",
+                    "default": "",
+                    "type": "String",
+                    "readonly": false,
+                    "visible": true,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "extends": []
+                }
+              },
+              "default": {
+                "type": "CCPropertyOverrideInfo",
+                "value": {
+                  "targetInfo": {
+                    "name": "targetInfo",
+                    "value": null,
+                    "default": null,
+                    "type": "cc.TargetInfo",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "propertyPath": {
+                    "name": "propertyPath",
+                    "value": [],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  }
+                }
+              },
+              "type": "CCPropertyOverrideInfo",
+              "readonly": false,
+              "visible": true,
+              "animatable": true,
+              "extends": []
+            },
+            "extends": []
+          },
+          "removedComponents": {
+            "name": "removedComponents",
+            "value": [],
+            "default": [],
+            "type": "cc.TargetInfo",
+            "readonly": false,
+            "visible": false,
+            "animatable": true,
+            "displayName": "i18n:ENGINE.classes.cc.PrefabInstance.properties.removedComponents.displayName",
+            "tooltip": "i18n:ENGINE.classes.cc.PrefabInstance.properties.removedComponents.tooltip",
+            "isArray": true,
+            "elementTypeData": {
+              "value": {
+                "localID": {
+                  "name": "localID",
+                  "value": [],
+                  "default": [],
+                  "type": "String",
+                  "readonly": false,
+                  "visible": false,
+                  "animatable": true,
+                  "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                  "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                  "isArray": true,
+                  "elementTypeData": {
+                    "value": "",
+                    "default": "",
+                    "type": "String",
+                    "readonly": false,
+                    "visible": true,
+                    "animatable": true,
+                    "extends": []
+                  },
+                  "extends": []
+                }
+              },
+              "default": {
+                "type": "cc.TargetInfo",
+                "value": {
+                  "localID": {
+                    "name": "localID",
+                    "value": [],
+                    "default": [],
+                    "type": "String",
+                    "readonly": false,
+                    "visible": false,
+                    "animatable": true,
+                    "displayName": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.displayName",
+                    "tooltip": "i18n:ENGINE.classes.cc.TargetInfo.properties.localID.tooltip",
+                    "isArray": true,
+                    "elementTypeData": {
+                      "value": "",
+                      "default": "",
+                      "type": "String",
+                      "readonly": false,
+                      "visible": true,
+                      "animatable": true,
+                      "extends": []
+                    },
+                    "extends": []
+                  }
+                }
+              },
+              "type": "cc.TargetInfo",
+              "readonly": false,
+              "visible": true,
+              "animatable": true,
+              "extends": []
+            },
+            "extends": []
+          }
+        },
+        "default": null,
+        "type": "cc.PrefabInstance",
+        "readonly": false,
+        "visible": true,
+        "animatable": true,
+        "extends": []
+      }
+    }
+  }
 }

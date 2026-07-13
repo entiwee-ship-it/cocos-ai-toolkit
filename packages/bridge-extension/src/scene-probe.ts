@@ -78,6 +78,187 @@ export function normalizeHierarchyTree(treeValue: unknown, depth: number): unkno
   return visit(treeValue, 0, 0);
 }
 
+export function normalizePrefabDump(rawNodeValue: unknown, ownerDocumentAssetUuid: string | null) {
+  const rawNode = readObject(rawNodeValue);
+  const rawPrefabInfo = readObject(rawNode.__prefab__);
+  const instance = readObject(rawPrefabInfo.instance);
+  const instanceValues = readObject(readDumpValue(instance));
+  const propertyOverrides = readDumpArray(instanceValues.propertyOverrides).map((entry, index) => {
+    const value = readObject(readDumpValue(entry));
+    const targetInfo = readObject(readDumpValue(value.targetInfo));
+    return {
+      index,
+      targetLocalIds: readStringDumpArray(readObject(targetInfo.localID).value),
+      propertyPath: readStringDumpArray(readObject(value.propertyPath).value),
+      declaredType: readString(readObject(value.value).type),
+      sourceValue: null,
+      overrideValue: readDumpValue(value.value),
+      effectiveValue: null,
+      raw: entry
+    };
+  });
+  const unresolved: Array<{ path: string; reason: string }> = [];
+  for (let index = 0; index < propertyOverrides.length; index += 1) {
+    unresolved.push({ path: `propertyOverrides.${index}.sourceValue`, reason: 'SOURCE_VALUE_REQUIRES_PREFAB_SOURCE_LOOKUP' });
+    unresolved.push({ path: `propertyOverrides.${index}.effectiveValue`, reason: 'EFFECTIVE_VALUE_REQUIRES_TARGET_RESOLUTION' });
+  }
+  return {
+    ownerDocumentAssetUuid,
+    sourcePrefabAssetUuid: readString(rawPrefabInfo.uuid),
+    instanceRootObjectUuid: readString(rawPrefabInfo.rootUuid) ?? readString(readDumpValue(rawNode.uuid)),
+    sourceObjectFileId: readString(rawPrefabInfo.fileId),
+    instanceFileId: readString(readDumpValue(instanceValues.fileId)),
+    prefabRootNodeUuid: readUuid(readDumpValue(instanceValues.prefabRootNode)),
+    sync: readBoolean(rawPrefabInfo.sync),
+    state: rawPrefabInfo.prefabStateInfo ?? null,
+    propertyOverrides,
+    targetOverrides: readDumpArray(instanceValues.targetOverrides),
+    mountedChildren: readDumpArray(instanceValues.mountedChildren),
+    mountedComponents: readDumpArray(instanceValues.mountedComponents),
+    removedComponents: readDumpArray(instanceValues.removedComponents),
+    unresolved,
+    rawPrefabInfo
+  };
+}
+
+interface ResolvablePrefabOverride {
+  index: number;
+  targetLocalIds: string[];
+  propertyPath: string[];
+  sourceValue: unknown;
+  overrideValue: unknown;
+  effectiveValue: unknown;
+  [key: string]: unknown;
+}
+
+interface ResolvablePrefabDump {
+  propertyOverrides: ResolvablePrefabOverride[];
+  unresolved: Array<{ path: string; reason: string }>;
+  [key: string]: unknown;
+}
+
+export function resolvePrefabOverrideValues(
+  prefab: ResolvablePrefabDump,
+  sourceRoot: unknown,
+  effectiveRoot: unknown
+): ResolvablePrefabDump {
+  const sourceTargets = buildFileIdIndex(sourceRoot);
+  const effectiveTargets = buildFileIdIndex(effectiveRoot);
+  const unresolved = prefab.unresolved.filter((entry) =>
+    !/^propertyOverrides\.\d+\.(sourceValue|effectiveValue)$/.test(entry.path)
+  );
+  const propertyOverrides = prefab.propertyOverrides.map((entry) => {
+    const targetFileId = entry.targetLocalIds.length === 1 ? entry.targetLocalIds[0] : null;
+    const source = targetFileId ? readPropertyPath(sourceTargets.get(targetFileId), entry.propertyPath) : { found: false, value: null };
+    const effective = targetFileId ? readPropertyPath(effectiveTargets.get(targetFileId), entry.propertyPath) : { found: false, value: null };
+    if (!source.found) {
+      unresolved.push({ path: `propertyOverrides.${entry.index}.sourceValue`, reason: readTargetResolutionReason(entry.targetLocalIds, targetFileId, 'SOURCE_TARGET_OR_PROPERTY_NOT_FOUND') });
+    }
+    if (!effective.found) {
+      unresolved.push({ path: `propertyOverrides.${entry.index}.effectiveValue`, reason: readTargetResolutionReason(entry.targetLocalIds, targetFileId, 'EFFECTIVE_TARGET_OR_PROPERTY_NOT_FOUND') });
+    }
+    return {
+      ...entry,
+      sourceValue: source.found ? toSerializableValue(source.value) : null,
+      effectiveValue: effective.found ? toSerializableValue(effective.value) : null
+    };
+  });
+  return { ...prefab, propertyOverrides, unresolved };
+}
+
+function readTargetResolutionReason(targetLocalIds: string[], targetFileId: string | null, missingReason: string): string {
+  if (targetLocalIds.length === 0) return 'TARGET_LOCAL_ID_MISSING';
+  if (targetLocalIds.length > 1) return 'MULTI_SEGMENT_TARGET_LOCAL_ID_REQUIRES_NESTED_TARGET_MAP';
+  return targetFileId ? missingReason : 'TARGET_LOCAL_ID_MISSING';
+}
+
+function buildFileIdIndex(root: unknown): Map<string, unknown> {
+  const index = new Map<string, unknown>();
+  const visited = new Set<unknown>();
+  const visitNode = (value: unknown): void => {
+    if (!value || typeof value !== 'object' || visited.has(value)) return;
+    visited.add(value);
+    const node = value as Record<string, unknown>;
+    const nodeFileId = readRuntimeFileId(node);
+    if (nodeFileId) index.set(nodeFileId, value);
+    for (const component of readRuntimeArray(node, ['components', '_components', '__comps__'])) {
+      if (!component || typeof component !== 'object') continue;
+      const componentFileId = readRuntimeFileId(component as Record<string, unknown>);
+      if (componentFileId) index.set(componentFileId, component);
+    }
+    for (const child of readRuntimeArray(node, ['children', '_children'])) visitNode(child);
+  };
+  visitNode(root);
+  return index;
+}
+
+function readRuntimeFileId(value: Record<string, unknown>): string | null {
+  for (const key of ['_prefab', '__prefab__', '__prefab', 'prefab']) {
+    const prefab = readObject(value[key]);
+    const fileId = readString(readDumpValue(prefab.fileId));
+    if (fileId) return fileId;
+  }
+  return null;
+}
+
+function readRuntimeArray(value: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const key of keys) {
+    if (Array.isArray(value[key])) return value[key] as unknown[];
+  }
+  return [];
+}
+
+function readPropertyPath(target: unknown, propertyPath: string[]): { found: boolean; value: unknown } {
+  if (!target) return { found: false, value: null };
+  let current: unknown = target;
+  for (const key of propertyPath) {
+    if (!current || typeof current !== 'object' || !(key in current)) return { found: false, value: null };
+    current = (current as Record<string, unknown>)[key];
+  }
+  return { found: true, value: current };
+}
+
+function toSerializableValue(value: unknown, depth = 0, visited = new Set<unknown>()): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (visited.has(value)) return { kind: 'circular-reference' };
+  const object = value as Record<string, unknown>;
+  const objectUuid = readString(object.uuid) ?? readString(object._uuid);
+  if (objectUuid && (Array.isArray(object.children) || Array.isArray(object._children))) {
+    return { kind: 'node-reference', objectUuid };
+  }
+  if (objectUuid && object.node) return { kind: 'component-reference', objectUuid };
+  if (objectUuid) return { kind: 'asset-reference', assetUuid: objectUuid };
+  if (depth >= 4) return { kind: 'object', truncated: true };
+  visited.add(value);
+  if (Array.isArray(value)) {
+    const result = value.map((item) => toSerializableValue(item, depth + 1, visited));
+    visited.delete(value);
+    return result;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(object)) {
+    if (key === '_prefab' || key === '__prefab__' || key === '__prefab' || key === 'parent' || key === '_parent' || key === 'children' || key === '_children' || key === 'components' || key === '_components') continue;
+    if (typeof child === 'function') continue;
+    result[key] = toSerializableValue(child, depth + 1, visited);
+  }
+  visited.delete(value);
+  return result;
+}
+
+function readDumpArray(value: unknown): unknown[] {
+  const unwrapped = readDumpValue(value);
+  return Array.isArray(unwrapped) ? unwrapped : [];
+}
+
+function readStringDumpArray(value: unknown): string[] {
+  const result: string[] = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const text = readString(readDumpValue(item));
+    if (text !== null) result.push(text);
+  }
+  return result;
+}
+
 function readUuid(value: unknown): string | null {
   if (typeof value === 'string') return value;
   const object = readObject(value);

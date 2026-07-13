@@ -7,12 +7,12 @@
 | 能力 | 实际入口 | 类型来源 | 稳定性 | 当前结论 |
 | --- | --- | --- | --- | --- |
 | Bridge 生命周期 | Extension `load` / `unload` + 本机 WebSocket | Creator 扩展公开入口、`ws` | public-api | 已验证 Hello，能返回精确 Creator 版本、项目路径、项目 UUID 和编辑器实例 ID |
-| 查询节点树 | `scene/query-node-tree` | `@cocos/creator-types` `3.8.7` | message-api | 待 Task 9 真实验证 |
-| 查询节点 | `scene/query-node` | 同上 | message-api | 待 Task 9 真实验证 |
-| 查询组件 | `scene/query-component` | 同上 | message-api | 待 Task 9 真实验证 |
-| 查询资源 | `asset-db/query-assets` | 同上 | message-api | 待 Task 8 真实验证 |
-| 查询依赖 | `asset-db/query-asset-dependencies` | protected types | internal-api | 待 Task 8 验证；不可用时必须进入 `unresolved` |
-| Prefab 信息 | Scene dump + reflection | Creator 运行时对象和内部信息 | internal-api | 待 Task 10 真实验证 |
+| 查询节点树 | `scene/query-node-tree` | `@cocos/creator-types` `3.8.7` | message-api | 已验证 20 层真实层级、Prefab 状态、运行时 Object UUID 和组件摘要 |
+| 查询节点 | `scene/query-node` | 同上 | message-api | 已验证节点完整 Dump、`__prefab__`、PrefabInstance 和 Override 原始结构 |
+| 查询组件 | `scene/query-component` | 同上 | message-api | 已验证默认组件及自定义组件属性、TypeID、引用和原始 Dump |
+| 查询资源 | `asset-db/query-assets`、`query-asset-info`、`query-asset-meta` | 同上 | message-api | 已验证 UUID、URL、绝对路径、类型、Importer 和 Meta |
+| 查询依赖 | `asset-db/query-asset-dependencies`、`query-asset-users` | protected types | internal-api | 已验证真实依赖与反向使用者返回；不可用时仍必须进入 `unresolved` |
+| Prefab 信息 | `query-node.__prefab__` + Scene 运行时 Prefab 资源/实例反射 | Creator 运行时对象和内部信息 | internal-api | 已验证所属文档、源资源、实例根、源 FileID、实例 FileID、两层实例链、26 条 Property Override、Mounted Child/Component |
 | Undo | Scene snapshot/recording | protected types | internal-api | 待 Task 11 真实验证 |
 
 ## 已确认事实
@@ -22,3 +22,19 @@
 - 隔离 Worktree 实例成功登记为项目 `00d7d957-a3e8-4ad6-80f4-2fcfb235bca4`。
 - Hello 返回 `creatorVersion=3.8.8`、`bridgeVersion=0.1.0`，并声明 7 项白名单能力。
 - Bridge 编译类型基线使用当前 npm 可用的最新 `@cocos/creator-types@3.8.7`；Creator `3.8.8` 没有对应公开类型包，因此所有 message/internal API 都必须由真实运行结果复验，不能仅凭类型声明认定支持。
+- Creator 冷启动时 Bridge Hello 可能早于目标资源可被 `open-asset` 使用；一次实测中 `query-ready=true` 后立即打开仍返回“无法找到资源”，随后 `query-asset-info(uuid)` 已能返回且重试成功。自动化验证应以目标 UUID 的 `query-asset-info` 成功作为条件等待，不应只依赖固定延时或 `query-ready`。
+
+## Prefab 与 Override 实测字段
+
+| 规范字段 | Creator 3.8.8 实际来源 | 当前结论 |
+| --- | --- | --- |
+| `ownerDocumentAssetUuid` | `query-node-tree` 从外层到目标节点的 Prefab 链首项 | `808284d7-cc42-4337-926a-bb29c4e04296` |
+| `sourcePrefabAssetUuid` | `query-node.__prefab__.uuid` | `6b67227b-2d27-4cc4-99c1-c32c712d52ea` |
+| `sourceObjectFileId` | `query-node.__prefab__.fileId` | `c46/YsCPVOJYA4mWEpNYRx` |
+| `instanceFileId` | `query-node.__prefab__.instance.value.fileId.value` | `ebUQ1XI5JB6qQNhlsAh8vI` |
+| `propertyOverrides` | `query-node.__prefab__.instance.value.propertyOverrides.value` | 26 条，原始 `targetInfo.localID[]`、`propertyPath[]`、`value` 全部保留 |
+| `sourceValue` | `targetNode._prefab.asset.data`，按 FileID 和属性路径读取 | 26/26 已解析 |
+| `overrideValue` | Property Override 原始 `value` | 26/26 已解析 |
+| `effectiveValue` | 当前打开文档运行时实例，按 FileID 和属性路径读取 | 26/26 已解析 |
+
+源值、Override 值和最终生效值不能互相替代。实测 `_contentSize` 的源值为 `{width:128.4099578857422,height:61.5}`，Override 为 `{width:128.4099578857422,height:50}`，运行时最终值为 `{width:128.4099578857422,height:48.9}`；这证明组件运行时更新可能使最终值不同于序列化 Override。
