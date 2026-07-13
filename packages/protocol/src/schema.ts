@@ -1,0 +1,45 @@
+import { z } from 'zod';
+import { PropertyValueKindSchema } from './component.js';
+import { UnresolvedItemSchema } from './envelope.js';
+
+export const InspectorMetadataSchema = z.object({
+  tooltip: z.string().nullable().optional(),
+  range: z.unknown().optional(),
+  step: z.number().nullable().optional(),
+  slide: z.boolean().nullable().optional(),
+  formerlySerializedAs: z.union([z.string(), z.array(z.string())]).nullable().optional()
+}).passthrough();
+
+export const ComponentPropertyDescriptorSchema = z.object({
+  propertyPath: z.string().min(1),
+  serializedName: z.string().min(1),
+  displayName: z.string().nullable(),
+  declaredType: z.string().nullable(),
+  actualType: z.string().nullable(),
+  valueKind: PropertyValueKindSchema,
+  nullable: z.boolean(),
+  serializable: z.boolean(),
+  visible: z.boolean().nullable(),
+  readonly: z.boolean().nullable(),
+  defaultValue: z.unknown(),
+  inspectorMetadata: InspectorMetadataSchema,
+  rawClassAttributes: z.record(z.string(), z.unknown()),
+  rawConsumedKeys: z.array(z.string())
+}).passthrough();
+
+export const ComponentTypeSchemaSchema = z.object({
+  className: z.string().nullable(),
+  qualifiedName: z.string().nullable(),
+  typeId: z.string().nullable(),
+  scriptUuid: z.string().nullable(),
+  scriptPath: z.string().nullable(),
+  inheritance: z.array(z.string()),
+  executionOrder: z.number().nullable(),
+  properties: z.array(ComponentPropertyDescriptorSchema),
+  rawClassAttributes: z.record(z.string(), z.unknown()),
+  unresolved: z.array(UnresolvedItemSchema)
+}).passthrough();
+
+export type InspectorMetadata = z.infer<typeof InspectorMetadataSchema>;
+export type ComponentPropertyDescriptor = z.infer<typeof ComponentPropertyDescriptorSchema>;
+export type ComponentTypeSchema = z.infer<typeof ComponentTypeSchemaSchema>;

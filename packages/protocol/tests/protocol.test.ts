@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ProbeResponseSchema } from '../src/index.js';
+import {
+  ComponentTypeSchemaSchema,
+  ProbeResponseSchema,
+  ProjectScanReportSchema,
+  ReferenceSchema,
+  createEmptyProjectCoverage
+} from '../src/index.js';
 
 const validResponse = {
-  protocolVersion: '0.1.0',
+  protocolVersion: '0.2.0',
   creatorVersion: '3.8.8',
   editorInstanceId: 'editor-1',
   projectId: 'project-1',
@@ -78,5 +84,147 @@ describe('ProbeResponseSchema', () => {
     });
 
     expect(() => ProbeResponseSchema.parse(response)).toThrow();
+  });
+});
+
+describe('阶段 1 只读协议', () => {
+  it('接受包含脚本路径、Inspector 元数据和原始字段消费状态的组件 Schema', () => {
+    const result = ComponentTypeSchemaSchema.parse({
+      className: 'VScrollViewMode',
+      qualifiedName: 'VScrollViewMode',
+      typeId: 'b9a82SIRzRA64VTpoykHpqL',
+      scriptUuid: 'b9a82488-4734-40eb-8553-a68ca41e9a8b',
+      scriptPath: 'db://assets/script/components/VScrollViewMode.ts',
+      inheritance: ['VirtualScrollView', 'cc.Component', 'cc.Object'],
+      executionOrder: 0,
+      properties: [{
+        propertyPath: 'content',
+        serializedName: 'content',
+        displayName: '内容节点',
+        declaredType: 'cc.Node',
+        actualType: 'cc.Node',
+        valueKind: 'node-reference',
+        nullable: true,
+        serializable: true,
+        visible: true,
+        readonly: false,
+        defaultValue: null,
+        inspectorMetadata: {
+          tooltip: '滚动内容根节点'
+        },
+        rawClassAttributes: {
+          type: 'cc.Node'
+        },
+        rawConsumedKeys: ['type', 'tooltip']
+      }],
+      rawClassAttributes: {},
+      unresolved: []
+    });
+
+    expect(result.scriptPath).toBe('db://assets/script/components/VScrollViewMode.ts');
+    expect(result.properties[0]).toMatchObject({
+      valueKind: 'node-reference',
+      inspectorMetadata: {
+        tooltip: '滚动内容根节点'
+      }
+    });
+  });
+
+  it('区分可用资产引用和缺失组件引用', () => {
+    expect(ReferenceSchema.parse({
+      kind: 'asset',
+      assetUuid: 'sprite-frame-uuid',
+      subAssetUuid: null,
+      assetType: 'cc.SpriteFrame',
+      path: 'db://assets/ui/button/spriteFrame',
+      available: true
+    }).kind).toBe('asset');
+
+    expect(ReferenceSchema.parse({
+      kind: 'missing',
+      expectedKind: 'component',
+      serializedUuid: 'removed-component-uuid',
+      serializedFileId: 'removed-component-file-id',
+      reason: 'target-component-removed'
+    }).kind).toBe('missing');
+  });
+
+  it('接受包含资产、脚本、文档和 Prefab 图的项目扫描报告', () => {
+    const result = ProjectScanReportSchema.parse({
+      scanId: 'scan-1',
+      status: 'completed-with-gaps',
+      project: {
+        projectId: 'project-1',
+        projectPath: 'E:/project',
+        creatorVersion: '3.8.8'
+      },
+      startedAt: '2026-07-13T12:00:00.000Z',
+      finishedAt: '2026-07-13T12:01:00.000Z',
+      assets: [{
+        assetUuid: 'prefab-uuid',
+        url: 'db://assets/ui/Page.prefab',
+        filePath: 'E:/project/assets/ui/Page.prefab',
+        type: 'cc.Prefab',
+        importer: 'prefab',
+        name: 'Page',
+        isSubAsset: false,
+        available: true,
+        raw: {}
+      }],
+      scripts: [{
+        assetUuid: 'script-uuid',
+        scriptPath: 'db://assets/script/Page.ts',
+        filePath: 'E:/project/assets/script/Page.ts',
+        classNames: ['Page'],
+        available: true,
+        raw: {}
+      }],
+      documents: [],
+      prefabGraph: {
+        nodes: [{
+          assetUuid: 'prefab-uuid',
+          path: 'db://assets/ui/Page.prefab',
+          documentType: 'prefab'
+        }],
+        edges: []
+      },
+      coverage: createEmptyProjectCoverage({
+        assets: { total: 1, decoded: 1 },
+        scripts: { total: 1, decoded: 1 }
+      }),
+      unresolved: [{
+        path: 'documents',
+        reason: 'DOCUMENT_SCAN_NOT_STARTED'
+      }],
+      diagnostics: []
+    });
+
+    expect(result.coverage.assets).toEqual({ total: 1, decoded: 1 });
+    expect(result.prefabGraph.nodes).toHaveLength(1);
+  });
+
+  it('拒绝项目覆盖率中 resolved 大于 total', () => {
+    const report = {
+      scanId: 'scan-1',
+      status: 'completed',
+      project: {
+        projectId: 'project-1',
+        projectPath: 'E:/project',
+        creatorVersion: '3.8.8'
+      },
+      startedAt: '2026-07-13T12:00:00.000Z',
+      finishedAt: '2026-07-13T12:01:00.000Z',
+      assets: [],
+      scripts: [],
+      documents: [],
+      prefabGraph: { nodes: [], edges: [] },
+      coverage: createEmptyProjectCoverage({
+        references: { total: 0, resolved: 1 }
+      }),
+      unresolved: [],
+      diagnostics: []
+    };
+
+    expect(() => ProjectScanReportSchema.parse(report)).toThrow('resolved 不能大于 total');
   });
 });

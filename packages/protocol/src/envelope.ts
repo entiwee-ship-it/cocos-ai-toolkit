@@ -3,17 +3,22 @@ import { CoverageSchema } from './coverage.js';
 import { ObjectIdentitySchema } from './identity.js';
 import { PrefabContextSchema } from './prefab.js';
 
-export const PROTOCOL_VERSION = '0.1.0';
+export const PROTOCOL_VERSION = '0.2.0';
 
 export const UnresolvedItemSchema = z.object({
   path: z.string(),
   reason: z.string(),
+  code: z.string().optional(),
+  scope: z.string().optional(),
+  severity: z.enum(['info', 'warning', 'error']).optional(),
+  source: z.string().optional(),
   details: z.unknown().optional()
 });
 
 export const DiagnosticSchema = z.object({
   code: z.string(),
   message: z.string(),
+  severity: z.enum(['info', 'warning', 'error']).optional(),
   details: z.unknown().optional()
 });
 
