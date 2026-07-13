@@ -24,6 +24,28 @@ const BridgeResponseSchema = z.object({
   payload: z.unknown()
 });
 
+const ClientHelloSchema = z.object({
+  method: z.literal('client.hello'),
+  payload: z.object({
+    clientName: z.string().min(1)
+  })
+});
+
+const ClientRequestSchema = z.object({
+  type: z.literal('request'),
+  requestId: z.string().min(1),
+  method: z.string().min(1),
+  payload: z.unknown()
+});
+
+const ForwardRequestPayloadSchema = z.object({
+  selector: z.object({
+    projectId: z.string().min(1),
+    editorInstanceId: z.string().min(1).optional()
+  }),
+  params: z.unknown()
+});
+
 export interface ProbeServerOptions {
   host: string;
   port: number;
@@ -113,6 +135,7 @@ export class ProbeServer {
   private handleConnection(socket: WebSocket): void {
     let editorInstanceId: string | null = null;
     let initialized = false;
+    let role: 'bridge' | 'client' | null = null;
 
     socket.on('message', (raw) => {
       const message = this.parseMessage(raw);
@@ -123,16 +146,36 @@ export class ProbeServer {
 
       if (!initialized) {
         const helloResult = BridgeHelloSchema.safeParse(message);
-        if (!helloResult.success) {
-          socket.close(1008, 'BRIDGE_HELLO_REQUIRED');
+        if (helloResult.success) {
+          initialized = true;
+          role = 'bridge';
+          editorInstanceId = helloResult.data.payload.editorInstanceId;
+          this.sessions.register(helloResult.data.payload);
+          this.sockets.set(editorInstanceId, socket);
+          socket.send(JSON.stringify({ type: 'response', correlationId: 'bridge.hello', ok: true, payload: {} }));
           return;
         }
 
-        initialized = true;
-        editorInstanceId = helloResult.data.payload.editorInstanceId;
-        this.sessions.register(helloResult.data.payload);
-        this.sockets.set(editorInstanceId, socket);
-        socket.send(JSON.stringify({ type: 'response', correlationId: 'bridge.hello', ok: true, payload: {} }));
+        const clientHelloResult = ClientHelloSchema.safeParse(message);
+        if (clientHelloResult.success) {
+          initialized = true;
+          role = 'client';
+          socket.send(JSON.stringify({ type: 'response', correlationId: 'client.hello', ok: true, payload: {} }));
+          return;
+        }
+
+        socket.close(1008, 'HELLO_REQUIRED');
+        return;
+      }
+
+      if (role === 'client') {
+        const clientRequestResult = ClientRequestSchema.safeParse(message);
+        if (!clientRequestResult.success) {
+          socket.close(1008, 'INVALID_CLIENT_REQUEST');
+          return;
+        }
+
+        void this.handleClientRequest(socket, clientRequestResult.data);
         return;
       }
 
@@ -156,6 +199,38 @@ export class ProbeServer {
       this.sockets.delete(editorInstanceId);
       this.sessions.remove(editorInstanceId);
     });
+  }
+
+  private async handleClientRequest(
+    socket: WebSocket,
+    request: z.infer<typeof ClientRequestSchema>
+  ): Promise<void> {
+    try {
+      const payload = request.method === 'server.editors'
+        ? this.sessions.list()
+        : await this.forwardClientRequest(request.method, request.payload);
+
+      socket.send(JSON.stringify({
+        type: 'response',
+        correlationId: request.requestId,
+        ok: true,
+        payload
+      }));
+    } catch (error) {
+      socket.send(JSON.stringify({
+        type: 'response',
+        correlationId: request.requestId,
+        ok: false,
+        payload: {
+          code: error instanceof Error ? error.message : 'UNKNOWN_SERVER_ERROR'
+        }
+      }));
+    }
+  }
+
+  private async forwardClientRequest(method: string, payload: unknown): Promise<unknown> {
+    const parsedPayload = ForwardRequestPayloadSchema.parse(payload);
+    return this.request(parsedPayload.selector, method, parsedPayload.params);
   }
 
   private parseMessage(raw: RawData): unknown | null {

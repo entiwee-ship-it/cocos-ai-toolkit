@@ -46,7 +46,7 @@ describe('ArtifactStore', () => {
 });
 
 describe('ProbeServer', () => {
-  it('拒绝首包不是 bridge.hello 的连接', async () => {
+  it('拒绝未知角色的首包', async () => {
     const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 1000 });
     const address = await server.start();
     const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
@@ -58,6 +58,41 @@ describe('ProbeServer', () => {
     });
 
     expect(server.sessions.list()).toHaveLength(0);
+    await server.stop();
+  });
+
+  it('允许 CLI 客户端读取已登记编辑器列表', async () => {
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 1000 });
+    const address = await server.start();
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+
+    const response = await new Promise<{ payload: unknown }>((resolve, reject) => {
+      socket.once('open', () => {
+        socket.send(JSON.stringify({ method: 'client.hello', payload: { clientName: 'test-cli' } }));
+      });
+      socket.on('message', (raw) => {
+        const message = JSON.parse(raw.toString()) as {
+          correlationId?: string;
+          payload?: unknown;
+        };
+        if (message.correlationId === 'client.hello') {
+          socket.send(JSON.stringify({
+            type: 'request',
+            requestId: 'client-request-1',
+            method: 'server.editors',
+            payload: {}
+          }));
+          return;
+        }
+        if (message.correlationId === 'client-request-1') {
+          resolve({ payload: message.payload });
+        }
+      });
+      socket.once('error', reject);
+    });
+
+    expect(response.payload).toEqual([]);
+    socket.close();
     await server.stop();
   });
 
