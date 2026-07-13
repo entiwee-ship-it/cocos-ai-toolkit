@@ -4,7 +4,7 @@ import { ProbeClient } from './client.js';
 import { parseCommand, type CliCommand } from './commands.js';
 import { pathToFileURL } from 'node:url';
 
-const DEFAULT_SERVER_URL = process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:4318';
+const DEFAULT_SERVER_URL = process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:32188';
 
 const HELP = `用法:
   cocos-ai-probe editors

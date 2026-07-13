@@ -1,0 +1,35 @@
+{
+  "package_version": 2,
+  "name": "cocos-ai-bridge",
+  "title": "Cocos AI Bridge",
+  "version": "0.1.0",
+  "description": "Cocos Creator 3.8.x editor bridge for the Cocos AI probe server",
+  "main": "./dist/main.js",
+  "editor": ">=3.8.0 <3.9.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "contributions": {
+    "scene": {
+      "script": "./dist/scene.js"
+    },
+    "messages": {
+      "probe-editor-state": { "methods": ["probe-editor-state"] },
+      "probe-assets": { "methods": ["probe-assets"] },
+      "probe-hierarchy": { "methods": ["probe-hierarchy"] },
+      "probe-node": { "methods": ["probe-node"] },
+      "probe-component": { "methods": ["probe-component"] },
+      "probe-prefab": { "methods": ["probe-prefab"] },
+      "probe-undo-save": { "methods": ["probe-undo-save"] }
+    }
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@cocos/creator-types": "3.8.7",
+    "@types/ws": "^8.18.1"
+  }
+}
