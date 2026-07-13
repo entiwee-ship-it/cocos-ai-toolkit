@@ -30,6 +30,17 @@ describe('parseCommand', () => {
   it('拒绝缺少 project-id 的节点查询', () => {
     expect(() => parseCommand(['node', '--uuid', 'node-1'])).toThrow('PROJECT_ID_REQUIRED');
   });
+
+  it('解析带 UUID 的资源详情查询', () => {
+    expect(parseCommand([
+      'assets', '--project-id', 'project-1', '--pattern', 'db://assets/a.prefab', '--uuid', 'asset-1'
+    ])).toEqual({
+      command: 'assets',
+      projectId: 'project-1',
+      pattern: 'db://assets/a.prefab',
+      uuid: 'asset-1'
+    });
+  });
 });
 
 describe('ProbeClient', () => {

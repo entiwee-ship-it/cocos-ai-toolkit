@@ -1,6 +1,7 @@
 import { BridgeClient } from './bridge-client';
-import { buildBridgeHello } from './editor-state';
+import { buildBridgeHello, probeEditorState } from './editor-state';
 import { ProbeError } from './probe-errors';
+import { probeAssets } from './asset-probe';
 
 const BRIDGE_VERSION = '0.1.0';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
@@ -36,10 +37,16 @@ export function load(): void {
       creatorVersion,
       bridgeVersion: BRIDGE_VERSION
     }),
-    handlers: Object.fromEntries(Object.entries(sceneMethods).map(([method, sceneMethod]) => [
-      method,
-      (payload: unknown) => forwardToScene(sceneMethod, payload)
-    ]))
+    handlers: {
+      'probe.editorState': () => probeEditorState(),
+      'probe.assets': (payload) => probeAssets(payload),
+      ...Object.fromEntries(Object.entries(sceneMethods)
+        .filter(([method]) => method !== 'probe.editorState' && method !== 'probe.assets')
+        .map(([method, sceneMethod]) => [
+          method,
+          (payload: unknown) => forwardToScene(sceneMethod, payload)
+        ]))
+    }
   });
   client.connect();
 }

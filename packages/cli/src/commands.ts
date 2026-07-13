@@ -1,7 +1,7 @@
 export type CliCommand =
   | { command: 'editors' }
   | { command: 'state'; projectId: string; editorInstanceId?: string }
-  | { command: 'assets'; projectId: string; editorInstanceId?: string; pattern: string }
+  | { command: 'assets'; projectId: string; editorInstanceId?: string; pattern: string; uuid?: string }
   | { command: 'hierarchy'; projectId: string; editorInstanceId?: string; depth: number }
   | { command: 'node'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'component'; projectId: string; editorInstanceId?: string; uuid: string }
@@ -36,7 +36,8 @@ export function parseCommand(argv: string[]): CliCommand {
       return {
         command,
         ...selector,
-        pattern: requireFlag(flags, 'pattern', 'PATTERN_REQUIRED')
+        pattern: requireFlag(flags, 'pattern', 'PATTERN_REQUIRED'),
+        ...(flags.has('uuid') ? { uuid: flags.get('uuid') } : {})
       };
     case 'hierarchy': {
       const depth = Number(flags.get('depth') ?? '4');

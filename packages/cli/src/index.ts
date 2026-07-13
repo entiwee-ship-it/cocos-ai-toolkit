@@ -9,7 +9,7 @@ const DEFAULT_SERVER_URL = process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.
 const HELP = `用法:
   cocos-ai-probe editors
   cocos-ai-probe state --project-id <id> [--editor-instance-id <id>]
-  cocos-ai-probe assets --project-id <id> --pattern <text> [--editor-instance-id <id>]
+  cocos-ai-probe assets --project-id <id> --pattern <text> [--uuid <uuid>] [--editor-instance-id <id>]
   cocos-ai-probe hierarchy --project-id <id> [--editor-instance-id <id>] [--depth <n>]
   cocos-ai-probe node --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe component --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
@@ -66,7 +66,10 @@ function toRequest(command: CliCommand): [string, unknown] {
     case 'state':
       return ['probe.editorState', { selector, params: {} }];
     case 'assets':
-      return ['probe.assets', { selector, params: { pattern: command.pattern } }];
+      return ['probe.assets', {
+        selector,
+        params: { pattern: command.pattern, ...(command.uuid ? { uuid: command.uuid } : {}) }
+      }];
     case 'hierarchy':
       return ['probe.hierarchy', { selector, params: { depth: command.depth } }];
     case 'node':

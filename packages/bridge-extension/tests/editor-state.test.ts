@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBridgeHello } from '../src/editor-state.js';
+import { normalizeAssetInfo } from '../src/asset-probe.js';
 
 describe('buildBridgeHello', () => {
   it('保留项目路径和 Creator 精确版本', () => {
@@ -15,5 +16,32 @@ describe('buildBridgeHello', () => {
     expect(hello.payload.editorInstanceId).toBe('project-uuid:123');
     expect(hello.payload.projectPath).toBe('E:/project');
     expect(hello.payload.creatorVersion).toBe('3.8.8');
+  });
+});
+
+describe('normalizeAssetInfo', () => {
+  it('保留资源身份、导入信息和原始未知字段', () => {
+    const asset = normalizeAssetInfo({
+      uuid: 'asset-1',
+      url: 'db://assets/example.prefab',
+      file: 'E:/project/assets/example.prefab',
+      type: 'cc.Prefab',
+      importer: 'prefab',
+      isSubAsset: false,
+      futureField: { enabled: true }
+    });
+
+    expect(asset).toMatchObject({
+      uuid: 'asset-1',
+      url: 'db://assets/example.prefab',
+      file: 'E:/project/assets/example.prefab',
+      type: 'cc.Prefab',
+      importer: 'prefab',
+      isSubAsset: false,
+      name: null,
+      source: null,
+      unknownFieldCount: 1
+    });
+    expect(asset.raw).toMatchObject({ futureField: { enabled: true } });
   });
 });
