@@ -16,6 +16,7 @@ const HELP = `用法:
   cocos-ai-probe component --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe prefab --project-id <id> --node-uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe save-report --project-id <id> --sample <name> [--editor-instance-id <id>]
+  cocos-ai-probe probe-undo-save --project-id <id> --document-uuid <uuid> --expected-node-uuid <uuid> --probe-name <name>
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}`;
@@ -83,6 +84,16 @@ function toRequest(command: CliCommand): [string, unknown] {
       return ['probe.prefab', { selector, params: { nodeUuid: command.nodeUuid } }];
     case 'save-report':
       return ['probe.saveReport', { selector, params: { sample: command.sample } }];
+    case 'probe-undo-save':
+      return ['probe.undoSave', {
+        selector,
+        params: {
+          projectPath: 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe',
+          documentAssetUuid: command.documentUuid,
+          expectedNodeUuid: command.expectedNodeUuid,
+          probeName: command.probeName
+        }
+      }];
   }
 }
 

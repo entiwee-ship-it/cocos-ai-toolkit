@@ -7,7 +7,8 @@ export type CliCommand =
   | { command: 'node'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'component'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'prefab'; projectId: string; editorInstanceId?: string; nodeUuid: string }
-  | { command: 'save-report'; projectId: string; editorInstanceId?: string; sample: string };
+  | { command: 'save-report'; projectId: string; editorInstanceId?: string; sample: string }
+  | { command: 'probe-undo-save'; projectId: string; editorInstanceId?: string; documentUuid: string; expectedNodeUuid: string; probeName: string };
 
 interface ParsedArguments {
   command: string;
@@ -66,6 +67,14 @@ export function parseCommand(argv: string[]): CliCommand {
         command,
         ...selector,
         sample: requireFlag(flags, 'sample', 'SAMPLE_REQUIRED')
+      };
+    case 'probe-undo-save':
+      return {
+        command,
+        ...selector,
+        documentUuid: requireFlag(flags, 'document-uuid', 'DOCUMENT_UUID_REQUIRED'),
+        expectedNodeUuid: requireFlag(flags, 'expected-node-uuid', 'EXPECTED_NODE_UUID_REQUIRED'),
+        probeName: requireFlag(flags, 'probe-name', 'PROBE_NAME_REQUIRED')
       };
     default:
       throw new Error('UNKNOWN_COMMAND');
