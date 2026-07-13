@@ -6,7 +6,9 @@ export const BRIDGE_CAPABILITIES = [
   'probe.node',
   'probe.component',
   'probe.prefab',
-  'probe.undoSave'
+  'probe.undoSavePrepare',
+  'probe.undoSaveConfirm',
+  'probe.undoSaveStatus'
 ] as const;
 
 export interface BridgeEditorState {

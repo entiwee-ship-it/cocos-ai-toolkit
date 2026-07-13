@@ -13,16 +13,27 @@
 | 查询资源 | `asset-db/query-assets`、`query-asset-info`、`query-asset-meta` | 同上 | message-api | 已验证 UUID、URL、绝对路径、类型、Importer 和 Meta |
 | 查询依赖 | `asset-db/query-asset-dependencies`、`query-asset-users` | protected types | internal-api | 已验证真实依赖与反向使用者返回；不可用时仍必须进入 `unresolved` |
 | Prefab 信息 | `query-node.__prefab__` + Scene 运行时 Prefab 资源/实例反射 | Creator 运行时对象和内部信息 | internal-api | 已验证所属文档、源资源、实例根、源 FileID、实例 FileID、两层实例链、26 条 Property Override、Mounted Child/Component |
-| Undo | Scene snapshot/recording | protected types | internal-api | 待 Task 11 真实验证 |
+| Undo | `cce.SceneFacadeManager.undo()` | protected types + Creator 3.8.8 运行时探测 | internal-api | 已验证创建节点进入 Undo，保存后调用 Undo 可移除本事务节点 |
+| 保存与字节恢复 | `scene/save-scene` + `asset-db/save-asset` | `@cocos/creator-types` `3.8.7` | message-api | 已验证 Scene 保存会重排 Prefab；Undo 后由 AssetDB 恢复 prepare 阶段备份可回到原 SHA-256 |
 
 ## 已确认事实
 
 - 本机 Creator 可执行文件为 `C:/ProgramData/cocos/editors/Creator/3.8.8/CocosCreator.exe`。
 - 真实 `xy-client` 编辑器实例保持打开且未安装 Bridge。
 - 隔离 Worktree 实例成功登记为项目 `00d7d957-a3e8-4ad6-80f4-2fcfb235bca4`。
-- Hello 返回 `creatorVersion=3.8.8`、`bridgeVersion=0.1.0`，并声明 7 项白名单能力。
+- Hello 返回 `creatorVersion=3.8.8`、`bridgeVersion=0.1.0`，当前声明 10 项白名单能力。
 - Bridge 编译类型基线使用当前 npm 可用的最新 `@cocos/creator-types@3.8.7`；Creator `3.8.8` 没有对应公开类型包，因此所有 message/internal API 都必须由真实运行结果复验，不能仅凭类型声明认定支持。
 - Creator 冷启动时 Bridge Hello 可能早于目标资源可被 `open-asset` 使用；一次实测中 `query-ready=true` 后立即打开仍返回“无法找到资源”，随后 `query-asset-info(uuid)` 已能返回且重试成功。自动化验证应以目标 UUID 的 `query-asset-info` 成功作为条件等待，不应只依赖固定延时或 `query-ready`。
+
+## Undo、保存与结果确认实测
+
+- 写协议已拆为 `prepare -> confirm -> status`。`prepare` 不要求预知新节点 UUID，返回 `transactionId`、Revision、固定操作计划和 5 分钟有效期；`confirm` 必须同时匹配 `transactionId` 与 `expectedRevision`。
+- Revision 组合目标 Prefab 磁盘 SHA-256、编辑器层级 SHA-256、Dirty、文档 UUID、Prefab 根节点 UUID 和同名探针状态。目标文档已有 Dirty 时直接拒绝，prepare 后任一输入变化时返回 `REVISION_CONFLICT`。
+- Creator 3.8.8 的 `query-node` 身份与组件字段是 Dump 包装：节点 UUID 为 `uuid.value`、名称为 `name.value`，组件在 `__comps__.value.type`。新建 2D 节点已自带 `cc.UITransform`。
+- `create-node.position` 在本次 Prefab 实测中未生效；通过 `scene/set-property` 且 `record=false` 后，创建态和保存态均确认 Position 为 `{x:17,y:23,z:0}`。
+- `ClubView.prefab` 保存前基线 SHA-256 为 `206dd9bdb598ffafdc806fb399e9a6aab727782fe41080a76ba84b6c0387f6c5`。保存后 Creator 重排为 `950e026bd394e4f099b7b3ee827347732158a12d764ff2649f94208e51a3b28a`；Undo 恢复编辑器层级后，`asset-db/save-asset` 使用 Bridge 主进程私有基线内容恢复到原 SHA-256。
+- 正常事务最终返回 `status=rolled-back`、`rollbackMethod=undo`、`undoSource=cce.SceneFacadeManager`、`recoveryMethod=asset-db-save-asset`、`diskHashRestored=true`、`editorStateRestored=true`。
+- 重复 `confirm` 返回同一事务、同一 `createdNodeUuid`，不会再次执行。真实停止 Probe Server 时事务已进入 `executing`；Bridge 在断线期间完成 Undo 和字节恢复，Server 重启并自动重连后，同一 `transactionId` 可查询到 `rolled-back`。
 
 ## Prefab 与 Override 实测字段
 

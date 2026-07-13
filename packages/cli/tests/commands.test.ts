@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { ProbeClient } from '../src/client.js';
 import { parseCommand } from '../src/commands.js';
+import { toRequest } from '../src/index.js';
 
 describe('parseCommand', () => {
   it('解析带明确编辑器实例的层级探针', () => {
@@ -40,6 +41,52 @@ describe('parseCommand', () => {
       pattern: 'db://assets/a.prefab',
       uuid: 'asset-1'
     });
+  });
+
+  it('解析两阶段 Undo 保存事务且 prepare 不要求节点 UUID', () => {
+    const prepared = parseCommand([
+      'probe-undo-save-prepare',
+      '--project-id', 'project-1',
+      '--project-path', 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe',
+      '--document-uuid', 'asset-1',
+      '--probe-name', 'CocosAiProbe_123'
+    ]);
+    expect(prepared).toMatchObject({
+      command: 'probe-undo-save-prepare',
+      documentUuid: 'asset-1',
+      probeName: 'CocosAiProbe_123'
+    });
+    expect(toRequest(prepared)).toEqual(['probe.undoSavePrepare', {
+      selector: { projectId: 'project-1' },
+      params: {
+        projectPath: 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe',
+        documentAssetUuid: 'asset-1',
+        probeName: 'CocosAiProbe_123'
+      }
+    }]);
+  });
+
+  it('解析 confirm 和 status 事务命令', () => {
+    const confirm = parseCommand([
+      'probe-undo-save-confirm',
+      '--project-id', 'project-1',
+      '--transaction-id', 'transaction-1',
+      '--expected-revision', 'revision-1'
+    ]);
+    const status = parseCommand([
+      'probe-undo-save-status',
+      '--project-id', 'project-1',
+      '--transaction-id', 'transaction-1'
+    ]);
+
+    expect(toRequest(confirm)).toEqual(['probe.undoSaveConfirm', {
+      selector: { projectId: 'project-1' },
+      params: { transactionId: 'transaction-1', expectedRevision: 'revision-1' }
+    }]);
+    expect(toRequest(status)).toEqual(['probe.undoSaveStatus', {
+      selector: { projectId: 'project-1' },
+      params: { transactionId: 'transaction-1' }
+    }]);
   });
 });
 

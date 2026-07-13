@@ -16,7 +16,9 @@ const HELP = `用法:
   cocos-ai-probe component --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe prefab --project-id <id> --node-uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe save-report --project-id <id> --sample <name> [--editor-instance-id <id>]
-  cocos-ai-probe probe-undo-save --project-id <id> --document-uuid <uuid> --expected-node-uuid <uuid> --probe-name <name>
+  cocos-ai-probe probe-undo-save-prepare --project-id <id> --project-path <path> --document-uuid <uuid> --probe-name <name>
+  cocos-ai-probe probe-undo-save-confirm --project-id <id> --transaction-id <id> --expected-revision <sha256>
+  cocos-ai-probe probe-undo-save-status --project-id <id> --transaction-id <id>
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}`;
@@ -55,7 +57,7 @@ export async function runCli(
   }
 }
 
-function toRequest(command: CliCommand): [string, unknown] {
+export function toRequest(command: CliCommand): [string, unknown] {
   if (command.command === 'editors') {
     return ['server.editors', {}];
   }
@@ -84,15 +86,27 @@ function toRequest(command: CliCommand): [string, unknown] {
       return ['probe.prefab', { selector, params: { nodeUuid: command.nodeUuid } }];
     case 'save-report':
       return ['probe.saveReport', { selector, params: { sample: command.sample } }];
-    case 'probe-undo-save':
-      return ['probe.undoSave', {
+    case 'probe-undo-save-prepare':
+      return ['probe.undoSavePrepare', {
         selector,
         params: {
-          projectPath: 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe',
+          projectPath: command.projectPath,
           documentAssetUuid: command.documentUuid,
-          expectedNodeUuid: command.expectedNodeUuid,
           probeName: command.probeName
         }
+      }];
+    case 'probe-undo-save-confirm':
+      return ['probe.undoSaveConfirm', {
+        selector,
+        params: {
+          transactionId: command.transactionId,
+          expectedRevision: command.expectedRevision
+        }
+      }];
+    case 'probe-undo-save-status':
+      return ['probe.undoSaveStatus', {
+        selector,
+        params: { transactionId: command.transactionId }
       }];
   }
 }
@@ -112,6 +126,11 @@ function errorMessage(code: string): string {
     PATTERN_REQUIRED: '缺少 pattern',
     UUID_REQUIRED: '缺少 uuid',
     NODE_UUID_REQUIRED: '缺少 node-uuid',
+    PROJECT_PATH_REQUIRED: '缺少 project-path',
+    DOCUMENT_UUID_REQUIRED: '缺少 document-uuid',
+    PROBE_NAME_REQUIRED: '缺少 probe-name',
+    TRANSACTION_ID_REQUIRED: '缺少 transaction-id',
+    EXPECTED_REVISION_REQUIRED: '缺少 expected-revision',
     SAMPLE_REQUIRED: '缺少 sample',
     INVALID_DEPTH: 'depth 必须是 1 到 20 的整数',
     MULTIPLE_EDITOR_INSTANCES: '同一项目存在多个编辑器实例，请明确指定 editor-instance-id',

@@ -8,7 +8,9 @@ export type CliCommand =
   | { command: 'component'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'prefab'; projectId: string; editorInstanceId?: string; nodeUuid: string }
   | { command: 'save-report'; projectId: string; editorInstanceId?: string; sample: string }
-  | { command: 'probe-undo-save'; projectId: string; editorInstanceId?: string; documentUuid: string; expectedNodeUuid: string; probeName: string };
+  | { command: 'probe-undo-save-prepare'; projectId: string; editorInstanceId?: string; projectPath: string; documentUuid: string; probeName: string }
+  | { command: 'probe-undo-save-confirm'; projectId: string; editorInstanceId?: string; transactionId: string; expectedRevision: string }
+  | { command: 'probe-undo-save-status'; projectId: string; editorInstanceId?: string; transactionId: string };
 
 interface ParsedArguments {
   command: string;
@@ -68,13 +70,26 @@ export function parseCommand(argv: string[]): CliCommand {
         ...selector,
         sample: requireFlag(flags, 'sample', 'SAMPLE_REQUIRED')
       };
-    case 'probe-undo-save':
+    case 'probe-undo-save-prepare':
       return {
         command,
         ...selector,
+        projectPath: requireFlag(flags, 'project-path', 'PROJECT_PATH_REQUIRED'),
         documentUuid: requireFlag(flags, 'document-uuid', 'DOCUMENT_UUID_REQUIRED'),
-        expectedNodeUuid: requireFlag(flags, 'expected-node-uuid', 'EXPECTED_NODE_UUID_REQUIRED'),
         probeName: requireFlag(flags, 'probe-name', 'PROBE_NAME_REQUIRED')
+      };
+    case 'probe-undo-save-confirm':
+      return {
+        command,
+        ...selector,
+        transactionId: requireFlag(flags, 'transaction-id', 'TRANSACTION_ID_REQUIRED'),
+        expectedRevision: requireFlag(flags, 'expected-revision', 'EXPECTED_REVISION_REQUIRED')
+      };
+    case 'probe-undo-save-status':
+      return {
+        command,
+        ...selector,
+        transactionId: requireFlag(flags, 'transaction-id', 'TRANSACTION_ID_REQUIRED')
       };
     default:
       throw new Error('UNKNOWN_COMMAND');

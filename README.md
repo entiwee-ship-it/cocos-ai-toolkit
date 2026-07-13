@@ -10,3 +10,14 @@
 - 不允许执行任意 JavaScript。
 - 不允许将 Bridge 安装到存在用户未提交改动的真实项目工作区。
 - 阶段 0 报告必须明确列出无法解析的数据，不得静默丢失。
+- 写探针只接受名称以 `CocosAiProbe_` 开头的固定节点，并拒绝已有 Dirty 的文档。
+- 写入使用 `prepare -> confirm -> status`；`confirm` 必须匹配 prepare 返回的 Revision，重复 confirm 不会重复执行。
+- Scene、Undo、保存和恢复全部由 Creator 执行；外部只读磁盘计算指纹，不直接覆盖 `.prefab`。
+
+## 阶段 0 写探针
+
+```powershell
+node packages/cli/dist/index.js probe-undo-save-prepare --project-id <project-id> --editor-instance-id <editor-id> --project-path <isolated-project> --document-uuid <prefab-uuid> --probe-name CocosAiProbe_<id>
+node packages/cli/dist/index.js probe-undo-save-confirm --project-id <project-id> --editor-instance-id <editor-id> --transaction-id <transaction-id> --expected-revision <revision>
+node packages/cli/dist/index.js probe-undo-save-status --project-id <project-id> --editor-instance-id <editor-id> --transaction-id <transaction-id>
+```

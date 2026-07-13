@@ -22,7 +22,9 @@
       "probe-node": { "methods": ["probe-node"] },
       "probe-component": { "methods": ["probe-component"] },
       "probe-prefab": { "methods": ["probe-prefab"] },
-      "probe-undo-save": { "methods": ["probe-undo-save"] }
+      "probe-undo-save-prepare": { "methods": ["probe-undo-save-prepare"] },
+      "probe-undo-save-confirm": { "methods": ["probe-undo-save-confirm"] },
+      "probe-undo-save-status": { "methods": ["probe-undo-save-status"] }
     }
   },
   "dependencies": {

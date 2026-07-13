@@ -1,6 +1,7 @@
 import { ProbeError } from './probe-errors';
 import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from './scene-probe';
-import { validateProbeOperation } from './probe-operation';
+import { normalizeProbeProjectPath } from './probe-operation';
+import { executeProbeSceneOperation } from './probe-scene-operation';
 
 const { director } = require('cc') as { director: { getScene(): unknown } };
 
@@ -93,45 +94,83 @@ function findNodePath(node: Record<string, unknown>, targetUuid: string, path: R
   return false;
 }
 
-async function probeUndoSave(request: unknown): Promise<unknown> {
-  const operation = validateProbeOperation(unwrapRequest(request));
-  if (Editor.Project.path.split('\\').join('/') !== operation.projectPath.split('\\').join('/')) {
+async function probeUndoSaveConfirm(request: unknown): Promise<unknown> {
+  const transaction = readProbeTransaction(unwrapRequest(request));
+  if (normalizeProbeProjectPath(Editor.Project.path) !== normalizeProbeProjectPath(transaction.projectPath)) {
     throw new ProbeError('PROJECT_PATH_MISMATCH');
   }
-  const before = await Editor.Message.request('scene', 'query-node-tree');
-  const root = readObject(before);
-  const parent = findPrefabRootUuid(root, operation.documentAssetUuid);
-  if (!parent) throw new ProbeError('PREFAB_ROOT_NOT_FOUND');
-  const createdUuid = await Editor.Message.request('scene', 'create-node', {
-    parent,
-    name: operation.probeName,
-    snapshot: true,
-    position: { x: 17, y: 23, z: 0 }
+  const undoController = resolveCreatorUndo();
+  return executeProbeSceneOperation(transaction, {
+    createNode: (options) => Editor.Message.request('scene', 'create-node', options),
+    createComponent: (options) => Editor.Message.request('scene', 'create-component', options),
+    setProperty: (options) => Editor.Message.request('scene', 'set-property', options as never),
+    queryNode: (uuid) => Editor.Message.request('scene', 'query-node', uuid),
+    saveScene: () => Editor.Message.request('scene', 'save-scene'),
+    delay: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    undoSource: undoController.source,
+    undo: undoController.undo,
+    removeNode: (options) => Editor.Message.request('scene', 'remove-node', options)
   });
-  const created = await Editor.Message.request('scene', 'query-node', createdUuid);
-  await Editor.Message.request('scene', 'save-scene');
-  const saved = await Editor.Message.request('scene', 'query-node', createdUuid);
-  if (createdUuid !== operation.expectedNodeUuid) {
-    await Editor.Message.request('scene', 'remove-node', { uuid: createdUuid });
-    await Editor.Message.request('scene', 'save-scene');
-    throw new ProbeError('EXPECTED_NODE_UUID_MISMATCH', { createdUuid });
-  }
-  await Editor.Message.request('scene', 'remove-node', { uuid: createdUuid });
-  await Editor.Message.request('scene', 'save-scene');
-  const restored = await Editor.Message.request('scene', 'query-node', createdUuid);
-  return { before: Boolean(before), createdUuid, created: Boolean(created), saved: Boolean(saved), restored: restored === null };
 }
 
-function findPrefabRootUuid(value: Record<string, unknown>, assetUuid: string): string | null {
-  const prefab = readObject(value.prefab);
-  if (prefab.assetUuid === assetUuid && typeof value.uuid === 'string') return value.uuid;
-  if (Array.isArray(value.children)) {
-    for (const child of value.children) {
-      const found = findPrefabRootUuid(readObject(child), assetUuid);
-      if (found) return found;
+function readProbeTransaction(value: unknown): {
+  transactionId: string;
+  projectPath: string;
+  parentNodeUuid: string;
+  probeName: string;
+  operation: {
+    type: 'create-save-rollback-probe';
+    position: { x: 17; y: 23; z: 0 };
+    component: 'cc.UITransform';
+    verificationPauseMs: 2000;
+  };
+} {
+  const transaction = readObject(value);
+  const operation = readObject(transaction.operation);
+  const position = readObject(operation.position);
+  if (
+    typeof transaction.transactionId !== 'string'
+    || typeof transaction.projectPath !== 'string'
+    || typeof transaction.parentNodeUuid !== 'string'
+    || typeof transaction.probeName !== 'string'
+    || !transaction.probeName.startsWith('CocosAiProbe_')
+    || operation.type !== 'create-save-rollback-probe'
+    || operation.component !== 'cc.UITransform'
+    || operation.verificationPauseMs !== 2000
+    || position.x !== 17
+    || position.y !== 23
+    || position.z !== 0
+  ) {
+    throw new ProbeError('INVALID_PROBE_TRANSACTION');
+  }
+  return transaction as unknown as ReturnType<typeof readProbeTransaction>;
+}
+
+function resolveCreatorUndo(): { source: string; undo: () => Promise<void> } {
+  const scope = globalThis as typeof globalThis & { cce?: Record<string, unknown> };
+  const cce = readObject(scope.cce);
+  const candidates: Array<[string, unknown]> = [
+    ['cce.SceneFacadeManager', cce.SceneFacadeManager],
+    ['cce.sceneFacadeManager', cce.sceneFacadeManager],
+    ['cce.SceneFacade', cce.SceneFacade],
+    ['cce.sceneFacade', cce.sceneFacade],
+    ['cce.History', cce.History],
+    ['cce.history', cce.history]
+  ];
+  for (const [source, candidate] of candidates) {
+    if ((typeof candidate === 'object' && candidate !== null) || typeof candidate === 'function') {
+      const owner = candidate as { undo?: () => Promise<void> | void };
+      if (typeof owner.undo === 'function') {
+        return {
+          source,
+          undo: async () => {
+            await owner.undo?.call(owner);
+          }
+        };
+      }
     }
   }
-  return null;
+  throw new ProbeError('CREATOR_UNDO_API_UNAVAILABLE', { cceKeys: Object.keys(cce).sort() });
 }
 
 function requireUuid(request: unknown): string {
@@ -163,5 +202,5 @@ export const methods = {
   probeNode,
   probeComponent,
   probePrefab,
-  probeUndoSave
+  probeUndoSaveConfirm
 };
