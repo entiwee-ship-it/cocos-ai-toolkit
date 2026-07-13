@@ -28,6 +28,7 @@ describe('normalizeAssetInfo', () => {
       type: 'cc.Prefab',
       importer: 'prefab',
       isSubAsset: false,
+      isBundle: true,
       futureField: { enabled: true }
     });
 
@@ -38,6 +39,7 @@ describe('normalizeAssetInfo', () => {
       type: 'cc.Prefab',
       importer: 'prefab',
       isSubAsset: false,
+      isBundle: true,
       name: null,
       source: null,
       unknownFieldCount: 1

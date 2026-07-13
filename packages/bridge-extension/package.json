@@ -18,6 +18,7 @@
     "messages": {
       "probe-editor-state": { "methods": ["probe-editor-state"] },
       "probe-assets": { "methods": ["probe-assets"] },
+      "probe-asset-index": { "methods": ["probe-asset-index"] },
       "probe-hierarchy": { "methods": ["probe-hierarchy"] },
       "probe-node": { "methods": ["probe-node"] },
       "probe-component": { "methods": ["probe-component"] },

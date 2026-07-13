@@ -9,7 +9,16 @@ export const AssetRecordSchema = z.object({
   type: z.string().nullable(),
   importer: z.string().nullable(),
   name: z.string().nullable(),
+  displayName: z.string().nullable(),
+  source: z.string().nullable(),
+  path: z.string().nullable(),
   isSubAsset: z.boolean().nullable(),
+  isBundle: z.boolean().nullable(),
+  imported: z.boolean().nullable(),
+  invalid: z.boolean().nullable(),
+  isDirectory: z.boolean().nullable(),
+  visible: z.boolean().nullable(),
+  readonly: z.boolean().nullable(),
   available: z.boolean(),
   raw: z.unknown()
 });

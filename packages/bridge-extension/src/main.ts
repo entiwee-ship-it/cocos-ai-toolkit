@@ -3,6 +3,7 @@ import { BridgeClient } from './bridge-client';
 import { buildBridgeHello, probeEditorState } from './editor-state';
 import { ProbeError } from './probe-errors';
 import { probeAssets } from './asset-probe';
+import { probeAssetIndex } from './asset-index';
 import { captureProbeRevision, restoreProbeAsset } from './probe-runtime';
 import type { ProbePrepareRequest } from './probe-operation';
 import {
@@ -54,6 +55,7 @@ export function load(): void {
     handlers: {
       'probe.editorState': () => probeEditorState(),
       'probe.assets': (payload) => probeAssets(payload),
+      'probe.assetIndex': () => probeAssetIndex(),
       'probe.openAsset': async (payload) => {
         const request = payload as { uuid?: unknown };
         if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');
@@ -153,6 +155,7 @@ async function forwardToScene(method: string, request: unknown): Promise<unknown
 export const methods: Record<string, (request: JsonObject) => Promise<unknown>> = {
   'probe-editor-state': () => probeEditorState(),
   'probe-assets': (request) => probeAssets(request),
+  'probe-asset-index': () => probeAssetIndex(),
   'probe-hierarchy': (request) => forwardToScene('probeHierarchy', request),
   'probe-node': (request) => forwardToScene('probeNode', request),
   'probe-component': (request) => forwardToScene('probeComponent', request),

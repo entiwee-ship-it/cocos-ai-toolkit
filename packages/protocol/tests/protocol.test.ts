@@ -168,6 +168,15 @@ describe('阶段 1 只读协议', () => {
         importer: 'prefab',
         name: 'Page',
         isSubAsset: false,
+        isBundle: true,
+        imported: true,
+        invalid: false,
+        isDirectory: false,
+        visible: true,
+        readonly: false,
+        displayName: 'Page',
+        source: 'assets/ui/Page.prefab',
+        path: 'assets/ui/Page.prefab',
         available: true,
         raw: {}
       }],
@@ -201,6 +210,11 @@ describe('阶段 1 只读协议', () => {
 
     expect(result.coverage.assets).toEqual({ total: 1, decoded: 1 });
     expect(result.prefabGraph.nodes).toHaveLength(1);
+    expect(result.assets[0]).toMatchObject({
+      isBundle: true,
+      readonly: false,
+      displayName: 'Page'
+    });
   });
 
   it('拒绝项目覆盖率中 resolved 大于 total', () => {

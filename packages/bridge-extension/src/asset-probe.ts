@@ -2,7 +2,7 @@ const KNOWN_ASSET_FIELDS = new Set([
   'name', 'displayName', 'source', 'path', 'url', 'file', 'uuid', 'importer',
   'imported', 'invalid', 'type', 'isDirectory', 'isSubAsset', 'library',
   'subAssets', 'visible', 'readonly', 'instantiation', 'redirect', 'extends',
-  'meta', 'fatherInfo', 'mtime', 'depends', 'dependeds'
+  'meta', 'fatherInfo', 'mtime', 'depends', 'dependeds', 'isBundle'
 ]);
 
 export interface NormalizedAssetInfo {
@@ -12,6 +12,7 @@ export interface NormalizedAssetInfo {
   type: string | null;
   importer: string | null;
   isSubAsset: boolean | null;
+  isBundle: boolean | null;
   name: string | null;
   source: string | null;
   path: string | null;
@@ -19,9 +20,17 @@ export interface NormalizedAssetInfo {
   imported: boolean | null;
   invalid: boolean | null;
   isDirectory: boolean | null;
+  visible: boolean | null;
+  readonly: boolean | null;
   unknownFieldCount: number;
   raw: Record<string, unknown>;
 }
+
+export const ASSET_DATA_KEYS = [
+  'name', 'displayName', 'source', 'path', 'url', 'file', 'uuid', 'importer',
+  'imported', 'invalid', 'type', 'isDirectory', 'isBundle', 'visible', 'readonly',
+  'subAssets', 'meta', 'fatherInfo', 'extends', 'mtime', 'depends', 'dependeds'
+] as const;
 
 export function normalizeAssetInfo(value: Record<string, unknown>): NormalizedAssetInfo {
   return {
@@ -31,6 +40,7 @@ export function normalizeAssetInfo(value: Record<string, unknown>): NormalizedAs
     type: readString(value.type),
     importer: readString(value.importer),
     isSubAsset: readBoolean(value.isSubAsset),
+    isBundle: readBoolean(value.isBundle),
     name: readString(value.name),
     source: readString(value.source),
     path: readString(value.path),
@@ -38,6 +48,8 @@ export function normalizeAssetInfo(value: Record<string, unknown>): NormalizedAs
     imported: readBoolean(value.imported),
     invalid: readBoolean(value.invalid),
     isDirectory: readBoolean(value.isDirectory),
+    visible: readBoolean(value.visible),
+    readonly: readBoolean(value.readonly),
     unknownFieldCount: Object.keys(value).filter((key) => !KNOWN_ASSET_FIELDS.has(key)).length,
     raw: value
   };
@@ -48,12 +60,7 @@ export async function probeAssets(request: unknown): Promise<unknown> {
   const pattern = typeof input.pattern === 'string' ? input.pattern : undefined;
   const uuid = typeof input.uuid === 'string' ? input.uuid : undefined;
   const options = pattern ? { pattern } : undefined;
-  const dataKeys = [
-    'name', 'displayName', 'source', 'path', 'url', 'file', 'uuid', 'importer',
-    'imported', 'invalid', 'type', 'isDirectory', 'isBundle', 'visible', 'readonly',
-    'subAssets', 'meta', 'fatherInfo', 'extends', 'mtime', 'depends', 'dependeds'
-  ];
-  const rawAssets = await Editor.Message.request('asset-db', 'query-assets', options, dataKeys as never);
+  const rawAssets = await Editor.Message.request('asset-db', 'query-assets', options, ASSET_DATA_KEYS as never);
   const assets = (rawAssets as unknown[])
     .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object')
     .map(normalizeAssetInfo);
@@ -63,7 +70,7 @@ export async function probeAssets(request: unknown): Promise<unknown> {
   }
 
   const unresolved: Array<{ path: string; reason: string }> = [];
-  const details = await Editor.Message.request('asset-db', 'query-asset-info', uuid, dataKeys as never);
+  const details = await Editor.Message.request('asset-db', 'query-asset-info', uuid, ASSET_DATA_KEYS as never);
   const meta = await Editor.Message.request('asset-db', 'query-asset-meta', uuid);
   const dependencies = await optionalAssetQuery('query-asset-dependencies', uuid, unresolved);
   const users = await optionalAssetQuery('query-asset-users', uuid, unresolved);
