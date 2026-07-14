@@ -24,6 +24,7 @@ export const DocumentSnapshotPageSchema = z.object({
 
 export const DocumentComponentSchemaSchema = ComponentTypeSchemaSchema.extend({
   componentUuid: z.string().min(1),
+  componentFileId: z.string().nullable(),
   nodeUuid: z.string().min(1),
   nodePath: z.string().nullable(),
   componentIndex: z.number().int().nonnegative()

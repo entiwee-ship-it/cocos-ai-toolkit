@@ -10,12 +10,16 @@ import { normalizeProperty, readDumpValue, readObject } from './raw-reflection';
  */
 export function normalizeNodeDump(rawValue: unknown, siblingIndex: number | null = null) {
   const raw = readObject(rawValue);
+  const rawPrefabInfo = readObject(raw.__prefab__);
   const children = Array.isArray(raw.children) ? raw.children : [];
   const components = Array.isArray(raw.__comps__)
     ? raw.__comps__.map((component) => normalizeComponentDump(component))
     : [];
   return {
-    identity: { objectUuid: readString(readDumpValue(raw.uuid)), fileId: null },
+    identity: {
+      objectUuid: readString(readDumpValue(raw.uuid)),
+      fileId: readString(readDumpValue(rawPrefabInfo.fileId))
+    },
     name: readString(readDumpValue(raw.name)),
     type: readString(raw.__type__),
     active: readBoolean(readDumpValue(raw.active)),
@@ -54,7 +58,10 @@ export function normalizeComponentDump(rawValue: unknown, scriptPath: string | n
     : new Map<string, string>();
   const schema = buildComponentTypeSchema(raw, scriptPathsByUuid);
   return {
-    identity: { objectUuid: readString(readDumpValue(values.uuid)), fileId: null },
+    identity: {
+      objectUuid: readString(readDumpValue(values.uuid)),
+      fileId: readComponentFileId(rawValue)
+    },
     class: {
       className: schema.className,
       typeId: schema.typeId,
@@ -68,6 +75,17 @@ export function normalizeComponentDump(rawValue: unknown, scriptPath: string | n
     unresolved: schema.unresolved,
     raw
   };
+}
+
+/**
+ * 从 Creator query-component Dump 读取稳定 Prefab FileID。
+ *
+ * @param rawValue Creator 返回的组件 Dump。
+ * @returns 找到时返回组件 FileID；当前组件不属于 Prefab 时返回 null。
+ */
+export function readComponentFileId(rawValue: unknown): string | null {
+  const raw = readObject(rawValue);
+  return readPrefabFileId(raw, readObject(raw.value));
 }
 
 export function normalizeHierarchyTree(treeValue: unknown, depth: number): unknown {
@@ -92,11 +110,26 @@ export function normalizeHierarchyTree(treeValue: unknown, depth: number): unkno
   return visit(treeValue, 0, 0);
 }
 
-export function normalizePrefabDump(rawNodeValue: unknown, ownerDocumentAssetUuid: string | null) {
+/**
+ * 把 Creator 节点 Dump 中的 PrefabInfo 和 PrefabInstance 规范化为只读协议。
+ *
+ * @param rawNodeValue Creator 返回的实例根节点 Dump。
+ * @param ownerDocumentAssetUuid 当前打开 Scene 或 Prefab 的 Asset UUID。
+ * @param hostNodePath 当前实例根在宿主文档中的节点路径。
+ * @returns 来源 UUID、FileID、Override、挂载项、未解析项和原始 PrefabInfo。
+ */
+export function normalizePrefabDump(
+  rawNodeValue: unknown,
+  ownerDocumentAssetUuid: string | null,
+  hostNodePath: string | null = null
+) {
   const rawNode = readObject(rawNodeValue);
   const rawPrefabInfo = readObject(rawNode.__prefab__);
   const instance = readObject(rawPrefabInfo.instance);
   const instanceValues = readObject(readDumpValue(instance));
+  const sourcePrefabAssetUuid = readString(rawPrefabInfo.uuid);
+  const sourceObjectFileId = readString(rawPrefabInfo.fileId);
+  const instanceFileId = readString(readDumpValue(instanceValues.fileId));
   const propertyOverrides = readDumpArray(instanceValues.propertyOverrides).map((entry, index) => {
     const value = readObject(readDumpValue(entry));
     const targetInfo = readObject(readDumpValue(value.targetInfo));
@@ -112,16 +145,35 @@ export function normalizePrefabDump(rawNodeValue: unknown, ownerDocumentAssetUui
     };
   });
   const unresolved: Array<{ path: string; reason: string }> = [];
+  if (!sourcePrefabAssetUuid) {
+    unresolved.push({
+      path: 'sourcePrefabAssetUuid',
+      reason: 'SOURCE_PREFAB_ASSET_UUID_MISSING'
+    });
+  }
+  if (!sourceObjectFileId) {
+    unresolved.push({
+      path: 'sourceObjectFileId',
+      reason: 'SOURCE_OBJECT_FILE_ID_MISSING'
+    });
+  }
+  if (!instanceFileId) {
+    unresolved.push({
+      path: 'instanceFileId',
+      reason: 'PREFAB_INSTANCE_FILE_ID_MISSING'
+    });
+  }
   for (let index = 0; index < propertyOverrides.length; index += 1) {
     unresolved.push({ path: `propertyOverrides.${index}.sourceValue`, reason: 'SOURCE_VALUE_REQUIRES_PREFAB_SOURCE_LOOKUP' });
     unresolved.push({ path: `propertyOverrides.${index}.effectiveValue`, reason: 'EFFECTIVE_VALUE_REQUIRES_TARGET_RESOLUTION' });
   }
   return {
     ownerDocumentAssetUuid,
-    sourcePrefabAssetUuid: readString(rawPrefabInfo.uuid),
+    hostNodePath,
+    sourcePrefabAssetUuid,
     instanceRootObjectUuid: readString(rawPrefabInfo.rootUuid) ?? readString(readDumpValue(rawNode.uuid)),
-    sourceObjectFileId: readString(rawPrefabInfo.fileId),
-    instanceFileId: readString(readDumpValue(instanceValues.fileId)),
+    sourceObjectFileId,
+    instanceFileId,
     prefabRootNodeUuid: readUuid(readDumpValue(instanceValues.prefabRootNode)),
     sync: readBoolean(rawPrefabInfo.sync),
     state: rawPrefabInfo.prefabStateInfo ?? null,
@@ -151,10 +203,25 @@ interface ResolvablePrefabDump {
   [key: string]: unknown;
 }
 
+interface NestedPrefabTargetMap {
+  targets: Record<string, { assetUuid: string; fileId: string; nodePath: string | null }>;
+  children: Record<string, NestedPrefabTargetMap>;
+}
+
+/**
+ * 使用源资源、实例运行态和可选嵌套 TargetMap 补齐 Override 三值。
+ *
+ * @param prefab 已规范化但尚未补齐源值和最终值的 Prefab 数据。
+ * @param sourceRoot 源 Prefab 的运行时根对象。
+ * @param effectiveRoot 当前实例的运行时根对象。
+ * @param nestedTargetMaps 多段 localID 对应的跨 Prefab TargetMap。
+ * @returns 保留 Override 值并补齐源值、最终值和失败诊断的新 Prefab 数据。
+ */
 export function resolvePrefabOverrideValues(
   prefab: ResolvablePrefabDump,
   sourceRoot: unknown,
-  effectiveRoot: unknown
+  effectiveRoot: unknown,
+  nestedTargetMaps?: NestedPrefabTargetMap
 ): ResolvablePrefabDump {
   const sourceTargets = buildFileIdIndex(sourceRoot);
   const effectiveTargets = buildFileIdIndex(effectiveRoot);
@@ -162,14 +229,29 @@ export function resolvePrefabOverrideValues(
     !/^propertyOverrides\.\d+\.(sourceValue|effectiveValue)$/.test(entry.path)
   );
   const propertyOverrides = prefab.propertyOverrides.map((entry) => {
-    const targetFileId = entry.targetLocalIds.length === 1 ? entry.targetLocalIds[0] : null;
+    const nestedTarget = entry.targetLocalIds.length > 1 && nestedTargetMaps
+      ? resolveNestedPrefabTarget(entry.targetLocalIds, nestedTargetMaps)
+      : null;
+    const targetFileId = entry.targetLocalIds.length === 1
+      ? entry.targetLocalIds[0]
+      : nestedTarget?.target?.fileId ?? null;
     const source = targetFileId ? readPropertyPath(sourceTargets.get(targetFileId), entry.propertyPath) : { found: false, value: null };
     const effective = targetFileId ? readPropertyPath(effectiveTargets.get(targetFileId), entry.propertyPath) : { found: false, value: null };
     if (!source.found) {
-      unresolved.push({ path: `propertyOverrides.${entry.index}.sourceValue`, reason: readTargetResolutionReason(entry.targetLocalIds, targetFileId, 'SOURCE_TARGET_OR_PROPERTY_NOT_FOUND') });
+      unresolved.push({
+        path: `propertyOverrides.${entry.index}.sourceValue`,
+        reason: nestedTarget?.failedSegmentIndex !== undefined
+          ? `NESTED_TARGET_MAP_SEGMENT_NOT_FOUND_AT_${nestedTarget.failedSegmentIndex}`
+          : readTargetResolutionReason(entry.targetLocalIds, targetFileId, 'SOURCE_TARGET_OR_PROPERTY_NOT_FOUND')
+      });
     }
     if (!effective.found) {
-      unresolved.push({ path: `propertyOverrides.${entry.index}.effectiveValue`, reason: readTargetResolutionReason(entry.targetLocalIds, targetFileId, 'EFFECTIVE_TARGET_OR_PROPERTY_NOT_FOUND') });
+      unresolved.push({
+        path: `propertyOverrides.${entry.index}.effectiveValue`,
+        reason: nestedTarget?.failedSegmentIndex !== undefined
+          ? `NESTED_TARGET_MAP_SEGMENT_NOT_FOUND_AT_${nestedTarget.failedSegmentIndex}`
+          : readTargetResolutionReason(entry.targetLocalIds, targetFileId, 'EFFECTIVE_TARGET_OR_PROPERTY_NOT_FOUND')
+      });
     }
     return {
       ...entry,
@@ -178,6 +260,31 @@ export function resolvePrefabOverrideValues(
     };
   });
   return { ...prefab, propertyOverrides, unresolved };
+}
+
+/**
+ * 在嵌套 TargetMap 中逐段解析多段 localID。
+ *
+ * @param localIds Creator TargetInfo 中按层级排列的 localID 数组。
+ * @param targetMaps 当前实例上下文的嵌套 TargetMap。
+ * @returns 最终目标；失败时同时返回失败段索引。
+ */
+function resolveNestedPrefabTarget(
+  localIds: string[],
+  targetMaps: NestedPrefabTargetMap
+): { target: { assetUuid: string; fileId: string; nodePath: string | null } | null; failedSegmentIndex?: number } {
+  let current = targetMaps;
+  for (let index = 0; index < localIds.length; index += 1) {
+    const localId = localIds[index];
+    const target = current.targets[localId];
+    const child = current.children[localId];
+    if (index === localIds.length - 1) {
+      return target ? { target } : { target: null, failedSegmentIndex: index };
+    }
+    if (!child) return { target: null, failedSegmentIndex: index + 1 };
+    current = child;
+  }
+  return { target: null, failedSegmentIndex: localIds.length - 1 };
 }
 
 function readTargetResolutionReason(targetLocalIds: string[], targetFileId: string | null, missingReason: string): string {
@@ -262,6 +369,23 @@ function toSerializableValue(value: unknown, depth = 0, visited = new Set<unknow
 function readDumpArray(value: unknown): unknown[] {
   const unwrapped = readDumpValue(value);
   return Array.isArray(unwrapped) ? unwrapped : [];
+}
+
+/**
+ * 从节点或组件 Dump 的多种 Prefab 字段命名中读取 FileID。
+ *
+ * @param values 可能包含 `__prefab__`、`__prefab`、`_prefab` 或 `prefab` 的 Dump 对象。
+ * @returns 首个有效 FileID；不存在时返回 null。
+ */
+function readPrefabFileId(...values: Record<string, unknown>[]): string | null {
+  for (const value of values) {
+    for (const key of ['__prefab__', '__prefab', '_prefab', 'prefab']) {
+      const prefab = readObject(readDumpValue(value[key]));
+      const fileId = readString(readDumpValue(prefab.fileId));
+      if (fileId) return fileId;
+    }
+  }
+  return null;
 }
 
 function readStringDumpArray(value: unknown): string[] {

@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { buildComponentTypeSchema, type ComponentTypeSchemaResult } from './component-schema';
 import { ProbeError } from './probe-errors';
-import { normalizeNodeDump } from './scene-probe';
+import {
+  normalizeNodeDump,
+  normalizePrefabDump,
+  readComponentFileId
+} from './scene-probe';
 import { readObject } from './raw-reflection';
 
 export type DocumentScanMode = 'summary' | 'full';
@@ -46,6 +50,17 @@ interface HierarchyNodeEntry {
   childUuids: string[];
   siblingIndex: number;
   components: HierarchyComponentEntry[];
+  prefabAssetUuid: string | null;
+  prefabState: number | null;
+  prefabIsNested: boolean | null;
+  prefabInstanceRoot: boolean;
+  prefabInstanceChain: Array<{
+    depth: number;
+    assetUuid: string;
+    instanceNodeUuid: string | null;
+    state: number | null;
+    isNested: boolean | null;
+  }>;
 }
 
 interface DocumentNodeResult {
@@ -71,10 +86,15 @@ interface DocumentNodeResult {
 
 interface BoundComponentSchema extends ComponentTypeSchemaResult {
   componentUuid: string;
+  componentFileId: string | null;
   nodeUuid: string;
   nodePath: string | null;
   componentIndex: number;
 }
+
+type DocumentPrefabInstance = ReturnType<typeof normalizePrefabDump> & {
+  instanceChain: HierarchyNodeEntry['prefabInstanceChain'];
+};
 
 interface DocumentScanCursor {
   version: 1;
@@ -104,7 +124,7 @@ export interface DocumentSnapshotResult {
   };
   nodes: DocumentNodeResult[];
   componentSchemas: BoundComponentSchema[];
-  prefabInstances: never[];
+  prefabInstances: DocumentPrefabInstance[];
   coverage: {
     nodes: { total: number; decoded: number };
     components: { total: number; decoded: number };
@@ -148,6 +168,12 @@ export async function scanCurrentDocument(
   const hierarchy = await source.queryNodeTree();
   const hierarchyEntries = flattenHierarchy(hierarchy);
   const componentEntries = hierarchyEntries.flatMap((entry) => entry.components);
+  const prefabInstanceEntries = hierarchyEntries.filter((entry) =>
+    entry.parentUuid !== null
+    && entry.prefabInstanceRoot
+    && entry.prefabAssetUuid !== null
+    && entry.prefabAssetUuid !== document.assetUuid
+  );
   if (mode === 'summary') {
     const nodes = hierarchyEntries.map(buildHierarchyNodeResult);
     const revision = sha256(stableStringify({ document, hierarchy }));
@@ -181,7 +207,7 @@ export async function scanCurrentDocument(
         components: { total: componentEntries.length, decoded: 0 },
         properties: { total: 0, decoded: 0 },
         references: { total: 0, resolved: 0 },
-        prefabInstances: { total: 0, resolved: 0 },
+        prefabInstances: { total: prefabInstanceEntries.length, resolved: 0 },
         overrides: { total: 0, decoded: 0 }
       },
       unresolved: buildDocumentUnresolved(document),
@@ -236,6 +262,7 @@ export async function scanCurrentDocument(
   const componentSchemas = componentEntries.map((entry, index) => ({
     ...buildComponentTypeSchema(componentDumps[index], scriptPathsByUuid),
     componentUuid: entry.componentUuid,
+    componentFileId: readComponentFileId(componentDumps[index]),
     nodeUuid: entry.nodeUuid,
     nodePath: entry.nodePath,
     componentIndex: entry.componentIndex
@@ -246,6 +273,33 @@ export async function scanCurrentDocument(
   );
   const references = componentSchemas.flatMap((schema) =>
     schema.properties.flatMap((property) => property.references)
+  );
+  const prefabInstances = prefabInstanceEntries.map((entry) => {
+    const nodeIndex = hierarchyEntries.indexOf(entry);
+    const normalized = normalizePrefabDump(
+      nodeDumps[nodeIndex],
+      document.assetUuid,
+      entry.path
+    );
+    const sourcePrefabAssetUuid = normalized.sourcePrefabAssetUuid
+      ?? entry.prefabAssetUuid;
+    return {
+      ...normalized,
+      sourcePrefabAssetUuid,
+      unresolved: sourcePrefabAssetUuid
+        ? normalized.unresolved.filter((item) => item.path !== 'sourcePrefabAssetUuid')
+        : normalized.unresolved,
+      instanceChain: buildPrefabInstanceChain(entry, document, hierarchyEntries[0]?.nodeUuid ?? null)
+    };
+  });
+  const overrideCount = prefabInstances.reduce(
+    (total, instance) => total
+      + instance.propertyOverrides.length
+      + instance.targetOverrides.length
+      + instance.mountedChildren.length
+      + instance.mountedComponents.length
+      + instance.removedComponents.length,
+    0
   );
   const revision = sha256(stableStringify({
     document,
@@ -262,12 +316,24 @@ export async function scanCurrentDocument(
   const pageComponentSchemas = componentSchemas.filter((schema) =>
     pageNodeUuids.has(schema.nodeUuid)
   );
+  const pagePrefabInstances = prefabInstances.filter((instance) =>
+    instance.instanceRootObjectUuid !== null
+    && pageNodeUuids.has(instance.instanceRootObjectUuid)
+  );
   const unresolved = buildDocumentUnresolved(document);
   for (let index = 0; index < pageComponentSchemas.length; index += 1) {
     for (const item of pageComponentSchemas[index].unresolved) {
       unresolved.push({
         ...item,
         path: `componentSchemas.${index}.${item.path}`
+      });
+    }
+  }
+  for (let index = 0; index < pagePrefabInstances.length; index += 1) {
+    for (const item of pagePrefabInstances[index].unresolved) {
+      unresolved.push({
+        ...item,
+        path: `prefabInstances.${index}.${item.path}`
       });
     }
   }
@@ -295,7 +361,7 @@ export async function scanCurrentDocument(
     },
     nodes: nodes.slice(offset, offset + pageSize),
     componentSchemas: pageComponentSchemas,
-    prefabInstances: [],
+    prefabInstances: pagePrefabInstances,
     coverage: {
       nodes: { total: hierarchyEntries.length, decoded: nodes.length },
       components: { total: componentEntries.length, decoded: componentSchemas.length },
@@ -306,8 +372,15 @@ export async function scanCurrentDocument(
           reference.kind !== 'missing' && reference.available
         ).length
       },
-      prefabInstances: { total: 0, resolved: 0 },
-      overrides: { total: 0, decoded: 0 }
+      prefabInstances: {
+        total: prefabInstances.length,
+        resolved: prefabInstances.filter((instance) =>
+          instance.sourcePrefabAssetUuid !== null
+          && instance.sourceObjectFileId !== null
+          && instance.instanceFileId !== null
+        ).length
+      },
+      overrides: { total: overrideCount, decoded: overrideCount }
     },
     unresolved,
     diagnostics: [{
@@ -482,12 +555,35 @@ function flattenHierarchy(hierarchy: unknown): HierarchyNodeEntry[] {
    * @param value 当前节点摘要。
    * @param parentUuid 父节点 UUID；根节点为 null。
    * @param siblingIndex 当前节点同级顺序。
+   * @param parentPrefabAssetUuid 父级节点当前所属 Prefab Asset UUID。
+   * @param parentPrefabChain 父级节点已经建立的 Prefab 实例来源链。
    */
-  const visit = (value: unknown, parentUuid: string | null, siblingIndex: number): void => {
+  const visit = (
+    value: unknown,
+    parentUuid: string | null,
+    siblingIndex: number,
+    parentPrefabAssetUuid: string | null,
+    parentPrefabChain: HierarchyNodeEntry['prefabInstanceChain']
+  ): void => {
     const node = readObject(value);
     const nodeUuid = readString(node.uuid);
     if (!nodeUuid) throw new ProbeError('DOCUMENT_NODE_UUID_MISSING');
     const nodePath = readString(node.path);
+    const prefab = readObject(node.prefab);
+    const prefabAssetUuid = readString(prefab.assetUuid);
+    const prefabState = readNumber(prefab.state);
+    const prefabIsNested = readBoolean(prefab.isNested);
+    const prefabInstanceRoot = prefabAssetUuid !== null
+      && prefabAssetUuid !== parentPrefabAssetUuid;
+    const prefabInstanceChain = prefabInstanceRoot
+      ? [...parentPrefabChain, {
+          depth: parentPrefabChain.length,
+          assetUuid: prefabAssetUuid,
+          instanceNodeUuid: nodeUuid,
+          state: prefabState,
+          isNested: prefabIsNested
+        }]
+      : parentPrefabChain;
     const children = Array.isArray(node.children) ? node.children : [];
     const components = (Array.isArray(node.components) ? node.components : []).map(
       (componentValue, componentIndex): HierarchyComponentEntry => {
@@ -518,13 +614,50 @@ function flattenHierarchy(hierarchy: unknown): HierarchyNodeEntry[] {
         .map((child) => readString(readObject(child).uuid))
         .filter((uuid): uuid is string => uuid !== null),
       siblingIndex,
-      components
+      components,
+      prefabAssetUuid,
+      prefabState,
+      prefabIsNested,
+      prefabInstanceRoot,
+      prefabInstanceChain
     });
-    children.forEach((child, index) => visit(child, nodeUuid, index));
+    children.forEach((child, index) => visit(
+      child,
+      nodeUuid,
+      index,
+      prefabAssetUuid ?? parentPrefabAssetUuid,
+      prefabInstanceChain
+    ));
   };
 
-  visit(hierarchy, null, 0);
+  visit(hierarchy, null, 0, null, []);
   return entries;
+}
+
+/**
+ * 为单个实例根补齐宿主文档并重新编号来源链深度。
+ *
+ * @param entry 当前 Prefab 实例根的层级条目。
+ * @param document 当前扫描文档的稳定资产身份。
+ * @param rootNodeUuid 当前文档根节点运行时 UUID。
+ * @returns 从宿主文档到当前源 Prefab 的有序实例来源链。
+ */
+function buildPrefabInstanceChain(
+  entry: HierarchyNodeEntry,
+  document: DocumentScanDocument,
+  rootNodeUuid: string | null
+): HierarchyNodeEntry['prefabInstanceChain'] {
+  const chain = [...entry.prefabInstanceChain];
+  if (document.assetUuid && chain[0]?.assetUuid !== document.assetUuid) {
+    chain.unshift({
+      depth: 0,
+      assetUuid: document.assetUuid,
+      instanceNodeUuid: rootNodeUuid,
+      state: null,
+      isNested: false
+    });
+  }
+  return chain.map((link, depth) => ({ ...link, depth }));
 }
 
 /**
@@ -737,4 +870,14 @@ function readString(value: unknown): string | null {
  */
 function readBoolean(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
+}
+
+/**
+ * 读取数字字段。
+ *
+ * @param value 待读取值。
+ * @returns 数字值；其它类型返回 null。
+ */
+function readNumber(value: unknown): number | null {
+  return typeof value === 'number' ? value : null;
 }

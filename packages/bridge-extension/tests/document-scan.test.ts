@@ -73,6 +73,100 @@ describe('scanCurrentDocument', () => {
     expect(activity.maxActive()).toBeLessThanOrEqual(3);
   });
 
+  it('从完整节点 Dump 提取 Prefab 实例来源、FileID、节点路径和 Override 统计', async () => {
+    const fixture = createDocumentFixture();
+    const hierarchyChildren = fixture.hierarchy.children as Record<string, unknown>[];
+    hierarchyChildren[0].prefab = {
+      state: 2,
+      isNested: true,
+      assetUuid: 'goods-card-prefab'
+    };
+    const nodeDump = readFixtureValue(fixture.nodeDumps, 'node-1') as Record<string, unknown>;
+    fixture.nodeDumps.set('node-1', {
+      ...nodeDump,
+      __prefab__: {
+        fileId: 'goods-root',
+        rootUuid: 'node-1',
+        sync: true,
+        prefabStateInfo: { state: 2, isNested: true },
+        instance: { value: {
+          fileId: { value: 'goods-instance' },
+          prefabRootNode: { value: { uuid: 'node-0' } },
+          propertyOverrides: { value: [{ value: {
+            targetInfo: { value: { localID: { value: [{ value: 'goods-root' }] } } },
+            propertyPath: { value: [{ value: '_active' }] },
+            value: { value: false, type: 'Boolean' }
+          } }] },
+          targetOverrides: { value: [] },
+          mountedChildren: { value: [] },
+          mountedComponents: { value: [] },
+          removedComponents: { value: [] }
+        } }
+      }
+    });
+    const source: DocumentScanSource = {
+      queryNodeTree: async () => fixture.hierarchy,
+      queryNode: async (nodeUuid) => readFixtureValue(fixture.nodeDumps, nodeUuid),
+      queryComponent: async (componentUuid) => readFixtureValue(
+        fixture.componentDumps,
+        componentUuid
+      )
+    };
+
+    const snapshot = await scanCurrentDocument({
+      mode: 'full',
+      pageSize: 100,
+      document: {
+        assetUuid: 'page-prefab',
+        path: 'db://assets/page.prefab',
+        filePath: 'E:/project/assets/page.prefab',
+        documentType: 'prefab'
+      }
+    }, source);
+
+    expect(() => DocumentSnapshotSchema.parse(snapshot)).not.toThrow();
+    expect(snapshot.prefabInstances).toContainEqual(expect.objectContaining({
+      ownerDocumentAssetUuid: 'page-prefab',
+      sourcePrefabAssetUuid: 'goods-card-prefab',
+      sourceObjectFileId: 'goods-root',
+      instanceFileId: 'goods-instance',
+      hostNodePath: 'Node 1'
+    }));
+    expect(snapshot.coverage.prefabInstances).toEqual({ total: 1, resolved: 1 });
+    expect(snapshot.coverage.overrides).toEqual({ total: 1, decoded: 1 });
+    expect(snapshot.prefabInstances[0].unresolved).not.toContainEqual({
+      path: 'sourcePrefabAssetUuid',
+      reason: 'SOURCE_PREFAB_ASSET_UUID_MISSING'
+    });
+  });
+
+  it('把组件 Prefab FileID 写入文档组件 Schema', async () => {
+    const fixture = createDocumentFixture();
+    const componentDump = readFixtureValue(
+      fixture.componentDumps,
+      'component-0-0'
+    ) as Record<string, unknown>;
+    fixture.componentDumps.set('component-0-0', {
+      ...componentDump,
+      __prefab__: { fileId: 'component-file-id' }
+    });
+    const source: DocumentScanSource = {
+      queryNodeTree: async () => fixture.hierarchy,
+      queryNode: async (nodeUuid) => readFixtureValue(fixture.nodeDumps, nodeUuid),
+      queryComponent: async (componentUuid) => readFixtureValue(
+        fixture.componentDumps,
+        componentUuid
+      )
+    };
+
+    const snapshot = await scanCurrentDocument({ mode: 'full' }, source);
+
+    expect(snapshot.componentSchemas[0]).toMatchObject({
+      componentUuid: 'component-0-0',
+      componentFileId: 'component-file-id'
+    });
+  });
+
   it('summary 模式只读取层级摘要，不查询节点和组件完整 Dump', async () => {
     const fixture = createDocumentFixture();
     let hierarchyQueryCount = 0;
@@ -111,6 +205,28 @@ describe('scanCurrentDocument', () => {
       path: '/',
       active: true
     });
+  });
+
+  it('文档 Asset UUID 未确认时也不把当前 Prefab 根误计为嵌套实例', async () => {
+    const fixture = createDocumentFixture();
+    fixture.hierarchy.prefab = {
+      state: 1,
+      isNested: false,
+      assetUuid: 'owner-prefab'
+    };
+    const source: DocumentScanSource = {
+      queryNodeTree: async () => fixture.hierarchy,
+      queryNode: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_NODE');
+      },
+      queryComponent: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_COMPONENT');
+      }
+    };
+
+    const snapshot = await scanCurrentDocument({ mode: 'summary' }, source);
+
+    expect(snapshot.coverage.prefabInstances).toEqual({ total: 0, resolved: 0 });
   });
 
   it('使用 Revision cursor 分页返回节点及其对应组件，并从 cursor 恢复页大小', async () => {

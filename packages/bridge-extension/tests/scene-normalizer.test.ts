@@ -7,11 +7,12 @@ describe('scene normalizer', () => {
       uuid: { value: 'node-1' }, name: { value: 'Main Camera' }, active: { value: true },
       layer: { value: 1073741824 }, position: { value: { x: 1, y: 2, z: 3 } },
       rotation: { value: { x: 4, y: 5, z: 6 } }, scale: { value: { x: 1, y: 1, z: 1 } },
-      parent: { value: { uuid: 'scene-1' } }, children: [{ uuid: 'child-1' }], __type__: 'cc.Node', __comps__: []
+      parent: { value: { uuid: 'scene-1' } }, children: [{ uuid: 'child-1' }], __type__: 'cc.Node', __comps__: [],
+      __prefab__: { fileId: 'node-file-id' }
     };
     const node = normalizeNodeDump(raw, 2);
     expect(node).toMatchObject({
-      identity: { objectUuid: 'node-1' }, name: 'Main Camera', active: true,
+      identity: { objectUuid: 'node-1', fileId: 'node-file-id' }, name: 'Main Camera', active: true,
       layer: 1073741824, siblingIndex: 2, parentUuid: 'scene-1', childUuids: ['child-1'],
       transform: { position: { x: 1, y: 2, z: 3 } }
     });
@@ -26,10 +27,15 @@ describe('scene normalizer', () => {
         sprite: { type: 'cc.SpriteFrame', value: { uuid: 'asset-1' }, extends: ['cc.Asset'] },
         __scriptAsset: { type: 'cc.Script', value: { uuid: 'script-1' }, extends: ['cc.Asset'] },
         score: { type: 'Number', value: 3 }, futureProperty: { value: { opaque: true } }
-      }, type: 'GameController', cid: 'custom-cid', extends: ['cc.Component', 'cc.Object']
+      },
+      __prefab__: { fileId: 'component-file-id' },
+      type: 'GameController', cid: 'custom-cid', extends: ['cc.Component', 'cc.Object']
     };
     const component = normalizeComponentDump(raw, 'db://assets/script/GameController.ts');
-    expect(component.identity.objectUuid).toBe('component-1');
+    expect(component.identity).toEqual({
+      objectUuid: 'component-1',
+      fileId: 'component-file-id'
+    });
     expect(component.class).toMatchObject({
       className: 'GameController',
       typeId: 'custom-cid',
@@ -68,9 +74,10 @@ describe('scene normalizer', () => {
         } }
       }
     };
-    const prefab = normalizePrefabDump(raw, 'document-prefab');
+    const prefab = normalizePrefabDump(raw, 'document-prefab', 'Page/Instance');
     expect(prefab).toMatchObject({
       ownerDocumentAssetUuid: 'document-prefab',
+      hostNodePath: 'Page/Instance',
       sourcePrefabAssetUuid: 'source-prefab',
       instanceRootObjectUuid: 'instance-node',
       sourceObjectFileId: 'source-node-file-id',
@@ -82,6 +89,28 @@ describe('scene normalizer', () => {
       overrideValue: { width: 128, height: 50 }, declaredType: 'cc.Size'
     });
     expect(prefab.rawPrefabInfo).toEqual(raw.__prefab__);
+  });
+
+  it('Prefab 稳定来源身份缺失时写入 unresolved 而不是静默返回 null', () => {
+    const prefab = normalizePrefabDump({
+      uuid: { value: 'instance-node' },
+      __prefab__: {
+        rootUuid: 'instance-node',
+        instance: { value: {
+          propertyOverrides: { value: [] },
+          targetOverrides: { value: [] },
+          mountedChildren: { value: [] },
+          mountedComponents: { value: [] },
+          removedComponents: { value: [] }
+        } }
+      }
+    }, 'document-prefab');
+
+    expect(prefab.unresolved).toEqual(expect.arrayContaining([
+      { path: 'sourcePrefabAssetUuid', reason: 'SOURCE_PREFAB_ASSET_UUID_MISSING' },
+      { path: 'sourceObjectFileId', reason: 'SOURCE_OBJECT_FILE_ID_MISSING' },
+      { path: 'instanceFileId', reason: 'PREFAB_INSTANCE_FILE_ID_MISSING' }
+    ]));
   });
 
   it('按 FileID 和属性路径分别解析源值与实例最终值', () => {
@@ -152,6 +181,81 @@ describe('scene normalizer', () => {
     expect(resolved.unresolved).toEqual([
       { path: 'propertyOverrides.0.sourceValue', reason: 'MULTI_SEGMENT_TARGET_LOCAL_ID_REQUIRES_NESTED_TARGET_MAP' },
       { path: 'propertyOverrides.0.effectiveValue', reason: 'MULTI_SEGMENT_TARGET_LOCAL_ID_REQUIRES_NESTED_TARGET_MAP' }
+    ]);
+  });
+
+  it('使用嵌套 TargetMap 逐层解析多段 localID 到最终 FileID', () => {
+    const prefab = {
+      propertyOverrides: [{
+        index: 0,
+        targetLocalIds: ['outer-file-id', 'inner-file-id'],
+        propertyPath: ['_active'],
+        sourceValue: null,
+        overrideValue: false,
+        effectiveValue: null
+      }],
+      unresolved: []
+    };
+    const root = {
+      _prefab: { fileId: 'inner-file-id' },
+      _active: false,
+      children: [],
+      components: []
+    };
+    const targetMaps = {
+      targets: {
+        'outer-file-id': { assetUuid: 'outer-prefab', fileId: 'outer-file-id', nodePath: null }
+      },
+      children: {
+        'outer-file-id': {
+          targets: {
+            'inner-file-id': { assetUuid: 'inner-prefab', fileId: 'inner-file-id', nodePath: null }
+          },
+          children: {}
+        }
+      }
+    };
+
+    const resolved = resolvePrefabOverrideValues(prefab, root, root, targetMaps);
+
+    expect(resolved.propertyOverrides[0]).toMatchObject({ sourceValue: false, effectiveValue: false });
+    expect(resolved.unresolved).toEqual([]);
+  });
+
+  it('嵌套 TargetMap 缺少下一层时报告下一段 localID 索引', () => {
+    const prefab = {
+      propertyOverrides: [{
+        index: 0,
+        targetLocalIds: ['outer-file-id', 'inner-file-id'],
+        propertyPath: ['_active'],
+        sourceValue: null,
+        overrideValue: false,
+        effectiveValue: null
+      }],
+      unresolved: []
+    };
+    const targetMaps = {
+      targets: {
+        'outer-file-id': {
+          assetUuid: 'outer-prefab',
+          fileId: 'outer-file-id',
+          nodePath: null
+        }
+      },
+      children: {}
+    };
+
+    const resolved = resolvePrefabOverrideValues(prefab, {}, {}, targetMaps);
+
+    expect(resolved.unresolved).toEqual([
+      {
+        path: 'propertyOverrides.0.sourceValue',
+        reason: 'NESTED_TARGET_MAP_SEGMENT_NOT_FOUND_AT_1'
+      },
+      {
+        path: 'propertyOverrides.0.effectiveValue',
+        reason: 'NESTED_TARGET_MAP_SEGMENT_NOT_FOUND_AT_1'
+      }
     ]);
   });
 });

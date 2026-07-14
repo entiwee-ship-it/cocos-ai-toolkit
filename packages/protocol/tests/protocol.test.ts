@@ -3,6 +3,8 @@ import {
   ComponentTypeSchemaSchema,
   ComponentPropertyDescriptorSchema,
   ProbeResponseSchema,
+  PrefabProbeSchema,
+  PrefabGraphSchema,
   ProjectScanReportSchema,
   ReferenceSchema,
   createEmptyProjectCoverage
@@ -85,6 +87,81 @@ describe('ProbeResponseSchema', () => {
     });
 
     expect(() => ProbeResponseSchema.parse(response)).toThrow();
+  });
+
+  it('保留 Prefab 探针中的完整实例来源链字段', () => {
+    const result = PrefabProbeSchema.parse({
+      ownerDocumentAssetUuid: 'owner-prefab',
+      sourcePrefabAssetUuid: 'source-prefab',
+      instanceRootObjectUuid: 'instance-root',
+      sourceObjectFileId: 'source-file-id',
+      instanceFileId: 'instance-file-id',
+      prefabRootNodeUuid: 'root-node',
+      sync: true,
+      state: { state: 2 },
+      instanceChain: [{
+        depth: 1,
+        assetUuid: 'source-prefab',
+        instanceNodeUuid: 'instance-root',
+        state: 2,
+        isNested: true
+      }],
+      propertyOverrides: [],
+      targetOverrides: [],
+      mountedChildren: [],
+      mountedComponents: [],
+      removedComponents: [],
+      unresolved: [],
+      rawPrefabInfo: {}
+    });
+
+    expect(result.instanceChain[0]).toMatchObject({ state: 2, isNested: true });
+  });
+
+  it('接受包含 Override 摘要、嵌套 TargetMap 和阻断诊断的 Prefab 图', () => {
+    const result = PrefabGraphSchema.parse({
+      nodes: [
+        { assetUuid: 'page-prefab', path: 'db://assets/page.prefab', documentType: 'prefab' },
+        { assetUuid: 'goods-prefab', path: 'db://assets/goods.prefab', documentType: 'prefab' }
+      ],
+      edges: [{
+        fromAssetUuid: 'page-prefab',
+        toAssetUuid: 'goods-prefab',
+        kind: 'prefab-instance',
+        hostNodePath: 'Page/Goods',
+        instanceFileId: 'goods-instance',
+        sourceObjectFileId: 'goods-root',
+        depth: 1,
+        overrideCount: 1,
+        overrideSummary: {
+          propertyOverrideCount: 1,
+          targetOverrideCount: 0,
+          mountedChildrenCount: 0,
+          mountedComponentsCount: 0,
+          removedComponentsCount: 0
+        }
+      }],
+      targetMaps: {
+        targets: {
+          'goods-root': { assetUuid: 'goods-prefab', fileId: 'goods-root', nodePath: 'Page/Goods' }
+        },
+        children: {
+          'goods-root': { targets: {}, children: {} }
+        }
+      },
+      targetMapsByAsset: {},
+      blocked: true,
+      diagnostics: [{
+        code: 'PREFAB_GRAPH_CYCLE',
+        message: '检测到循环引用',
+        severity: 'error',
+        details: { cycle: ['page-prefab', 'goods-prefab', 'page-prefab'] }
+      }]
+    });
+
+    expect(result.edges[0].overrideSummary?.propertyOverrideCount).toBe(1);
+    expect(result.targetMaps?.children['goods-root']).toBeTruthy();
+    expect(result.blocked).toBe(true);
   });
 });
 

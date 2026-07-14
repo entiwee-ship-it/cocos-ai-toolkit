@@ -51,6 +51,12 @@ async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
   }, scriptPathsByUuid);
 }
 
+/**
+ * 读取当前节点的 Prefab 来源、实例链、FileID、Override 三值和宿主路径。
+ *
+ * @param request 包含目标节点运行时 UUID 的只读探针请求。
+ * @returns Creator 当前文档中该 Prefab 实例的结构化数据和原始证据。
+ */
 async function probePrefab(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const uuid = typeof input.nodeUuid === 'string' ? input.nodeUuid : null;
@@ -61,7 +67,9 @@ async function probePrefab(request: unknown): Promise<unknown> {
   ]);
   const chain = findPrefabInstanceChain(readObject(rawTree), uuid);
   const ownerDocumentAssetUuid = chain.length > 0 ? chain[0].assetUuid : null;
-  const normalized = normalizePrefabDump(raw, ownerDocumentAssetUuid);
+  const hierarchyNode = findHierarchyNodeByUuid(readObject(rawTree), uuid);
+  const hostNodePath = typeof hierarchyNode?.path === 'string' ? hierarchyNode.path : null;
+  const normalized = normalizePrefabDump(raw, ownerDocumentAssetUuid, hostNodePath);
   const runtimeNode = findRuntimeNodeByUuid(readObject(director.getScene()), uuid);
   const runtimePrefabInfo = readObject(runtimeNode?._prefab ?? runtimeNode?.__prefab__);
   const sourceAsset = readObject(runtimePrefabInfo.asset);
@@ -73,6 +81,25 @@ async function probePrefab(request: unknown): Promise<unknown> {
     source: 'message-api',
     raw: { node: raw, tree: rawTree }
   };
+}
+
+/**
+ * 按运行时 UUID 查找 query-node-tree 中的层级节点。
+ *
+ * @param root 当前文档的层级树根节点。
+ * @param targetUuid 待查找节点的运行时 UUID。
+ * @returns 命中的层级节点；不存在时返回 null。
+ */
+function findHierarchyNodeByUuid(
+  root: Record<string, unknown>,
+  targetUuid: string
+): Record<string, unknown> | null {
+  if (root.uuid === targetUuid) return root;
+  for (const child of Array.isArray(root.children) ? root.children : []) {
+    const found = findHierarchyNodeByUuid(readObject(child), targetUuid);
+    if (found) return found;
+  }
+  return null;
 }
 
 function findRuntimeNodeByUuid(root: Record<string, unknown>, targetUuid: string): Record<string, unknown> | null {
