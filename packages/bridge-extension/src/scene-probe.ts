@@ -1,9 +1,19 @@
+import { buildComponentTypeSchema, readComponentScriptUuid } from './component-schema';
 import { normalizeProperty, readDumpValue, readObject } from './raw-reflection';
 
+/**
+ * 把 Creator query-node Dump 转换为稳定节点结构。
+ *
+ * @param rawValue Creator 返回的节点 Dump。
+ * @param siblingIndex 节点在父节点中的顺序；未知时为 null。
+ * @returns 保留完整原始 Dump 的节点结构。
+ */
 export function normalizeNodeDump(rawValue: unknown, siblingIndex: number | null = null) {
   const raw = readObject(rawValue);
   const children = Array.isArray(raw.children) ? raw.children : [];
-  const components = Array.isArray(raw.__comps__) ? raw.__comps__.map(normalizeComponentDump) : [];
+  const components = Array.isArray(raw.__comps__)
+    ? raw.__comps__.map((component) => normalizeComponentDump(component))
+    : [];
   return {
     identity: { objectUuid: readString(readDumpValue(raw.uuid)), fileId: null },
     name: readString(readDumpValue(raw.name)),
@@ -24,34 +34,38 @@ export function normalizeNodeDump(rawValue: unknown, siblingIndex: number | null
   };
 }
 
-export function normalizeComponentDump(rawValue: unknown) {
+/**
+ * 把 Creator query-component Dump 转换为兼容旧探针并携带完整 Schema 的组件结构。
+ *
+ * @param rawValue Creator 返回的组件 Dump。
+ * @param scriptPath 由脚本资产 UUID 解析出的 db URL 或磁盘路径。
+ * @returns 组件身份、类信息、属性摘要、完整 Schema、未解析项和原始 Dump。
+ */
+export function normalizeComponentDump(rawValue: unknown, scriptPath: string | null = null) {
   const raw = readObject(rawValue);
   const values = readObject(raw.value);
-  const className = readString(raw.type);
-  const typeId = readString(raw.cid);
-  const inheritance = Array.isArray(raw.extends) ? raw.extends.filter((value): value is string => typeof value === 'string') : [];
   const properties: Record<string, ReturnType<typeof normalizeProperty>> = {};
-  const unresolved: Array<{ path: string; reason: string }> = [];
   for (const [name, property] of Object.entries(values)) {
     properties[name] = normalizeProperty(property);
-    const propertyObject = readObject(property);
-    if (typeof propertyObject.type !== 'string') {
-      unresolved.push({ path: `properties.${name}`, reason: 'DECLARED_TYPE_MISSING' });
-    }
   }
-  const scriptProperty = readObject(values.__scriptAsset);
+  const scriptUuid = readComponentScriptUuid(raw);
+  const scriptPathsByUuid = scriptUuid && scriptPath
+    ? new Map([[scriptUuid, scriptPath]])
+    : new Map<string, string>();
+  const schema = buildComponentTypeSchema(raw, scriptPathsByUuid);
   return {
     identity: { objectUuid: readString(readDumpValue(values.uuid)), fileId: null },
     class: {
-      className,
-      typeId,
-      custom: Boolean(className && !className.startsWith('cc.')),
-      scriptUuid: readUuid(readDumpValue(scriptProperty)),
-      scriptPath: null,
-      inheritance
+      className: schema.className,
+      typeId: schema.typeId,
+      custom: Boolean(schema.className && !schema.className.startsWith('cc.')),
+      scriptUuid: schema.scriptUuid,
+      scriptPath: schema.scriptPath,
+      inheritance: schema.inheritance
     },
     properties,
-    unresolved,
+    schema,
+    unresolved: schema.unresolved,
     raw
   };
 }

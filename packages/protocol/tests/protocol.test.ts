@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ComponentTypeSchemaSchema,
+  ComponentPropertyDescriptorSchema,
   ProbeResponseSchema,
   ProjectScanReportSchema,
   ReferenceSchema,
@@ -109,6 +110,14 @@ describe('阶段 1 只读协议', () => {
         visible: true,
         readonly: false,
         defaultValue: null,
+        currentValue: { uuid: 'content-node-uuid' },
+        references: [{
+          kind: 'node',
+          objectUuid: 'content-node-uuid',
+          fileId: null,
+          nodePath: null,
+          available: true
+        }],
         inspectorMetadata: {
           tooltip: '滚动内容根节点'
         },
@@ -128,6 +137,34 @@ describe('阶段 1 只读协议', () => {
         tooltip: '滚动内容根节点'
       }
     });
+  });
+
+  it('组件属性 Schema 必须显式携带当前值和引用列表', () => {
+    const descriptor = {
+      propertyPath: 'content',
+      serializedName: 'content',
+      displayName: '内容节点',
+      declaredType: 'cc.Node',
+      actualType: 'cc.Node',
+      valueKind: 'node-reference',
+      nullable: true,
+      serializable: true,
+      visible: true,
+      readonly: false,
+      defaultValue: null,
+      inspectorMetadata: {},
+      rawClassAttributes: {},
+      rawConsumedKeys: []
+    };
+
+    expect(() => ComponentPropertyDescriptorSchema.parse({
+      ...descriptor,
+      references: []
+    })).toThrow();
+    expect(() => ComponentPropertyDescriptorSchema.parse({
+      ...descriptor,
+      currentValue: null
+    })).toThrow();
   });
 
   it('区分可用资产引用和缺失组件引用', () => {

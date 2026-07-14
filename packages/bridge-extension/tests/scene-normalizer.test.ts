@@ -24,12 +24,24 @@ describe('scene normalizer', () => {
         uuid: { value: 'component-1' }, node: { type: 'cc.Node', value: { uuid: 'node-1' } },
         target: { type: 'cc.Camera', value: { uuid: 'component-2' }, extends: ['cc.Component'] },
         sprite: { type: 'cc.SpriteFrame', value: { uuid: 'asset-1' }, extends: ['cc.Asset'] },
+        __scriptAsset: { type: 'cc.Script', value: { uuid: 'script-1' }, extends: ['cc.Asset'] },
         score: { type: 'Number', value: 3 }, futureProperty: { value: { opaque: true } }
       }, type: 'GameController', cid: 'custom-cid', extends: ['cc.Component', 'cc.Object']
     };
-    const component = normalizeComponentDump(raw);
+    const component = normalizeComponentDump(raw, 'db://assets/script/GameController.ts');
     expect(component.identity.objectUuid).toBe('component-1');
-    expect(component.class).toMatchObject({ className: 'GameController', typeId: 'custom-cid', custom: true });
+    expect(component.class).toMatchObject({
+      className: 'GameController',
+      typeId: 'custom-cid',
+      custom: true,
+      scriptUuid: 'script-1',
+      scriptPath: 'db://assets/script/GameController.ts'
+    });
+    expect(component.schema).toMatchObject({
+      className: 'GameController',
+      scriptUuid: 'script-1',
+      scriptPath: 'db://assets/script/GameController.ts'
+    });
     expect(component.properties.node.valueKind).toBe('node-reference');
     expect(component.properties.target.valueKind).toBe('component-reference');
     expect(component.properties.sprite.valueKind).toBe('asset-reference');

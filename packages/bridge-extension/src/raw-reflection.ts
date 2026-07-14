@@ -21,15 +21,29 @@ export function normalizeProperty(value: unknown): NormalizedProperty {
   };
 }
 
+/**
+ * 按 Creator 声明类型、继承链和当前值识别稳定的属性值类别。
+ *
+ * @param type Creator 属性声明类型。
+ * @param value Creator 属性当前值。
+ * @param extendsValue Creator 属性声明的继承链。
+ * @returns PropertyValueKindSchema 对应字符串。
+ */
 export function classifyValueKind(type: string | null, value: unknown, extendsValue: unknown): string {
   const inheritance = Array.isArray(extendsValue) ? extendsValue.filter((item): item is string => typeof item === 'string') : [];
+  if (Array.isArray(value)) return 'array';
   if (type === 'cc.Node') return 'node-reference';
   if (inheritance.includes('cc.Component') || type?.endsWith('Component')) return 'component-reference';
   if (inheritance.includes('cc.Asset') || type?.endsWith('Asset') || type === 'cc.SpriteFrame' || type === 'cc.Prefab') return 'asset-reference';
-  if (Array.isArray(value)) return 'array';
+  if (type === 'Enum') return 'enum';
+  if (type === 'cc.Vec2' || type === 'cc.Vec3' || type === 'cc.Vec4' || type === 'cc.Quat') return 'vector';
+  if (type === 'cc.Color') return 'color';
+  if (type === 'cc.Size') return 'size';
+  if (type === 'cc.Rect') return 'rect';
   if (value === null) return 'null';
   if (typeof value === 'object') return 'object';
-  return typeof value;
+  if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return typeof value;
+  return 'unknown-serialized';
 }
 
 export function readObject(value: unknown): Record<string, unknown> {

@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { PropertyValueKindSchema } from './component.js';
 import { UnresolvedItemSchema } from './envelope.js';
+import { ReferenceSchema } from './reference.js';
+
+const RequiredCurrentValueSchema = z.custom<unknown>(
+  (value) => value !== undefined,
+  { message: 'currentValue 必须显式存在' }
+);
 
 export const InspectorMetadataSchema = z.object({
   tooltip: z.string().nullable().optional(),
@@ -22,6 +28,8 @@ export const ComponentPropertyDescriptorSchema = z.object({
   visible: z.boolean().nullable(),
   readonly: z.boolean().nullable(),
   defaultValue: z.unknown(),
+  currentValue: RequiredCurrentValueSchema,
+  references: z.array(ReferenceSchema),
   inspectorMetadata: InspectorMetadataSchema,
   rawClassAttributes: z.record(z.string(), z.unknown()),
   rawConsumedKeys: z.array(z.string())
