@@ -23,7 +23,6 @@ type JsonObject = Record<string, unknown>;
 const sceneMethods = {
   'probe.hierarchy': 'probeHierarchy',
   'probe.node': 'probeNode',
-  'probe.component': 'probeComponent',
   'probe.prefab': 'probePrefab'
 } as const;
 
@@ -56,6 +55,7 @@ export function load(): void {
       'probe.editorState': () => probeEditorState(),
       'probe.assets': (payload) => probeAssets(payload),
       'probe.assetIndex': () => probeAssetIndex(),
+      'probe.component': (payload) => probeComponent(payload),
       'probe.documentSnapshot': (payload) => probeDocumentSnapshot(payload),
       'probe.openAsset': async (payload) => {
         const request = payload as { uuid?: unknown };
@@ -143,18 +143,44 @@ async function readDocumentAsset(documentAssetUuid: string): Promise<Buffer> {
 }
 
 /**
- * 读取资产索引中的脚本 UUID 路径，并转发当前文档快照请求到 Scene 进程。
+ * 尽力读取资产索引中的脚本 UUID 路径，并转发当前文档快照请求到 Scene 进程。
  *
  * @param request 文档扫描模式、分页、原始数据和并发配置。
  * @returns Scene 进程生成的只读文档快照。
  */
 async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
-  const assetIndex = await probeAssetIndex();
-  const scriptPathsByUuid = readScriptPathsByUuid(assetIndex);
+  const scriptPathsByUuid = await readScriptPathsBestEffort();
   return forwardToScene('probeDocumentSnapshot', {
     request: readObject(request),
     scriptPathsByUuid
   });
+}
+
+/**
+ * 尽力读取脚本资产索引，并转发单个组件的完整 Schema 请求到 Scene 进程。
+ *
+ * @param request 包含当前文档组件实例 UUID 的请求。
+ * @returns 组件身份、属性、Inspector 元数据、脚本路径和原始 Dump。
+ */
+async function probeComponent(request: unknown): Promise<unknown> {
+  const scriptPathsByUuid = await readScriptPathsBestEffort();
+  return forwardToScene('probeComponent', {
+    request: readObject(request),
+    scriptPathsByUuid
+  });
+}
+
+/**
+ * 尽力读取脚本 UUID 路径，AssetDB 索引异常时保留组件和文档主查询能力。
+ *
+ * @returns 可跨 Creator 进程传输的 UUID、路径元组；索引不可用时返回空数组。
+ */
+async function readScriptPathsBestEffort(): Promise<Array<[string, string]>> {
+  try {
+    return readScriptPathsByUuid(await probeAssetIndex());
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -210,7 +236,7 @@ export const methods: Record<string, (request: JsonObject) => Promise<unknown>> 
   'probe-document-snapshot': (request) => probeDocumentSnapshot(request),
   'probe-hierarchy': (request) => forwardToScene('probeHierarchy', request),
   'probe-node': (request) => forwardToScene('probeNode', request),
-  'probe-component': (request) => forwardToScene('probeComponent', request),
+  'probe-component': (request) => probeComponent(request),
   'probe-prefab': (request) => forwardToScene('probePrefab', request),
   'probe-undo-save-prepare': (request) => transactionCoordinator.prepare(request),
   'probe-undo-save-confirm': (request) => transactionCoordinator.confirm(request),

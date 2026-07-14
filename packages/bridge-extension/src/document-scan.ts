@@ -794,6 +794,7 @@ function readPageSize(value: number | undefined): number {
 
 /**
  * 为无法从公开 Creator 3.8.8 API 确认的文档字段生成明确缺口。
+ * 调用方传入的资产 UUID 仅作为提示，不能当成 Creator 已确认的当前文档身份。
  *
  * @param document 当前调用方已知的文档资产信息。
  * @returns 不可确认字段的 unresolved 列表。
@@ -801,9 +802,16 @@ function readPageSize(value: number | undefined): number {
 function buildDocumentUnresolved(document: NonNullable<DocumentScanRequest['document']>): Array<{
   path: string;
   reason: string;
+  details?: unknown;
 }> {
-  const unresolved: Array<{ path: string; reason: string }> = [];
-  if (!document.assetUuid) {
+  const unresolved: Array<{ path: string; reason: string; details?: unknown }> = [];
+  if (document.assetUuid) {
+    unresolved.push({
+      path: 'document.assetUuid',
+      reason: 'DOCUMENT_IDENTITY_UNCONFIRMED',
+      details: { requestedAssetUuid: document.assetUuid }
+    });
+  } else {
     unresolved.push({ path: 'document.assetUuid', reason: 'PUBLIC_API_NOT_CONFIRMED' });
   }
   if (!document.path) {

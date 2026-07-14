@@ -1,6 +1,18 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { probeAssetIndex } from '../src/asset-index';
 import { BRIDGE_CAPABILITIES } from '../src/editor-state';
+
+const originalEditorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Editor');
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  if (originalEditorDescriptor) {
+    Object.defineProperty(globalThis, 'Editor', originalEditorDescriptor);
+    return;
+  }
+  Reflect.deleteProperty(globalThis, 'Editor');
+});
 
 describe('asset index registration', () => {
   it('同时登记 Bridge 能力、WebSocket handler 和 Creator 消息入口', () => {
@@ -20,5 +32,26 @@ describe('asset index registration', () => {
     expect(packageJson.contributions?.messages?.['probe-asset-index']).toEqual({
       methods: ['probe-asset-index']
     });
+  });
+
+  it('AssetDB 返回非数组时生成空索引而不是中断 Bridge', async () => {
+    const requestEditorMessage = vi.fn(async () => ({ unexpected: true }));
+    Object.defineProperty(globalThis, 'Editor', {
+      configurable: true,
+      value: { Message: { request: requestEditorMessage } }
+    });
+
+    await expect(probeAssetIndex()).resolves.toEqual({
+      assets: [],
+      scripts: [],
+      documents: [],
+      unresolved: []
+    });
+    expect(requestEditorMessage).toHaveBeenCalledWith(
+      'asset-db',
+      'query-assets',
+      undefined,
+      expect.any(Array)
+    );
   });
 });

@@ -7,14 +7,15 @@
     "cocos-ai-probe": "./dist/index.js"
   },
   "scripts": {
-    "prebuild": "npm run build --workspace @cocos-ai/client",
+    "prebuild": "npm run build --workspace @cocos-ai/protocol && npm run build --workspace @cocos-ai/client && npm run build --workspace @cocos-ai/core",
     "build": "tsc -p tsconfig.json",
-    "pretypecheck": "npm run build --workspace @cocos-ai/client",
+    "pretypecheck": "npm run build --workspace @cocos-ai/protocol && npm run build --workspace @cocos-ai/client && npm run build --workspace @cocos-ai/core",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@cocos-ai/client": "0.1.0",
+    "@cocos-ai/core": "0.1.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

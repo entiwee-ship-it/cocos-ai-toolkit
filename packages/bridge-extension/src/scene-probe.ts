@@ -1,4 +1,4 @@
-import { buildComponentTypeSchema, readComponentScriptUuid } from './component-schema';
+import { buildComponentTypeSchema } from './component-schema';
 import { normalizeProperty, readDumpValue, readObject } from './raw-reflection';
 
 /**
@@ -42,20 +42,19 @@ export function normalizeNodeDump(rawValue: unknown, siblingIndex: number | null
  * 把 Creator query-component Dump 转换为兼容旧探针并携带完整 Schema 的组件结构。
  *
  * @param rawValue Creator 返回的组件 Dump。
- * @param scriptPath 由脚本资产 UUID 解析出的 db URL 或磁盘路径。
+ * @param scriptPathsByUuid 脚本资产 UUID 到 db URL 或磁盘路径的索引。
  * @returns 组件身份、类信息、属性摘要、完整 Schema、未解析项和原始 Dump。
  */
-export function normalizeComponentDump(rawValue: unknown, scriptPath: string | null = null) {
+export function normalizeComponentDump(
+  rawValue: unknown,
+  scriptPathsByUuid: ReadonlyMap<string, string> = new Map()
+) {
   const raw = readObject(rawValue);
   const values = readObject(raw.value);
   const properties: Record<string, ReturnType<typeof normalizeProperty>> = {};
   for (const [name, property] of Object.entries(values)) {
     properties[name] = normalizeProperty(property);
   }
-  const scriptUuid = readComponentScriptUuid(raw);
-  const scriptPathsByUuid = scriptUuid && scriptPath
-    ? new Map([[scriptUuid, scriptPath]])
-    : new Map<string, string>();
   const schema = buildComponentTypeSchema(raw, scriptPathsByUuid);
   return {
     identity: {

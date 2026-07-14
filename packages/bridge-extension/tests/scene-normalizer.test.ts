@@ -31,7 +31,9 @@ describe('scene normalizer', () => {
       __prefab__: { fileId: 'component-file-id' },
       type: 'GameController', cid: 'custom-cid', extends: ['cc.Component', 'cc.Object']
     };
-    const component = normalizeComponentDump(raw, 'db://assets/script/GameController.ts');
+    const component = normalizeComponentDump(raw, new Map([
+      ['script-1', 'db://assets/script/GameController.ts']
+    ]));
     expect(component.identity).toEqual({
       objectUuid: 'component-1',
       fileId: 'component-file-id'
@@ -52,6 +54,9 @@ describe('scene normalizer', () => {
     expect(component.properties.target.valueKind).toBe('component-reference');
     expect(component.properties.sprite.valueKind).toBe('asset-reference');
     expect(component.unresolved).toContainEqual(expect.objectContaining({ path: 'properties.futureProperty' }));
+    expect(component.unresolved).not.toContainEqual(expect.objectContaining({
+      reason: 'SCRIPT_ASSET_PATH_NOT_FOUND'
+    }));
     expect(component.raw).toEqual(raw);
   });
 

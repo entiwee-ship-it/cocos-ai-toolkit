@@ -25,6 +25,7 @@ import {
   assertCheckpointCompatible,
   createAssetManifestHash,
   createScanCheckpoint,
+  parseScanCheckpoint,
   type ScanCheckpoint,
   type ScanCheckpointContext,
   type ScanCheckpointFailure,
@@ -101,6 +102,9 @@ export class ProjectScanner {
    * @returns 最终项目报告和最新 checkpoint。
    */
   async scan(options: ProjectScanOptions): Promise<ProjectScanResult> {
+    const resumeCheckpoint = options.checkpoint
+      ? parseScanCheckpoint(options.checkpoint)
+      : undefined;
     const startedAt = new Date().toISOString();
     const parameters = readScanParameters(options);
     const sessions = readEditorSessions(await this.requestReadonly('server.editors', {}));
@@ -127,21 +131,21 @@ export class ProjectScanner {
       assetUuids
     };
 
-    if (options.checkpoint) {
-      assertCheckpointCompatible(options.checkpoint, context);
+    if (resumeCheckpoint) {
+      assertCheckpointCompatible(resumeCheckpoint, context);
     }
 
-    const scanId = options.checkpoint?.scanId ?? randomUUID();
+    const scanId = resumeCheckpoint?.scanId ?? randomUUID();
     const snapshotsByAsset = new Map<string, DocumentSnapshot>();
-    for (const snapshot of options.checkpoint?.documents ?? []) {
+    for (const snapshot of resumeCheckpoint?.documents ?? []) {
       const assetUuid = snapshot.document.assetUuid;
       if (assetUuid && assetUuids.includes(assetUuid)) snapshotsByAsset.set(assetUuid, snapshot);
     }
-    const completedAssetUuids = [...(options.checkpoint?.completedAssetUuids ?? [])];
+    const completedAssetUuids = [...(resumeCheckpoint?.completedAssetUuids ?? [])];
     const completedAssets = new Set(completedAssetUuids);
-    const failures = [...(options.checkpoint?.failures ?? [])];
-    const unresolved = options.checkpoint
-      ? [...options.checkpoint.unresolved]
+    const failures = [...(resumeCheckpoint?.failures ?? [])];
+    const unresolved = resumeCheckpoint
+      ? [...resumeCheckpoint.unresolved]
       : prefixUnresolved(assetIndex.unresolved, 'assetIndex');
     const diagnostics: Diagnostic[] = failures.map((failure) => ({
       code: failure.code,
@@ -339,6 +343,13 @@ export class ProjectScanner {
           }
         }
       ));
+      // Creator 尚未独立确认当前文档 UUID 时，不能把请求回显值当成资产身份。
+      if (page.unresolved.some((item) =>
+        item.path === 'document.assetUuid'
+        && item.reason === 'DOCUMENT_IDENTITY_UNCONFIRMED'
+      )) {
+        throw new Error('DOCUMENT_IDENTITY_UNCONFIRMED');
+      }
       if (page.document.assetUuid !== document.assetUuid) {
         throw new Error('DOCUMENT_IDENTITY_MISMATCH');
       }

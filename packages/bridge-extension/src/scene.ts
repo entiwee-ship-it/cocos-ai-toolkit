@@ -25,9 +25,16 @@ async function probeNode(request: unknown): Promise<unknown> {
 }
 
 async function probeComponent(request: unknown): Promise<unknown> {
-  const uuid = requireUuid(unwrapRequest(request));
+  const input = readObject(unwrapRequest(request));
+  const componentRequest = 'request' in input ? input.request : input;
+  const uuid = requireUuid(componentRequest);
+  const scriptPathsByUuid = readScriptPathsByUuid(input.scriptPathsByUuid);
   const raw = await Editor.Message.request('scene', 'query-component', uuid);
-  return { data: normalizeComponentDump(raw), raw, source: 'message-api' };
+  return {
+    data: normalizeComponentDump(raw, scriptPathsByUuid),
+    raw,
+    source: 'message-api'
+  };
 }
 
 /**

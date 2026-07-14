@@ -1,42 +1,136 @@
 import { createHash } from 'node:crypto';
-import type {
-  DocumentSnapshot,
-  UnresolvedItem
+import { z } from 'zod';
+import {
+  DocumentSnapshotSchema,
+  UnresolvedItemSchema,
+  type DocumentSnapshot,
+  type UnresolvedItem
 } from '@cocos-ai/protocol';
 
-export interface ScanParameters {
-  pageSize: number;
-  includeRaw: boolean;
-  concurrency: number;
-}
+export const ScanParametersSchema = z.object({
+  pageSize: z.number().int().min(1).max(500),
+  includeRaw: z.boolean(),
+  concurrency: z.number().int().min(1).max(4)
+}).strict();
 
-export interface ScanCheckpointFailure {
-  assetUuid: string;
-  code: string;
-  message: string;
-  details?: unknown;
-}
+export const ScanCheckpointFailureSchema = z.object({
+  assetUuid: z.string().min(1),
+  code: z.string().min(1),
+  message: z.string().min(1),
+  details: z.unknown().optional()
+}).strict();
 
-export interface ScanCheckpoint {
-  version: 1;
-  scanId: string;
-  projectId: string;
-  editorInstanceId: string;
-  projectPath: string;
-  creatorVersion: string;
-  bridgeVersion: string;
-  protocolVersion: string;
-  parameters: ScanParameters;
-  parametersHash: string;
-  assetManifestHash: string;
-  assetUuids: string[];
-  completedAssetUuids: string[];
-  failures: ScanCheckpointFailure[];
-  documents: DocumentSnapshot[];
-  unresolved: UnresolvedItem[];
-  updatedAt: string;
-}
+export const ScanCheckpointSchema = z.object({
+  version: z.literal(1),
+  scanId: z.string().min(1),
+  projectId: z.string().min(1),
+  editorInstanceId: z.string().min(1),
+  projectPath: z.string().min(1),
+  creatorVersion: z.string().min(1),
+  bridgeVersion: z.string().min(1),
+  protocolVersion: z.string().min(1),
+  parameters: ScanParametersSchema,
+  parametersHash: z.string().min(1),
+  assetManifestHash: z.string().min(1),
+  assetUuids: z.array(z.string().min(1)),
+  completedAssetUuids: z.array(z.string().min(1)),
+  failures: z.array(ScanCheckpointFailureSchema),
+  documents: z.array(DocumentSnapshotSchema),
+  unresolved: z.array(UnresolvedItemSchema),
+  updatedAt: z.string().datetime()
+}).strict().superRefine((checkpoint, context) => {
+  if (checkpoint.parametersHash !== createParametersHash(checkpoint.parameters)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['parametersHash'],
+      message: 'parametersHash 与 parameters 不一致'
+    });
+  }
+  if (new Set(checkpoint.assetUuids).size !== checkpoint.assetUuids.length) {
+    context.addIssue({ code: 'custom', path: ['assetUuids'], message: 'assetUuids 存在重复值' });
+  }
+  if (new Set(checkpoint.completedAssetUuids).size !== checkpoint.completedAssetUuids.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['completedAssetUuids'],
+      message: 'completedAssetUuids 存在重复值'
+    });
+  }
+  const assetUuids = new Set(checkpoint.assetUuids);
+  const completedAssetUuids = new Set(checkpoint.completedAssetUuids);
+  const documentAssetUuids = new Set<string>();
+  for (const document of checkpoint.documents) {
+    const assetUuid = document.document.assetUuid;
+    if (
+      !assetUuid
+      || !assetUuids.has(assetUuid)
+      || !completedAssetUuids.has(assetUuid)
+      || documentAssetUuids.has(assetUuid)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['documents'],
+        message: `文档资产身份无效或重复: ${assetUuid ?? 'null'}`
+      });
+      continue;
+    }
+    if (
+      document.mode !== 'full'
+      || document.document.available !== true
+      || document.page.offset !== 0
+      || document.page.nextCursor !== null
+      || document.page.totalNodes !== document.nodes.length
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['documents'],
+        message: `已完成文档必须是从首节点开始且分页完整的 full 快照: ${assetUuid}`
+      });
+      continue;
+    }
+    documentAssetUuids.add(assetUuid);
+  }
+  const failureAssetUuids = new Set<string>();
+  for (const failure of checkpoint.failures) {
+    if (
+      !assetUuids.has(failure.assetUuid)
+      || !completedAssetUuids.has(failure.assetUuid)
+      || failureAssetUuids.has(failure.assetUuid)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['failures'],
+        message: `失败资产身份无效或重复: ${failure.assetUuid}`
+      });
+      continue;
+    }
+    failureAssetUuids.add(failure.assetUuid);
+  }
+  for (const assetUuid of checkpoint.completedAssetUuids) {
+    if (!assetUuids.has(assetUuid)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['completedAssetUuids'],
+        message: `已完成资产不在清单中: ${assetUuid}`
+      });
+    }
+    if (documentAssetUuids.has(assetUuid) === failureAssetUuids.has(assetUuid)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['completedAssetUuids'],
+        message: `已完成资产必须且只能对应快照或失败记录: ${assetUuid}`
+      });
+    }
+  }
+});
 
+export type ScanParameters = z.infer<typeof ScanParametersSchema>;
+export type ScanCheckpointFailure = z.infer<typeof ScanCheckpointFailureSchema>;
+export type ScanCheckpoint = z.infer<typeof ScanCheckpointSchema>;
+
+/*
+ * 下面的类型只描述扫描器构造 checkpoint 所需的当前环境。
+ */
 export interface ScanCheckpointContext {
   projectId: string;
   editorInstanceId: string;
@@ -47,6 +141,20 @@ export interface ScanCheckpointContext {
   parameters: ScanParameters;
   assetManifestHash: string;
   assetUuids: string[];
+}
+
+/**
+ * 把外部 JSON 收窄为可信 checkpoint。
+ *
+ * @param value 从报告目录读取的未知 JSON。
+ * @returns 通过结构和内部一致性校验的 checkpoint。
+ */
+export function parseScanCheckpoint(value: unknown): ScanCheckpoint {
+  const result = ScanCheckpointSchema.safeParse(value);
+  if (!result.success) {
+    throw new Error(`SCAN_CHECKPOINT_INVALID:${result.error.message}`);
+  }
+  return result.data;
 }
 
 /**
@@ -130,7 +238,10 @@ export function assertCheckpointCompatible(
   if (checkpoint.protocolVersion !== context.protocolVersion) mismatches.push('protocolVersion');
   if (checkpoint.parametersHash !== createParametersHash(context.parameters)) mismatches.push('parameters');
   if (checkpoint.assetManifestHash !== context.assetManifestHash) mismatches.push('assetManifestHash');
-  if (JSON.stringify(checkpoint.assetUuids) !== JSON.stringify(context.assetUuids)) {
+  if (
+    JSON.stringify([...checkpoint.assetUuids].sort())
+    !== JSON.stringify([...context.assetUuids].sort())
+  ) {
     mismatches.push('assetUuids');
   }
   if (mismatches.length > 0) {
@@ -141,6 +252,9 @@ export function assertCheckpointCompatible(
 function toManifestRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const record = value as Record<string, unknown>;
+  const raw = record.raw && typeof record.raw === 'object' && !Array.isArray(record.raw)
+    ? record.raw as Record<string, unknown>
+    : {};
   return {
     assetUuid: record.assetUuid ?? record.uuid ?? null,
     url: record.url ?? null,
@@ -149,7 +263,8 @@ function toManifestRecord(value: unknown): Record<string, unknown> {
     importer: record.importer ?? null,
     isSubAsset: record.isSubAsset ?? null,
     isDirectory: record.isDirectory ?? null,
-    invalid: record.invalid ?? null
+    invalid: record.invalid ?? null,
+    mtime: record.mtime ?? raw.mtime ?? null
   };
 }
 

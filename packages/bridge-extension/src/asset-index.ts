@@ -194,7 +194,8 @@ export async function probeAssetIndex(): Promise<unknown> {
     undefined,
     ASSET_DATA_KEYS as never
   );
-  const values = (rawAssets as unknown[])
+  const assetValues: unknown[] = Array.isArray(rawAssets) ? rawAssets : [];
+  const values = assetValues
     .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object')
     .map(normalizeAssetInfo);
   return toSerializableAssetIndex(buildAssetIndex(values));
