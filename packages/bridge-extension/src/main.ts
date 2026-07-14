@@ -56,6 +56,7 @@ export function load(): void {
       'probe.editorState': () => probeEditorState(),
       'probe.assets': (payload) => probeAssets(payload),
       'probe.assetIndex': () => probeAssetIndex(),
+      'probe.documentSnapshot': (payload) => probeDocumentSnapshot(payload),
       'probe.openAsset': async (payload) => {
         const request = payload as { uuid?: unknown };
         if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');
@@ -141,6 +142,44 @@ async function readDocumentAsset(documentAssetUuid: string): Promise<Buffer> {
   return readFile(assetInfo.file);
 }
 
+/**
+ * 读取资产索引中的脚本 UUID 路径，并转发当前文档快照请求到 Scene 进程。
+ *
+ * @param request 文档扫描模式、分页、原始数据和并发配置。
+ * @returns Scene 进程生成的只读文档快照。
+ */
+async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
+  const assetIndex = await probeAssetIndex();
+  const scriptPathsByUuid = readScriptPathsByUuid(assetIndex);
+  return forwardToScene('probeDocumentSnapshot', {
+    request: readObject(request),
+    scriptPathsByUuid
+  });
+}
+
+/**
+ * 从可序列化资产索引中提取脚本 UUID 和稳定路径。
+ *
+ * @param value probeAssetIndex 返回的资产索引。
+ * @returns 可跨 Creator 进程消息传输的 UUID、路径元组。
+ */
+function readScriptPathsByUuid(value: unknown): Array<[string, string]> {
+  const index = readObject(value);
+  const scripts = Array.isArray(index.scripts) ? index.scripts : [];
+  const entries: Array<[string, string]> = [];
+  for (const scriptValue of scripts) {
+    const script = readObject(scriptValue);
+    const assetUuid = typeof script.assetUuid === 'string' ? script.assetUuid : null;
+    const scriptPath = typeof script.scriptPath === 'string'
+      ? script.scriptPath
+      : typeof script.filePath === 'string'
+        ? script.filePath
+        : null;
+    if (assetUuid && scriptPath) entries.push([assetUuid, scriptPath]);
+  }
+  return entries;
+}
+
 async function forwardToScene(method: string, request: unknown): Promise<unknown> {
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw new ProbeError('INVALID_REQUEST');
@@ -152,10 +191,23 @@ async function forwardToScene(method: string, request: unknown): Promise<unknown
   });
 }
 
+/**
+ * 把未知输入收窄为普通对象。
+ *
+ * @param value 待解析输入。
+ * @returns 普通对象；其它值返回空对象。
+ */
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 export const methods: Record<string, (request: JsonObject) => Promise<unknown>> = {
   'probe-editor-state': () => probeEditorState(),
   'probe-assets': (request) => probeAssets(request),
   'probe-asset-index': () => probeAssetIndex(),
+  'probe-document-snapshot': (request) => probeDocumentSnapshot(request),
   'probe-hierarchy': (request) => forwardToScene('probeHierarchy', request),
   'probe-node': (request) => forwardToScene('probeNode', request),
   'probe-component': (request) => forwardToScene('probeComponent', request),

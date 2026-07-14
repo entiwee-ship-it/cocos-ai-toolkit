@@ -1,3 +1,4 @@
+import { scanCurrentDocument, type DocumentScanRequest } from './document-scan';
 import { ProbeError } from './probe-errors';
 import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from './scene-probe';
 import { normalizeProbeProjectPath } from './probe-operation';
@@ -27,6 +28,27 @@ async function probeComponent(request: unknown): Promise<unknown> {
   const uuid = requireUuid(unwrapRequest(request));
   const raw = await Editor.Message.request('scene', 'query-component', uuid);
   return { data: normalizeComponentDump(raw), raw, source: 'message-api' };
+}
+
+/**
+ * 读取当前 Creator 文档的摘要或完整分页快照。
+ *
+ * @param request 主进程传入的扫描请求和脚本 UUID 路径元组。
+ * @returns 当前文档只读快照。
+ */
+async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
+  const input = readObject(unwrapRequest(request));
+  const scanRequest = readObject(input.request) as unknown as DocumentScanRequest;
+  const scriptPathsByUuid = readScriptPathsByUuid(input.scriptPathsByUuid);
+  return scanCurrentDocument(scanRequest, {
+    queryNodeTree: () => Editor.Message.request('scene', 'query-node-tree'),
+    queryNode: (nodeUuid) => Editor.Message.request('scene', 'query-node', nodeUuid),
+    queryComponent: (componentUuid) => Editor.Message.request(
+      'scene',
+      'query-component',
+      componentUuid
+    )
+  }, scriptPathsByUuid);
 }
 
 async function probePrefab(request: unknown): Promise<unknown> {
@@ -181,6 +203,26 @@ function requireUuid(request: unknown): string {
   return input.uuid;
 }
 
+/**
+ * 恢复主进程传入的脚本 UUID 路径 Map。
+ *
+ * @param value UUID、路径元组数组。
+ * @returns 供组件 Schema 查询脚本路径的只读 Map。
+ */
+function readScriptPathsByUuid(value: unknown): Map<string, string> {
+  const entries: Array<[string, string]> = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    if (
+      Array.isArray(item)
+      && typeof item[0] === 'string'
+      && typeof item[1] === 'string'
+    ) {
+      entries.push([item[0], item[1]]);
+    }
+  }
+  return new Map(entries);
+}
+
 function readObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -201,6 +243,7 @@ export const methods = {
   probeHierarchy,
   probeNode,
   probeComponent,
+  probeDocumentSnapshot,
   probePrefab,
   probeUndoSaveConfirm
 };

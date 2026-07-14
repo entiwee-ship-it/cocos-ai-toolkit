@@ -1,16 +1,41 @@
 import { z } from 'zod';
-import { AssetRecordSchema, DocumentAssetRecordSchema, ScriptAssetRecordSchema } from './asset.js';
+import { AssetRecordSchema, DocumentTypeSchema, ScriptAssetRecordSchema } from './asset.js';
 import { CoverageSchema, ProjectCoverageSchema } from './coverage.js';
 import { DiagnosticSchema, UnresolvedItemSchema } from './envelope.js';
 import { ProbeNodeSchema } from './node.js';
 import { PrefabGraphSchema, PrefabProbeSchema } from './prefab.js';
 import { ComponentTypeSchemaSchema } from './schema.js';
 
+export const DocumentSnapshotDocumentSchema = z.object({
+  assetUuid: z.string().min(1).nullable(),
+  path: z.string().nullable(),
+  filePath: z.string().nullable(),
+  documentType: DocumentTypeSchema.nullable(),
+  available: z.boolean(),
+  raw: z.unknown()
+});
+
+export const DocumentSnapshotPageSchema = z.object({
+  offset: z.number().int().nonnegative(),
+  pageSize: z.number().int().positive(),
+  totalNodes: z.number().int().nonnegative(),
+  nextCursor: z.string().nullable()
+});
+
+export const DocumentComponentSchemaSchema = ComponentTypeSchemaSchema.extend({
+  componentUuid: z.string().min(1),
+  nodeUuid: z.string().min(1),
+  nodePath: z.string().nullable(),
+  componentIndex: z.number().int().nonnegative()
+});
+
 export const DocumentSnapshotSchema = z.object({
-  document: DocumentAssetRecordSchema,
-  revision: z.unknown().nullable(),
+  document: DocumentSnapshotDocumentSchema,
+  revision: z.string().min(1),
+  mode: z.enum(['summary', 'full']),
+  page: DocumentSnapshotPageSchema,
   nodes: z.array(ProbeNodeSchema),
-  componentSchemas: z.array(ComponentTypeSchemaSchema),
+  componentSchemas: z.array(DocumentComponentSchemaSchema),
   prefabInstances: z.array(PrefabProbeSchema),
   coverage: CoverageSchema,
   unresolved: z.array(UnresolvedItemSchema),
@@ -38,4 +63,5 @@ export const ProjectScanReportSchema = z.object({
 }).passthrough();
 
 export type DocumentSnapshot = z.infer<typeof DocumentSnapshotSchema>;
+export type DocumentComponentSchema = z.infer<typeof DocumentComponentSchemaSchema>;
 export type ProjectScanReport = z.infer<typeof ProjectScanReportSchema>;

@@ -19,6 +19,7 @@
       "probe-editor-state": { "methods": ["probe-editor-state"] },
       "probe-assets": { "methods": ["probe-assets"] },
       "probe-asset-index": { "methods": ["probe-asset-index"] },
+      "probe-document-snapshot": { "methods": ["probe-document-snapshot"] },
       "probe-hierarchy": { "methods": ["probe-hierarchy"] },
       "probe-node": { "methods": ["probe-node"] },
       "probe-component": { "methods": ["probe-component"] },

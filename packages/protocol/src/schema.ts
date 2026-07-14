@@ -36,6 +36,10 @@ export const ComponentPropertyDescriptorSchema = z.object({
 }).passthrough();
 
 export const ComponentTypeSchemaSchema = z.object({
+  componentUuid: z.string().min(1).optional(),
+  nodeUuid: z.string().min(1).optional(),
+  nodePath: z.string().nullable().optional(),
+  componentIndex: z.number().int().nonnegative().optional(),
   className: z.string().nullable(),
   qualifiedName: z.string().nullable(),
   typeId: z.string().nullable(),
