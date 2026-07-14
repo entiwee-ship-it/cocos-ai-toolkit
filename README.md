@@ -2,13 +2,13 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过受限 CLI、Probe Server 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件、Undo 和保存语义。
 
-阶段 0 已在真实游戏前端 `xy-client` 的隔离 Git Worktree 和 Cocos Creator 3.8.8 上完成验证，结论为 **GO**。当前仓库仍是技术探针，不是生产版完整工具；阶段 1 将扩展完整只读扫描、组件 Schema、Prefab 引用图和覆盖率。
+阶段 0 已在真实游戏前端 `xy-client` 的隔离 Git Worktree 和 Cocos Creator 3.8.8 上完成验证，结论为 **GO**。阶段 1 已建立完整只读协议、CLI 和 AI 正式使用的 stdio MCP Server；真实项目全量扫描与阶段 1 最终验收仍在后续任务中，当前不能视为生产版完整工具。
 
 ## 架构
 
 ```text
 AI / Codex
-  -> cocos-ai-probe CLI
+  -> stdio MCP Server（正式 AI 入口）/ cocos-ai-probe CLI（诊断入口）
   -> localhost Probe Server
   -> Creator 项目内 Bridge Extension
   -> Cocos Creator Editor / Scene / AssetDB
@@ -19,7 +19,7 @@ AI / Codex
 ## 环境要求
 
 - Windows。
-- Cocos Creator `3.8.x`；阶段 0 实际验证版本为 `3.8.8`。
+- Cocos Creator `3.8.8`。其它 `3.8.x` 小版本尚未完成兼容认证。
 - Node.js `>=20.19 <26`；最终验证使用 `v25.9.0`。
 - npm；最终验证使用 `11.4.1`。
 - Git，且真实项目与写探针项目必须分离为不同工作区。
@@ -37,7 +37,7 @@ npm run typecheck
 npm run build
 ```
 
-构建会生成 CLI、Probe Server、协议包和 Bridge Extension 的 `dist/`。
+构建会生成 MCP Server、CLI、Probe Server、协议包、Core 扫描器和 Bridge Extension 的 `dist/`。
 
 ## 创建隔离游戏项目
 
@@ -81,6 +81,40 @@ Bridge 使用 Junction 指向本工具的 `packages/bridge-extension`，不会�
 默认只监听 `127.0.0.1:32188`。Bridge 会自动连接和重连；CLI 通过同一 WebSocket Server 选择目标编辑器实例。
 
 如需非默认地址，给 Bridge 和 CLI 设置同一个 `COCOS_AI_PROBE_SERVER_URL`。不要把阶段 0 Server 暴露到外网。
+
+## 启动 AI 正式入口 MCP Server
+
+先启动 Probe Server，并确保目标 Creator 3.8.8 已加载 Bridge。MCP Server 使用 stdio 与 AI 客户端通信，使用 WebSocket 与 Probe Server 通信：
+
+```powershell
+$env:COCOS_AI_PROBE_SERVER_URL = 'ws://127.0.0.1:32188'
+$env:COCOS_AI_MCP_REPORT_ROOT = (Resolve-Path 'reports').Path
+node packages/mcp-server/dist/run.js
+```
+
+环境变量：
+
+- `COCOS_AI_PROBE_SERVER_URL`：Probe Server 地址，默认 `ws://127.0.0.1:32188`。
+- `COCOS_AI_MCP_REPORT_ROOT`：MCP 进程唯一授权的报告根目录，默认当前工作目录下的 `reports`。
+
+AI 客户端配置 MCP 命令时，应直接执行 `node <工具仓库绝对路径>/packages/mcp-server/dist/run.js`，并通过环境变量固定上述地址和报告根。stdout 专用于 MCP 协议；启动和关闭错误只写 stderr。
+
+MCP 只注册以下八个只读工具：
+
+| 工具 | 用途 |
+| --- | --- |
+| `cocos_editor_list` | 列出全部已连接 Creator 实例；唯一不要求 `projectId` 的全局入口 |
+| `cocos_editor_state` | 读取并校验指定编辑器状态 |
+| `cocos_asset_search` | 搜索完整 AssetDB 索引并分页返回资产 |
+| `cocos_asset_inspect` | 读取单资产详情、可选原始 Meta、依赖和反向使用者 |
+| `cocos_component_schema` | 读取默认或自定义组件的完整 Schema、脚本 UUID/路径和可选原始 Dump |
+| `cocos_document_snapshot` | 读取当前文档的摘要或完整 Creator 分页快照 |
+| `cocos_prefab_graph` | 扫描项目、落盘完整 Prefab 图，并分页返回节点和边 |
+| `cocos_project_scan` | 执行可断点续扫的完整项目只读扫描并分页返回文档摘要 |
+
+除 `cocos_editor_list` 外，所有工具都必须传 `projectId`。同一项目连接多个 Creator 实例时还必须传 `editorInstanceId`，工具不会按“最近连接”隐式选择。
+
+`cocos_project_scan` 和 `cocos_prefab_graph` 的完整报告与 checkpoint 只会写入 `COCOS_AI_MCP_REPORT_ROOT`。AI 只能传相对 `.json` 路径；绝对路径、盘符、UNC、完整 `..` 分段、目录、符号链接和越界 Junction 都会在任何 Creator 请求前被拒绝。MCP 响应只包含摘要、有界页和不透明 cursor，不会把完整项目报告一次塞进 AI 上下文。cursor 翻页读取已落盘报告，不会重新打开 Creator 资产。
 
 ## 选择编辑器和准备样本
 
@@ -127,6 +161,23 @@ node packages/cli/dist/index.js hierarchy --project-id <project-id> --editor-ins
 node packages/cli/dist/index.js node --project-id <project-id> --editor-instance-id <editor-id> --uuid <node-uuid>
 node packages/cli/dist/index.js component --project-id <project-id> --editor-instance-id <editor-id> --uuid <component-uuid>
 node packages/cli/dist/index.js prefab --project-id <project-id> --editor-instance-id <editor-id> --node-uuid <nested-prefab-node-uuid>
+
+# 阶段 1 完整资产索引和组件 Schema
+node packages/cli/dist/index.js asset-index --project-id <project-id> --editor-instance-id <editor-id>
+node packages/cli/dist/index.js component-schema --project-id <project-id> --editor-instance-id <editor-id> --uuid <component-uuid>
+
+# 当前文档分页快照
+node packages/cli/dist/index.js document-snapshot --project-id <project-id> --editor-instance-id <editor-id> --mode full --page-size 100
+
+# 本地聚合 Prefab 图
+node packages/cli/dist/index.js prefab-graph --project-id <project-id> --editor-instance-id <editor-id>
+
+# 项目全量只读扫描；报告和 checkpoint 只能落在显式 report-root 内
+node packages/cli/dist/index.js scan-project `
+  --project-id <project-id> `
+  --editor-instance-id <editor-id> `
+  --report-root 'reports' `
+  --report 'phase-1/project-scan.json'
 ```
 
 CLI 只允许预定义命令，不提供任意 JavaScript 执行入口。
@@ -187,13 +238,15 @@ Creator 已打开目标 Prefab、Probe Server 已连接后执行：
 
 - Bridge 仅连接 `127.0.0.1`。
 - 不允许执行任意 JavaScript。
+- MCP Server 只暴露八个只读工具，不登记保存、Undo、创建、删除或属性修改入口。
 - 不允许向真实项目安装 Bridge 或运行写探针。
 - 外部进程不得直接写 `.prefab`、`.scene` 或 `.meta`。
 - Scene、Undo、保存和恢复全部由 Creator 执行；外部只读磁盘计算指纹。
 - `prepare` 拒绝 Dirty 文档、已有同名探针和错误项目路径。
 - `confirm` 拒绝 Revision 冲突、过期事务和错误事务身份。
 - 无法结构化的数据必须保留原始 Dump 并明确进入缺口分类。
-- Creator 3.8.x 小版本变化必须通过真实统一验证，不允许推测兼容。
+- MCP 报告路径受服务端授权根约束，AI 不能提供绝对路径或越过根目录。
+- Creator 3.8.x 小版本变化必须通过真实统一验证，不允许推测兼容；当前结论严格限定 3.8.8。
 
 ## 清理顺序
 
