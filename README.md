@@ -79,6 +79,7 @@ Bridge 使用 Junction 指向本工具的 `packages/bridge-extension`，不会�
 ```
 
 默认只监听 `127.0.0.1:32188`。Bridge 会自动连接和重连；CLI 通过同一 WebSocket Server 选择目标编辑器实例。
+Server 在真实监听成功后会向 stdout 输出 `probe-server.ready` JSON。统一验证脚本会等待该事件，而不是依赖固定延时。已经执行过 `npm run build` 时可传 `-SkipBuild`，该参数不会在构建产物缺失时静默启动旧代码。
 
 如需非默认地址，给 Bridge 和 CLI 设置同一个 `COCOS_AI_PROBE_SERVER_URL`。不要把阶段 0 Server 暴露到外网。
 
@@ -233,6 +234,29 @@ Creator 已打开目标 Prefab、Probe Server 已连接后执行：
 7. 比较两个游戏项目的前后 Git 状态，允许既有改动，但不允许验证新增任何改动。
 
 每次运行使用唯一报告前缀，失败时停止后续步骤并保留已经生成的证据。`reports/*.json` 默认不提交。
+
+## 运行统一 Phase 1 只读验证
+
+先给目标项目安装 Bridge，并用 Cocos Creator 3.8.8 打开项目。统一脚本会自动按 `projectPath` 选择 Creator 实例，从资产索引选择 Scene/Prefab 和自定义组件样本，不需要人工提供或缓存业务 UUID：
+
+```powershell
+& scripts/run-phase-1-readonly-validation.ps1 `
+  -ProjectPath 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe' `
+  -ReportRoot 'reports'
+```
+
+脚本固定执行静态检查、Bridge 连接、完整资产索引、样本文档全分页快照、自定义组件 Schema、Prefab 图、项目全量扫描、报告 Schema 和 Git 状态前后对比。当前认证严格限定 Creator 3.8.8；其它 3.8.x 必须先单独完成兼容认证。
+
+验证包含一次有意的 Probe Server 中断。脚本只会终止经监听端口、仓库入口路径和进程命令行共同确认的目标 Node 进程，不会按端口盲目结束其它程序。中断前会复制一个已经有部分进度的扫描 checkpoint；Server 重启、同一 Creator Bridge 重连后，再用同一路径和同一 `scanId` 续扫。
+
+每次运行使用唯一 `phase-1-<run-id>` 前缀，JSON 证据通过 `FileMode.CreateNew` 创建，失败时不会覆盖旧报告。中断链路至少留下以下独立证据：
+
+- `*-server-interrupt-before.json`：中断前请求和 checkpoint 身份。
+- `*-server-interrupt-error.json`：Server 停止期间的 CLI JSON 错误。
+- `*-server-interrupt-reconnect.json`：Server Ready 和编辑器重连结果。
+- `*-server-interrupt-recovery.json`：汇总 `beforeInterruptionRequest`、`cliInterruptionError`、`editorReconnect` 和 `resumeCheckpointResult`。
+
+脚本启动前如果 Server 已在运行，验证会有意终止它，并按当前 `Port`、`ReportRoot` 和工具仓库构建产物启动替代实例；不保留原 PID 或自定义环境变量。如果端口原本没有 Server，验证结束后会清理脚本启动的进程。因此只能使用专用验证 Server 和端口，运行期间不要让其它任务共用。
 
 ## 安全边界
 
