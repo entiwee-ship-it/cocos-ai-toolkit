@@ -68,7 +68,7 @@ describe('ProjectScanner document identity', () => {
     const result = await scanner.scan({ projectId: 'project-1' });
 
     expect(result.status).toBe('completed-with-gaps');
-    expect(result.documents).toEqual([]);
+    expect(result.documentSummaries).toEqual([]);
     expect(result.checkpoint.failures).toContainEqual(expect.objectContaining({
       assetUuid: 'scene-1',
       code: 'DOCUMENT_IDENTITY_UNCONFIRMED'

@@ -17,6 +17,7 @@ const BRIDGE_VERSION = '0.1.0';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 let client: BridgeClient | null = null;
+let cachedScriptPathsByUuid: Array<[string, string]> | null = null;
 
 type JsonObject = Record<string, unknown>;
 
@@ -35,6 +36,7 @@ const transactionCoordinator = new ProbeTransactionCoordinator({
 });
 
 export function load(): void {
+  cachedScriptPathsByUuid = null;
   const project = Editor.Project as typeof Editor.Project & { uuid?: string };
   const app = Editor.App as typeof Editor.App & { version?: string };
   const projectPath = project.path;
@@ -54,7 +56,7 @@ export function load(): void {
     handlers: {
       'probe.editorState': () => probeEditorState(),
       'probe.assets': (payload) => probeAssets(payload),
-      'probe.assetIndex': () => probeAssetIndex(),
+      'probe.assetIndex': () => probeAssetIndexWithScriptCache(),
       'probe.component': (payload) => probeComponent(payload),
       'probe.documentSnapshot': (payload) => probeDocumentSnapshot(payload),
       'probe.openAsset': async (payload) => {
@@ -78,6 +80,7 @@ export function load(): void {
 export function unload(): void {
   client?.dispose();
   client = null;
+  cachedScriptPathsByUuid = null;
 }
 
 async function captureCurrentRevision(request: ProbePrepareRequest) {
@@ -176,11 +179,21 @@ async function probeComponent(request: unknown): Promise<unknown> {
  * @returns 可跨 Creator 进程传输的 UUID、路径元组；索引不可用时返回空数组。
  */
 async function readScriptPathsBestEffort(): Promise<Array<[string, string]>> {
+  if (cachedScriptPathsByUuid !== null) {
+    return cachedScriptPathsByUuid;
+  }
   try {
-    return readScriptPathsByUuid(await probeAssetIndex());
+    await probeAssetIndexWithScriptCache();
+    return cachedScriptPathsByUuid ?? [];
   } catch {
     return [];
   }
+}
+
+async function probeAssetIndexWithScriptCache(): Promise<unknown> {
+  const index = await probeAssetIndex();
+  cachedScriptPathsByUuid = readScriptPathsByUuid(index);
+  return index;
 }
 
 /**
@@ -232,7 +245,7 @@ function readObject(value: unknown): Record<string, unknown> {
 export const methods: Record<string, (request: JsonObject) => Promise<unknown>> = {
   'probe-editor-state': () => probeEditorState(),
   'probe-assets': (request) => probeAssets(request),
-  'probe-asset-index': () => probeAssetIndex(),
+  'probe-asset-index': () => probeAssetIndexWithScriptCache(),
   'probe-document-snapshot': (request) => probeDocumentSnapshot(request),
   'probe-hierarchy': (request) => forwardToScene('probeHierarchy', request),
   'probe-node': (request) => forwardToScene('probeNode', request),

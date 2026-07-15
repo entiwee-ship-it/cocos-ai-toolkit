@@ -1,6 +1,9 @@
 import WebSocket, { type RawData } from 'ws';
 import { toProbeErrorPayload } from './probe-errors';
 
+// Bridge 按 CommonJS 构建；该值由测试与协议包常量锁定一致，避免引入 ESM 运行时依赖。
+export const BRIDGE_WEBSOCKET_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
+
 interface BridgeRequest {
   type: 'request';
   requestId: string;
@@ -15,6 +18,8 @@ export interface BridgeClientOptions {
   handlers: Readonly<Record<string, (payload: unknown) => Promise<unknown>>>;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
+  /** WebSocket 单条消息的最大接收字节数。 */
+  maxPayload?: number;
 }
 
 export class BridgeClient {
@@ -25,15 +30,19 @@ export class BridgeClient {
 
   constructor(private readonly options: BridgeClientOptions) {}
 
+  /**
+   * 连接 Probe Server，并在连接成功后发送当前 Creator 实例身份。
+   */
   connect(): void {
     if (this.disposed || this.socket) {
       return;
     }
 
+    const maxPayload = resolveBridgeWebSocketMaxPayload(this.options.maxPayload);
     const headers = this.options.sessionToken
       ? { Authorization: `Bearer ${this.options.sessionToken}` }
       : undefined;
-    const socket = new WebSocket(this.options.url, { headers });
+    const socket = new WebSocket(this.options.url, { headers, maxPayload });
     this.socket = socket;
 
     socket.on('open', () => {
@@ -118,4 +127,19 @@ export class BridgeClient {
       this.connect();
     }, delay);
   }
+}
+
+/**
+ * 解析 Creator Bridge 的有限 WebSocket 接收上限。
+ *
+ * @param maxPayload Bridge 调用方显式配置的最大接收字节数。
+ * @returns 可安全传给 ws 的正整数接收上限。
+ */
+function resolveBridgeWebSocketMaxPayload(
+  maxPayload = BRIDGE_WEBSOCKET_MAX_PAYLOAD_BYTES
+): number {
+  if (!Number.isSafeInteger(maxPayload) || maxPayload <= 0) {
+    throw new Error('INVALID_WEBSOCKET_MAX_PAYLOAD');
+  }
+  return maxPayload;
 }

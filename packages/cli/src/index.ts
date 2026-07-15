@@ -6,15 +6,27 @@ import {
   JsonScanReportWriter,
   ProjectScanner,
   parseScanCheckpoint,
+  type ProjectScanResult,
   type ReadonlyProbeClient,
   type ScanCheckpoint
 } from '@cocos-ai/core';
 import { constants } from 'node:fs';
-import { access, lstat, mkdir, readFile, realpath, stat } from 'node:fs/promises';
+import {
+  access,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const DEFAULT_SERVER_URL = process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:32188';
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 const HELP = `用法:
   cocos-ai-probe editors
@@ -36,7 +48,8 @@ const HELP = `用法:
   cocos-ai-probe probe-undo-save-status --project-id <id> --transaction-id <id>
 
 环境变量:
-  COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}`;
+  COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
+  COCOS_AI_PROBE_TIMEOUT_MS  单次请求等待毫秒数，默认 10000`;
 
 export async function runCli(
   argv: string[],
@@ -68,7 +81,8 @@ export async function runCli(
     return 1;
   }
 
-  const client = new ProbeClient(options.serverUrl ?? DEFAULT_SERVER_URL);
+  const requestTimeoutMs = readRequestTimeoutMs(process.env.COCOS_AI_PROBE_TIMEOUT_MS);
+  const client = new ProbeClient(options.serverUrl ?? DEFAULT_SERVER_URL, requestTimeoutMs);
   try {
     await client.connect();
     const payload = await executeCommand(command, client, preparedScan);
@@ -169,11 +183,7 @@ export async function executeCommand(
   preparedScan?: PreparedScanProject
 ): Promise<unknown> {
   if (command.command === 'prefab-graph') {
-    const result = await new ProjectScanner(client).scan({
-      projectId: command.projectId,
-      ...(command.editorInstanceId ? { editorInstanceId: command.editorInstanceId } : {})
-    });
-    return result.prefabGraph;
+    return executePrefabGraph(command, client);
   }
   if (command.command === 'scan-project') {
     if (!preparedScan) throw new Error('SCAN_PROJECT_NOT_PREPARED');
@@ -212,6 +222,61 @@ export async function executeCommand(
     };
   }
   return client.request(...toRequest(command));
+}
+
+/**
+ * 使用临时文件化扫描仓库生成 Prefab 引用图，避免完整文档快照常驻 CLI 内存。
+ *
+ * @param command 已解析的 Prefab 图命令。
+ * @param client 已连接的共享只读 Client。
+ * @param temporaryDirectoryRoot 临时扫描目录的父目录，默认使用操作系统临时目录。
+ * @returns 项目扫描生成的 Prefab 引用图。
+ */
+export async function executePrefabGraph(
+  command: Extract<CliCommand, { command: 'prefab-graph' }>,
+  client: ReadonlyProbeClient,
+  temporaryDirectoryRoot = tmpdir()
+): Promise<ProjectScanResult['prefabGraph']> {
+  const scanRoot = await mkdtemp(join(temporaryDirectoryRoot, 'cocos-ai-prefab-graph-'));
+  let scanFailed = false;
+  try {
+    const scanner = new ProjectScanner(
+      client,
+      new JsonScanReportWriter(
+        join(scanRoot, 'prefab-graph.report.json'),
+        join(scanRoot, 'prefab-graph.checkpoint.json'),
+        scanRoot
+      )
+    );
+    const result = await scanner.scan({
+      projectId: command.projectId,
+      ...(command.editorInstanceId ? { editorInstanceId: command.editorInstanceId } : {})
+    });
+    return result.prefabGraph;
+  } catch (error) {
+    scanFailed = true;
+    throw error;
+  } finally {
+    try {
+      await rm(scanRoot, { recursive: true, force: true });
+    } catch (cleanupError) {
+      // 扫描已经失败时优先保留原始错误，避免临时目录清理异常遮蔽真正根因。
+      if (!scanFailed) throw cleanupError;
+    }
+  }
+}
+
+/**
+ * 读取单次 Probe 请求超时，并对非法环境变量回退到稳定默认值。
+ *
+ * @param rawValue 环境变量中的毫秒数字符串。
+ * @returns 有限的正整数毫秒数。
+ */
+export function readRequestTimeoutMs(rawValue: string | undefined): number {
+  const timeoutMs = Number(rawValue);
+  return Number.isInteger(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 export function toRequest(command: CliCommand): [string, unknown] {

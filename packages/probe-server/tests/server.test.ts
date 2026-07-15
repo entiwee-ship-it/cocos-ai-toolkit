@@ -46,6 +46,63 @@ describe('ArtifactStore', () => {
 });
 
 describe('ProbeServer', () => {
+  it('超大消息只关闭当前连接且后续客户端仍可握手', async () => {
+    const server = new ProbeServer({
+      host: '127.0.0.1',
+      port: 0,
+      requestTimeoutMs: 1000,
+      maxPayload: 256
+    });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const oversizedSocket = new WebSocket(url);
+
+    try {
+      const closeCode = await new Promise<number>((resolve, reject) => {
+        oversizedSocket.once('open', () => oversizedSocket.send('x'.repeat(512)));
+        oversizedSocket.once('close', (code) => resolve(code));
+        oversizedSocket.once('error', reject);
+      });
+
+      expect(closeCode).toBe(1009);
+
+      const nextSocket = new WebSocket(url);
+      const editors = await new Promise<unknown>((resolve, reject) => {
+        nextSocket.once('open', () => {
+          nextSocket.send(JSON.stringify({
+            method: 'client.hello',
+            payload: { clientName: 'post-oversize-client' }
+          }));
+        });
+        nextSocket.on('message', (raw) => {
+          const message = JSON.parse(raw.toString()) as {
+            correlationId?: string;
+            payload?: unknown;
+          };
+          if (message.correlationId === 'client.hello') {
+            nextSocket.send(JSON.stringify({
+              type: 'request',
+              requestId: 'post-oversize-editors',
+              method: 'server.editors',
+              payload: {}
+            }));
+            return;
+          }
+          if (message.correlationId === 'post-oversize-editors') {
+            resolve(message.payload);
+          }
+        });
+        nextSocket.once('error', reject);
+      });
+
+      expect(editors).toEqual([]);
+      nextSocket.close();
+    } finally {
+      oversizedSocket.close();
+      await server.stop();
+    }
+  });
+
   it('拒绝未知角色的首包', async () => {
     const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 1000 });
     const address = await server.start();

@@ -48,6 +48,28 @@ async function startTestServer(
 }
 
 describe('ProbeClient shared behavior', () => {
+  it('按显式 maxPayload 拒绝超大服务端响应', async () => {
+    const server = await startTestServer((socket, message) => {
+      socket.send(JSON.stringify({
+        type: 'response',
+        correlationId: message.requestId,
+        ok: true,
+        payload: 'x'.repeat(512)
+      }));
+    });
+    const client = new ProbeClient(server.url, 1000, 256);
+
+    try {
+      await client.connect();
+      await expect(client.request('server.editors', {})).rejects.toThrow(
+        'Max payload size exceeded'
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('完成握手并按 requestId 解析请求响应', async () => {
     const server = await startTestServer((socket, message) => {
       socket.send(JSON.stringify({

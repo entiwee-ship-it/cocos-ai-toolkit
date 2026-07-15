@@ -17,7 +17,7 @@ export function collectProjectCoverage(input: {
   assets: AssetRecord[];
   scripts: ScriptAssetRecord[];
   documents: DocumentAssetRecord[];
-  snapshots: DocumentSnapshot[];
+  snapshots: Array<{ coverage: DocumentSnapshot['coverage'] }>;
 }): ProjectCoverage {
   const coverage = createEmptyProjectCoverage({
     assets: { total: input.assets.length, decoded: input.assets.length },

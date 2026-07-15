@@ -12,6 +12,9 @@ param(
     [ValidateRange(10, 600)]
     [int]$ReadyTimeoutSeconds = 120,
 
+    [ValidateRange(10, 600)]
+    [int]$RequestTimeoutSeconds = 120,
+
     [ValidateRange(60, 7200)]
     [int]$ScanTimeoutSeconds = 1800,
 
@@ -58,6 +61,7 @@ $mainCompletedSuccessfully = $false
 $steps = [Collections.Generic.List[object]]::new()
 
 $env:COCOS_AI_PROBE_SERVER_URL = "ws://127.0.0.1:$Port"
+$env:COCOS_AI_PROBE_TIMEOUT_MS = [string]($RequestTimeoutSeconds * 1000)
 New-Item -ItemType Directory -Force -Path $reportsRoot | Out-Null
 
 function Assert-Condition {
@@ -81,6 +85,9 @@ function Test-ObjectProperty {
         [string]$Name
     )
 
+    if ($Value -is [Collections.IDictionary]) {
+        return $Value.Contains($Name)
+    }
     return $null -ne $Value.PSObject.Properties[$Name]
 }
 
@@ -127,7 +134,7 @@ function Write-RawJsonReport {
         [string]$RawJson
     )
 
-    $null = $RawJson | ConvertFrom-Json
+    $null = $RawJson | ConvertFrom-Json -AsHashtable
     return Write-ReportFile -Name $Name -Content $RawJson
 }
 
@@ -140,7 +147,7 @@ function Read-JsonFile {
     $raw = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
     return [PSCustomObject]@{
         raw = $raw
-        data = $raw | ConvertFrom-Json
+        data = $raw | ConvertFrom-Json -AsHashtable
     }
 }
 
@@ -218,7 +225,7 @@ function Invoke-CliJson {
         throw "$Label 未返回 JSON"
     }
     try {
-        $data = $result.stdout | ConvertFrom-Json
+        $data = $result.stdout | ConvertFrom-Json -AsHashtable
     } catch {
         throw "$Label 返回的内容不是有效 JSON: $($result.stdout)"
     }
@@ -713,7 +720,13 @@ function Find-SampleDocumentSnapshot {
 function Assert-Phase1ReportSchema {
     param(
         [Parameter(Mandatory = $true)]
-        [object]$Report,
+        [object]$ScanResult,
+        [Parameter(Mandatory = $true)]
+        [object]$Checkpoint,
+        [Parameter(Mandatory = $true)]
+        [string]$CheckpointPath,
+        [Parameter(Mandatory = $true)]
+        [string]$ReportPath,
         [Parameter(Mandatory = $true)]
         [string]$ExpectedProjectId,
         [Parameter(Mandatory = $true)]
@@ -722,18 +735,58 @@ function Assert-Phase1ReportSchema {
         [string]$ExpectedCreatorVersion
     )
 
-    foreach ($name in @('scanId', 'status', 'project', 'startedAt', 'finishedAt', 'assets', 'scripts', 'documents', 'prefabGraph', 'coverage', 'unresolved', 'diagnostics')) {
-        Assert-Condition -Condition (Test-ObjectProperty -Value $Report -Name $name) -Message "项目扫描报告缺少字段: $name"
+    foreach ($name in @('scanId', 'status', 'reportPath', 'checkpointPath')) {
+        Assert-Condition -Condition (Test-ObjectProperty -Value $ScanResult -Name $name) -Message "项目扫描 CLI 结果缺少字段: $name"
     }
-    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace([string]$Report.scanId)) -Message '项目扫描报告 scanId 为空'
-    Assert-Condition -Condition ($Report.status -in @('completed', 'completed-with-gaps')) -Message "项目扫描报告状态无效: $($Report.status)"
+    foreach ($name in @('version', 'scanId', 'assetUuids', 'completedAssetUuids', 'failures', 'documents', 'unresolved', 'result')) {
+        Assert-Condition -Condition (Test-ObjectProperty -Value $Checkpoint -Name $name) -Message "项目扫描 checkpoint 缺少字段: $name"
+    }
+    Assert-Condition -Condition ($Checkpoint.version -eq 2) -Message "项目扫描 checkpoint 版本无效: $($Checkpoint.version)"
+    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace([string]$Checkpoint.scanId)) -Message '项目扫描 checkpoint scanId 为空'
+    Assert-Condition -Condition ($ScanResult.scanId -eq $Checkpoint.scanId) -Message '项目扫描 CLI 与 checkpoint scanId 不一致'
+    Assert-Condition -Condition ($ScanResult.status -eq $Checkpoint.result.status) -Message '项目扫描 CLI 与 checkpoint 状态不一致'
+    Assert-Condition -Condition ($Checkpoint.result.status -in @('completed', 'completed-with-gaps')) -Message "项目扫描报告状态无效: $($Checkpoint.result.status)"
+    Assert-Condition -Condition (@($Checkpoint.completedAssetUuids).Count -eq @($Checkpoint.assetUuids).Count) -Message '项目扫描未处理全部 Scene/Prefab 清单'
+    Assert-Condition -Condition ((@($Checkpoint.documents).Count + @($Checkpoint.failures).Count) -eq @($Checkpoint.completedAssetUuids).Count) -Message '已完成资产没有且仅有快照或失败证据'
+    Assert-Condition -Condition (Test-Path -LiteralPath $ReportPath -PathType Leaf) -Message '项目扫描报告未落盘'
+    Assert-Condition -Condition ((Get-Content -LiteralPath $ReportPath -TotalCount 1).Trim() -eq '{') -Message '项目扫描报告缺少 JSON 对象起始边界'
+    Assert-Condition -Condition ((Get-Content -LiteralPath $ReportPath -Tail 1).Trim() -eq '}') -Message '项目扫描报告缺少 JSON 对象结束边界'
+
+    $reportDirectory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ReportPath))
+    $checkpointDirectory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($CheckpointPath))
+    foreach ($document in @($Checkpoint.documents)) {
+        foreach ($name in @('assetUuid', 'revision', 'snapshotPath', 'snapshotHash', 'summary', 'coverage')) {
+            Assert-Condition -Condition (Test-ObjectProperty -Value $document -Name $name) -Message "文档快照引用缺少字段: $name"
+        }
+        $relativeSnapshotPath = [string]$document.snapshotPath
+        Assert-Condition -Condition (-not [IO.Path]::IsPathRooted($relativeSnapshotPath)) -Message '文档快照引用不能使用绝对路径'
+        Assert-Condition -Condition (-not ($relativeSnapshotPath -split '[\\/]' -contains '..')) -Message '文档快照引用不能越过报告目录'
+        $snapshotPath = [IO.Path]::GetFullPath((Join-Path $checkpointDirectory $relativeSnapshotPath))
+        $pathFromReportRoot = [IO.Path]::GetRelativePath($reportDirectory, $snapshotPath)
+        Assert-Condition -Condition (-not ($pathFromReportRoot -eq '..' -or $pathFromReportRoot.StartsWith("..$([IO.Path]::DirectorySeparatorChar)"))) -Message '文档快照引用越过报告目录'
+        Assert-Condition -Condition (Test-Path -LiteralPath $snapshotPath -PathType Leaf) -Message "文档快照文件不存在: $relativeSnapshotPath"
+        $actualHash = (Get-FileHash -LiteralPath $snapshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        Assert-Condition -Condition ($actualHash -eq ([string]$document.snapshotHash).ToLowerInvariant()) -Message "文档快照哈希不一致: $($document.assetUuid)"
+        $snapshot = (Read-JsonFile -Path $snapshotPath).data
+        foreach ($name in @('document', 'revision', 'mode', 'page', 'nodes', 'componentSchemas', 'prefabInstances', 'coverage', 'unresolved', 'diagnostics')) {
+            Assert-Condition -Condition (Test-ObjectProperty -Value $snapshot -Name $name) -Message "完整文档快照缺少字段: $name"
+        }
+        Assert-Condition -Condition ($snapshot.document.assetUuid -eq $document.assetUuid) -Message '文档快照资产 UUID 与 checkpoint 引用不一致'
+        Assert-Condition -Condition ($snapshot.revision -eq $document.revision) -Message '文档快照 Revision 与 checkpoint 引用不一致'
+        Assert-Condition -Condition ($snapshot.mode -eq 'full' -and $snapshot.page.offset -eq 0 -and $null -eq $snapshot.page.nextCursor) -Message '文档快照不是完整 full 结果'
+        Assert-Condition -Condition (@($snapshot.nodes).Count -eq $document.summary.nodes) -Message '文档快照节点数与摘要不一致'
+        Assert-Condition -Condition (@($snapshot.componentSchemas).Count -eq $document.summary.components) -Message '文档快照组件数与摘要不一致'
+        Assert-Condition -Condition (@($snapshot.prefabInstances).Count -eq $document.summary.prefabInstances) -Message '文档快照 Prefab 实例数与摘要不一致'
+    }
+
+    $Report = $Checkpoint.result
     foreach ($name in @('projectId', 'projectPath', 'creatorVersion')) {
         Assert-Condition -Condition (Test-ObjectProperty -Value $Report.project -Name $name) -Message "项目扫描报告 project 缺少字段: $name"
     }
     Assert-Condition -Condition ($Report.project.projectId -eq $ExpectedProjectId) -Message '项目扫描报告 projectId 与目标编辑器不一致'
     Assert-Condition -Condition ([IO.Path]::GetFullPath([string]$Report.project.projectPath).Equals([IO.Path]::GetFullPath($ExpectedProjectPath), [StringComparison]::OrdinalIgnoreCase)) -Message '项目扫描报告 projectPath 与目标项目不一致'
     Assert-Condition -Condition ($Report.project.creatorVersion -eq $ExpectedCreatorVersion) -Message '项目扫描报告 Creator 版本与认证版本不一致'
-    $gapEvidenceCount = @($Report.unresolved).Count + @($Report.diagnostics | Where-Object {
+    $gapEvidenceCount = @($Checkpoint.unresolved).Count + @($Report.diagnostics | Where-Object {
         $_.severity -in @('warning', 'error')
     }).Count
     if ((Test-ObjectProperty -Value $Report.prefabGraph -Name 'blocked') -and $Report.prefabGraph.blocked -eq $true) {
@@ -859,12 +912,10 @@ function Invoke-ServerInterruptRecovery {
         '--concurrency', '1'
     )) -Label 'CLI scan-project 使用同一 checkpoint 恢复' -TimeoutSeconds $ScanTimeoutSeconds
     $checkpointAfter = Read-JsonFile -Path $checkpointPath
-    $resumeReportPath = Join-Path $reportsRoot $resumeReportName
-    $resumeReport = Read-JsonFile -Path $resumeReportPath
     Assert-Condition -Condition ($resume.data.scanId -eq $partialCheckpoint.data.scanId) -Message '恢复扫描返回了不同 scanId'
     Assert-Condition -Condition ($checkpointAfter.data.scanId -eq $partialCheckpoint.data.scanId) -Message '恢复后 checkpoint scanId 发生变化'
     Assert-Condition -Condition (@($checkpointAfter.data.completedAssetUuids).Count -ge @($partialCheckpoint.data.completedAssetUuids).Count) -Message '恢复后 checkpoint 完成数倒退'
-    Assert-Condition -Condition ($resumeReport.data.status -in @('completed', 'completed-with-gaps')) -Message "恢复扫描状态无效: $($resumeReport.data.status)"
+    Assert-Condition -Condition ($resume.data.status -in @('completed', 'completed-with-gaps')) -Message "恢复扫描状态无效: $($resume.data.status)"
     $connectionFailures = @($checkpointAfter.data.failures | Where-Object {
         $_.code -in @('CLIENT_NOT_CONNECTED', 'SERVER_CONNECTION_CLOSED', 'SERVER_REQUEST_TIMEOUT', 'EDITOR_INSTANCE_DISCONNECTED')
     })
@@ -879,7 +930,7 @@ function Invoke-ServerInterruptRecovery {
         completedBefore = @($partialCheckpoint.data.completedAssetUuids).Count
         completedAfter = @($checkpointAfter.data.completedAssetUuids).Count
         totalAssets = @($checkpointAfter.data.assetUuids).Count
-        reportStatus = $resumeReport.data.status
+        reportStatus = $resume.data.status
     }
     $interruptEvidence = [ordered]@{
         schemaVersion = 1
@@ -979,9 +1030,12 @@ try {
 
     $componentSchema = Invoke-CliJson -Arguments (@('component-schema') + $selectorArguments + @('--uuid', [string]$sample.componentSchema.componentUuid)) -Label 'CLI component-schema'
     $componentSchemaPath = Write-RawJsonReport -Name "$reportPrefix-component-schema.json" -RawJson $componentSchema.raw
-    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace([string]$componentSchema.data.componentUuid)) -Message '组件 Schema 缺少组件 UUID'
-    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace([string]$componentSchema.data.scriptUuid)) -Message '自定义组件 Schema 缺少脚本 UUID'
-    Assert-Condition -Condition (Test-ObjectProperty -Value $componentSchema.data -Name 'properties') -Message '组件 Schema 缺少 properties'
+    $componentPayload = $componentSchema.data['data']
+    $componentIdentity = $componentPayload['identity']
+    $componentTypeSchema = $componentPayload['schema']
+    Assert-Condition -Condition ([string]$componentIdentity['objectUuid'] -eq [string]$sample.componentSchema.componentUuid) -Message '组件 Schema 的组件 UUID 与请求不匹配'
+    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace([string]$componentTypeSchema['scriptUuid'])) -Message '自定义组件 Schema 缺少脚本 UUID'
+    Assert-Condition -Condition (Test-ObjectProperty -Value $componentTypeSchema -Name 'properties') -Message '组件 Schema 缺少 properties'
     Add-PassedStep -Name '自定义 Component Schema' -DurationMs $componentSchema.command.durationMs -Evidence $componentSchemaPath
 
     $prefabGraph = Invoke-CliJson -Arguments (@('prefab-graph') + $selectorArguments) -Label 'CLI prefab-graph' -TimeoutSeconds $ScanTimeoutSeconds
@@ -1000,14 +1054,20 @@ try {
     )) -Label 'CLI scan-project' -TimeoutSeconds $ScanTimeoutSeconds
     $projectScanResultPath = Write-RawJsonReport -Name "$reportPrefix-project-scan-result.json" -RawJson $projectScan.raw
     $scanReportPath = Join-Path $reportsRoot $scanReportName
+    $checkpointName = $scanReportName.Substring(0, $scanReportName.Length - '.json'.Length) + '.checkpoint.json'
+    $checkpointPath = Join-Path $reportsRoot $checkpointName
     Assert-Condition -Condition (Test-Path -LiteralPath $scanReportPath -PathType Leaf) -Message '项目扫描报告未落盘'
-    $scanReport = Read-JsonFile -Path $scanReportPath
-    Assert-Condition -Condition ($projectScan.data.scanId -eq $scanReport.data.scanId) -Message '项目扫描 CLI 与报告 scanId 不一致'
+    Assert-Condition -Condition (Test-Path -LiteralPath $checkpointPath -PathType Leaf) -Message '项目扫描 checkpoint 未落盘'
+    $scanCheckpoint = Read-JsonFile -Path $checkpointPath
+    Assert-Condition -Condition ($projectScan.data.scanId -eq $scanCheckpoint.data.scanId) -Message '项目扫描 CLI 与 checkpoint scanId 不一致'
     Add-PassedStep -Name '项目全量只读扫描' -DurationMs $projectScan.command.durationMs -Evidence $projectScanResultPath
 
     $interruptRecovery = Invoke-ServerInterruptRecovery -AssetIndex $assetIndex.data
 
-    Assert-Phase1ReportSchema -Report $scanReport.data `
+    Assert-Phase1ReportSchema -ScanResult $projectScan.data `
+        -Checkpoint $scanCheckpoint.data `
+        -CheckpointPath $checkpointPath `
+        -ReportPath $scanReportPath `
         -ExpectedProjectId ([string]$selectedEditor.projectId) `
         -ExpectedProjectPath $project `
         -ExpectedCreatorVersion '3.8.8'
@@ -1016,8 +1076,8 @@ try {
         runId = $runId
         status = 'passed'
         reportPath = $scanReportPath
-        scanId = $scanReport.data.scanId
-        projectStatus = $scanReport.data.status
+        scanId = $scanCheckpoint.data.scanId
+        projectStatus = $scanCheckpoint.data.result.status
         checkedAt = (Get-Date).ToUniversalTime().ToString('o')
     })
     Add-PassedStep -Name '项目扫描报告 Schema' -DurationMs 0 -Evidence $schemaEvidencePath

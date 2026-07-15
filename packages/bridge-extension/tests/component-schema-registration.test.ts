@@ -80,6 +80,54 @@ describe('component schema registration', () => {
     );
   });
 
+  it('首次资产索引后复用脚本 UUID 映射，不为每个文档重复全目录查询', async () => {
+    const requestEditorMessage = vi.fn(async (channel: string, method: string) => {
+      if (channel === 'asset-db' && method === 'query-assets') {
+        return [{
+          uuid: 'script-1',
+          url: 'db://assets/script/GameController.ts',
+          file: 'E:/project/assets/script/GameController.ts',
+          type: 'cc.Script',
+          importer: 'typescript',
+          isSubAsset: false
+        }];
+      }
+      if (channel === 'scene' && method === 'execute-scene-script') {
+        return { forwarded: true };
+      }
+      throw new Error(`UNEXPECTED_EDITOR_MESSAGE:${channel}:${method}`);
+    });
+    Object.defineProperty(globalThis, 'Editor', {
+      configurable: true,
+      value: { Message: { request: requestEditorMessage } }
+    });
+
+    vi.resetModules();
+    const { methods: freshMethods } = await import('../src/main');
+    await freshMethods['probe-asset-index']({});
+    await expect(freshMethods['probe-document-snapshot']({
+      mode: 'summary',
+      pageSize: 100
+    })).resolves.toEqual({ forwarded: true });
+
+    expect(requestEditorMessage.mock.calls.filter((call) =>
+      call[0] === 'asset-db' && call[1] === 'query-assets'
+    )).toHaveLength(1);
+    expect(requestEditorMessage).toHaveBeenLastCalledWith(
+      'scene',
+      'execute-scene-script',
+      {
+        name: 'cocos-ai-bridge',
+        method: 'probeDocumentSnapshot',
+        args: [{
+          request: { mode: 'summary', pageSize: 100 },
+          scriptPathsByUuid: [['script-1', 'db://assets/script/GameController.ts']]
+        }]
+      }
+    );
+    vi.resetModules();
+  });
+
   it('Scene 进程通过真实 query-component 读取组件并应用脚本 UUID 路径', async () => {
     const moduleLoader = Module as unknown as {
       _load(request: string, parent: unknown, isMain: boolean): unknown;

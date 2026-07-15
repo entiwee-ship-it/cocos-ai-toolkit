@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
+import { resolveWebSocketMaxPayload } from '@cocos-ai/protocol';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { z } from 'zod';
 import { RequestRouter } from './request-router.js';
@@ -47,9 +48,14 @@ const ForwardRequestPayloadSchema = z.object({
 });
 
 export interface ProbeServerOptions {
+  /** 仅允许使用的本机监听地址。 */
   host: string;
+  /** 监听端口，零表示由系统分配临时端口。 */
   port: number;
+  /** 转发 Bridge 请求的等待超时毫秒数。 */
   requestTimeoutMs: number;
+  /** WebSocket 单条消息的最大接收字节数。 */
+  maxPayload?: number;
 }
 
 export interface ProbeServerAddress {
@@ -79,7 +85,11 @@ export class ProbeServer {
       throw new Error('PROBE_SERVER_ALREADY_STARTED');
     }
 
-    const server = new WebSocketServer({ host: this.options.host, port: this.options.port });
+    const server = new WebSocketServer({
+      host: this.options.host,
+      port: this.options.port,
+      maxPayload: resolveWebSocketMaxPayload(this.options.maxPayload)
+    });
     this.server = server;
     server.on('connection', (socket) => this.handleConnection(socket));
 
@@ -132,6 +142,11 @@ export class ProbeServer {
     this.sockets.clear();
   }
 
+  /**
+   * 为单个 WebSocket 连接登记握手、请求和回收逻辑。
+   *
+   * @param socket 当前接入的 Bridge 或控制客户端连接。
+   */
   private handleConnection(socket: WebSocket): void {
     let editorInstanceId: string | null = null;
     let initialized = false;
@@ -198,6 +213,12 @@ export class ProbeServer {
       }
       this.sockets.delete(editorInstanceId);
       this.sessions.remove(editorInstanceId);
+    });
+    socket.on('error', () => {
+      // ws 会自行处理 1009 等协议错误；其它仍保持打开的异常连接只关闭当前 socket。
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close(1011, 'SOCKET_ERROR');
+      }
     });
   }
 

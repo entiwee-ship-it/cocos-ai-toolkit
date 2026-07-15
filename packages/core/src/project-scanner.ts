@@ -5,14 +5,12 @@ import {
   DocumentAssetRecordSchema,
   DocumentSnapshotSchema,
   PROTOCOL_VERSION,
-  ProjectScanReportSchema,
   ScriptAssetRecordSchema,
   UnresolvedItemSchema,
   type AssetRecord,
   type Diagnostic,
   type DocumentAssetRecord,
   type DocumentSnapshot,
-  type ProjectScanReport,
   type ScriptAssetRecord,
   type UnresolvedItem
 } from '@cocos-ai/protocol';
@@ -28,11 +26,14 @@ import {
   parseScanCheckpoint,
   type ScanCheckpoint,
   type ScanCheckpointContext,
+  type ScanCheckpointDocument,
   type ScanCheckpointFailure,
+  type ScanDocumentSummary,
   type ScanParameters
 } from './scan-checkpoint.js';
 import {
   NoopScanReportWriter,
+  type ProjectScanReportMetadata,
   type ScanReportWriter
 } from './report-writer.js';
 
@@ -69,9 +70,15 @@ export interface ProjectScanOptions {
   checkpoint?: ScanCheckpoint;
 }
 
-export interface ProjectScanResult extends ProjectScanReport {
-  checkpoint: ScanCheckpoint;
+export interface ProjectScanDocumentSummary extends ScanDocumentSummary {
+  assetUuid: string;
+  revision: string;
 }
+
+export type ProjectScanResult = ProjectScanReportMetadata & {
+  documentSummaries: ProjectScanDocumentSummary[];
+  checkpoint: ScanCheckpoint;
+};
 
 interface EditorSession {
   editorInstanceId: string;
@@ -136,10 +143,14 @@ export class ProjectScanner {
     }
 
     const scanId = resumeCheckpoint?.scanId ?? randomUUID();
-    const snapshotsByAsset = new Map<string, DocumentSnapshot>();
-    for (const snapshot of resumeCheckpoint?.documents ?? []) {
-      const assetUuid = snapshot.document.assetUuid;
-      if (assetUuid && assetUuids.includes(assetUuid)) snapshotsByAsset.set(assetUuid, snapshot);
+    const documentsByAsset = new Map<string, ScanCheckpointDocument>();
+    const prefabInputsByAsset = new Map<string, PrefabDocumentSnapshotInput>();
+    for (const document of resumeCheckpoint?.documents ?? []) {
+      if (!assetUuids.includes(document.assetUuid)) continue;
+      const snapshot = await this.writer.readDocument(document);
+      assertStoredSnapshot(document, snapshot);
+      documentsByAsset.set(document.assetUuid, document);
+      prefabInputsByAsset.set(document.assetUuid, toPrefabGraphInput(snapshot));
     }
     const completedAssetUuids = [...(resumeCheckpoint?.completedAssetUuids ?? [])];
     const completedAssets = new Set(completedAssetUuids);
@@ -158,7 +169,7 @@ export class ProjectScanner {
       context,
       completedAssetUuids,
       failures,
-      documents: sortSnapshots(assetIndex.documents, snapshotsByAsset),
+      documents: sortDocuments(assetIndex.documents, documentsByAsset),
       unresolved
     });
     for (const document of assetIndex.documents) {
@@ -174,7 +185,9 @@ export class ProjectScanner {
           options.readyPollIntervalMs ?? 100
         );
         const snapshot = await this.readCompleteDocument(selector, document, parameters);
-        snapshotsByAsset.set(document.assetUuid, snapshot);
+        const storedDocument = await this.writer.writeDocument(snapshot);
+        documentsByAsset.set(document.assetUuid, storedDocument);
+        prefabInputsByAsset.set(document.assetUuid, toPrefabGraphInput(snapshot));
         unresolved.push(...prefixUnresolved(
           snapshot.unresolved,
           `documents.${document.assetUuid}`
@@ -209,15 +222,18 @@ export class ProjectScanner {
         context,
         completedAssetUuids,
         failures,
-        documents: sortSnapshots(assetIndex.documents, snapshotsByAsset),
+        documents: sortDocuments(assetIndex.documents, documentsByAsset),
         unresolved
       });
       await this.writer.writeCheckpoint(checkpoint);
     }
 
-    const documents = sortSnapshots(assetIndex.documents, snapshotsByAsset);
+    const documents = sortDocuments(assetIndex.documents, documentsByAsset);
     const prefabGraph = buildPrefabGraphFromSnapshots(
-      documents as unknown as PrefabDocumentSnapshotInput[]
+      assetIndex.documents.flatMap((document) => {
+        const input = prefabInputsByAsset.get(document.assetUuid);
+        return input ? [input] : [];
+      })
     );
     diagnostics.push(...prefabGraph.diagnostics.map((diagnostic) =>
       DiagnosticSchema.parse(diagnostic)
@@ -233,7 +249,7 @@ export class ProjectScanner {
       || prefabGraph.blocked
       ? 'completed-with-gaps'
       : 'completed';
-    const report = ProjectScanReportSchema.parse({
+    const report: ProjectScanReportMetadata = {
       scanId,
       status,
       project: {
@@ -245,23 +261,42 @@ export class ProjectScanner {
       finishedAt: new Date().toISOString(),
       assets: assetIndex.assets,
       scripts: assetIndex.scripts,
-      documents,
       prefabGraph,
       coverage,
       unresolved: dedupeUnresolved(unresolved),
       diagnostics
-    });
+    };
     checkpoint = createScanCheckpoint({
       scanId,
       context,
       completedAssetUuids,
       failures,
       documents,
-      unresolved: report.unresolved
+      unresolved: dedupeUnresolved(unresolved),
+      result: {
+        status,
+        project: report.project,
+        startedAt: report.startedAt,
+        finishedAt: report.finishedAt ?? new Date().toISOString(),
+        assetCount: report.assets.length,
+        scriptCount: report.scripts.length,
+        prefabGraph: report.prefabGraph,
+        coverage: report.coverage,
+        unresolvedCount: report.unresolved.length,
+        diagnostics: report.diagnostics
+      }
     });
-    await this.writer.writeReport(report);
+    await this.writer.writeReport(report, documents);
     await this.writer.writeCheckpoint(checkpoint);
-    return { ...report, checkpoint };
+    return {
+      ...report,
+      documentSummaries: documents.map((document) => ({
+        assetUuid: document.assetUuid,
+        revision: document.revision,
+        ...document.summary
+      })),
+      checkpoint
+    };
   }
 
   /**
@@ -496,14 +531,58 @@ function readAssetIndex(value: unknown): AssetIndexResponse {
   }
 }
 
-function sortSnapshots(
+function sortDocuments(
   documents: DocumentAssetRecord[],
-  snapshotsByAsset: Map<string, DocumentSnapshot>
-): DocumentSnapshot[] {
+  documentsByAsset: Map<string, ScanCheckpointDocument>
+): ScanCheckpointDocument[] {
   return documents.flatMap((document) => {
-    const snapshot = snapshotsByAsset.get(document.assetUuid);
-    return snapshot ? [snapshot] : [];
+    const storedDocument = documentsByAsset.get(document.assetUuid);
+    return storedDocument ? [storedDocument] : [];
   });
+}
+
+function assertStoredSnapshot(
+  document: ScanCheckpointDocument,
+  snapshot: DocumentSnapshot
+): void {
+  if (
+    snapshot.document.assetUuid !== document.assetUuid
+    || snapshot.revision !== document.revision
+  ) {
+    throw new Error('SCAN_SNAPSHOT_IDENTITY_MISMATCH');
+  }
+}
+
+function toPrefabGraphInput(snapshot: DocumentSnapshot): PrefabDocumentSnapshotInput {
+  return {
+    document: {
+      assetUuid: snapshot.document.assetUuid,
+      path: snapshot.document.path,
+      documentType: snapshot.document.documentType
+    },
+    nodes: snapshot.nodes.map((node) => ({
+      identity: { fileId: node.identity.fileId },
+      path: node.path
+    })),
+    componentSchemas: snapshot.componentSchemas.map((component) => ({
+      componentFileId: component.componentFileId,
+      nodePath: component.nodePath
+    })),
+    prefabInstances: snapshot.prefabInstances.map((instance) => ({
+      sourceAssetUuid: instance.sourcePrefabAssetUuid,
+      sourcePrefabAssetUuid: instance.sourcePrefabAssetUuid,
+      instanceRootObjectUuid: instance.instanceRootObjectUuid,
+      instanceFileId: instance.instanceFileId,
+      sourceObjectFileId: instance.sourceObjectFileId,
+      hostNodePath: instance.hostNodePath,
+      propertyOverrides: instance.propertyOverrides,
+      targetOverrides: instance.targetOverrides,
+      mountedChildren: instance.mountedChildren,
+      mountedComponents: instance.mountedComponents,
+      removedComponents: instance.removedComponents,
+      instanceChain: instance.instanceChain
+    }))
+  };
 }
 
 function prefixUnresolved(items: UnresolvedItem[], prefix: string): UnresolvedItem[] {

@@ -33,6 +33,13 @@ export interface DocumentScanSource {
   queryComponent: (componentUuid: string) => Promise<unknown>;
 }
 
+export interface DocumentIdentityEvidence {
+  assetUuid: string | null;
+  mode: string | null;
+  source: string | null;
+  failures: Array<{ source: string; reason: string }>;
+}
+
 interface HierarchyComponentEntry {
   componentUuid: string;
   nodeUuid: string;
@@ -112,7 +119,7 @@ export interface DocumentSnapshotResult {
     filePath: string | null;
     documentType: 'scene' | 'prefab' | null;
     available: boolean;
-    raw: Record<string, never>;
+    raw: Record<string, unknown>;
   };
   revision: string;
   mode: DocumentScanMode;
@@ -149,7 +156,13 @@ export interface DocumentSnapshotResult {
 export async function scanCurrentDocument(
   request: DocumentScanRequest,
   source: DocumentScanSource,
-  scriptPathsByUuid: ReadonlyMap<string, string> = new Map()
+  scriptPathsByUuid: ReadonlyMap<string, string> = new Map(),
+  documentIdentity: DocumentIdentityEvidence = {
+    assetUuid: null,
+    mode: null,
+    source: null,
+    failures: []
+  }
 ): Promise<DocumentSnapshotResult> {
   const cursor = request.cursor ? decodeCursor(request.cursor) : null;
   const requestedMode = readMode(request.mode);
@@ -158,12 +171,13 @@ export async function scanCurrentDocument(
   const offset = cursor?.offset ?? 0;
   const concurrency = readConcurrency(request.concurrency);
   const includeRaw = request.includeRaw === true;
-  const document = request.document ?? cursor?.document ?? {
+  const requestedDocument = request.document ?? cursor?.document ?? {
     assetUuid: null,
     path: null,
     filePath: null,
     documentType: null
   };
+  const document = mergeDocumentIdentity(requestedDocument, documentIdentity);
 
   const hierarchy = await source.queryNodeTree();
   const hierarchyEntries = flattenHierarchy(hierarchy);
@@ -182,7 +196,7 @@ export async function scanCurrentDocument(
       document: {
         ...document,
         available: true,
-        raw: {}
+        raw: buildDocumentIdentityRaw(documentIdentity)
       },
       revision,
       mode,
@@ -210,7 +224,7 @@ export async function scanCurrentDocument(
         prefabInstances: { total: prefabInstanceEntries.length, resolved: 0 },
         overrides: { total: 0, decoded: 0 }
       },
-      unresolved: buildDocumentUnresolved(document),
+      unresolved: buildDocumentUnresolved(requestedDocument, document, documentIdentity),
       diagnostics: [{
         code: 'DOCUMENT_SCAN_SUMMARY_COMPLETE',
         message: '当前文档层级摘要已完成',
@@ -320,7 +334,7 @@ export async function scanCurrentDocument(
     instance.instanceRootObjectUuid !== null
     && pageNodeUuids.has(instance.instanceRootObjectUuid)
   );
-  const unresolved = buildDocumentUnresolved(document);
+  const unresolved = buildDocumentUnresolved(requestedDocument, document, documentIdentity);
   for (let index = 0; index < pageComponentSchemas.length; index += 1) {
     for (const item of pageComponentSchemas[index].unresolved) {
       unresolved.push({
@@ -342,7 +356,7 @@ export async function scanCurrentDocument(
     document: {
       ...document,
       available: true,
-      raw: {}
+      raw: buildDocumentIdentityRaw(documentIdentity)
     },
     revision,
     mode,
@@ -799,19 +813,37 @@ function readPageSize(value: number | undefined): number {
  * @param document 当前调用方已知的文档资产信息。
  * @returns 不可确认字段的 unresolved 列表。
  */
-function buildDocumentUnresolved(document: NonNullable<DocumentScanRequest['document']>): Array<{
+function buildDocumentUnresolved(
+  requestedDocument: NonNullable<DocumentScanRequest['document']>,
+  document: NonNullable<DocumentScanRequest['document']>,
+  documentIdentity: DocumentIdentityEvidence
+): Array<{
   path: string;
   reason: string;
   details?: unknown;
 }> {
   const unresolved: Array<{ path: string; reason: string; details?: unknown }> = [];
-  if (document.assetUuid) {
+  if (
+    documentIdentity.assetUuid
+    && requestedDocument.assetUuid
+    && documentIdentity.assetUuid !== requestedDocument.assetUuid
+  ) {
+    unresolved.push({
+      path: 'document.assetUuid',
+      reason: 'DOCUMENT_IDENTITY_MISMATCH',
+      details: {
+        requestedAssetUuid: requestedDocument.assetUuid,
+        observedAssetUuid: documentIdentity.assetUuid,
+        source: documentIdentity.source
+      }
+    });
+  } else if (!documentIdentity.assetUuid && requestedDocument.assetUuid) {
     unresolved.push({
       path: 'document.assetUuid',
       reason: 'DOCUMENT_IDENTITY_UNCONFIRMED',
-      details: { requestedAssetUuid: document.assetUuid }
+      details: { requestedAssetUuid: requestedDocument.assetUuid }
     });
-  } else {
+  } else if (!documentIdentity.assetUuid) {
     unresolved.push({ path: 'document.assetUuid', reason: 'PUBLIC_API_NOT_CONFIRMED' });
   }
   if (!document.path) {
@@ -824,6 +856,43 @@ function buildDocumentUnresolved(document: NonNullable<DocumentScanRequest['docu
     unresolved.push({ path: 'document.documentType', reason: 'PUBLIC_API_NOT_CONFIRMED' });
   }
   return unresolved;
+}
+
+function mergeDocumentIdentity(
+  requestedDocument: NonNullable<DocumentScanRequest['document']>,
+  documentIdentity: DocumentIdentityEvidence
+): NonNullable<DocumentScanRequest['document']> {
+  if (!documentIdentity.assetUuid) return requestedDocument;
+  const metadataMatches = requestedDocument.assetUuid === documentIdentity.assetUuid;
+  return {
+    assetUuid: documentIdentity.assetUuid,
+    path: metadataMatches ? requestedDocument.path : null,
+    filePath: metadataMatches ? requestedDocument.filePath : null,
+    documentType: metadataMatches && requestedDocument.documentType
+      ? requestedDocument.documentType
+      : readDocumentTypeFromMode(documentIdentity.mode)
+  };
+}
+
+function buildDocumentIdentityRaw(
+  documentIdentity: DocumentIdentityEvidence
+): Record<string, unknown> {
+  if (!documentIdentity.assetUuid && !documentIdentity.source && documentIdentity.failures.length === 0) {
+    return {};
+  }
+  return {
+    identitySource: documentIdentity.source,
+    mode: documentIdentity.mode,
+    failures: documentIdentity.failures
+  };
+}
+
+function readDocumentTypeFromMode(mode: string | null): 'scene' | 'prefab' | null {
+  if (!mode) return null;
+  const normalized = mode.toLowerCase();
+  if (normalized.includes('prefab')) return 'prefab';
+  if (normalized.includes('scene')) return 'scene';
+  return null;
 }
 
 /**

@@ -19,25 +19,21 @@ function createCheckpoint() {
   });
 }
 
-function createDocumentSnapshot(options: {
-  mode: 'summary' | 'full';
-  nextCursor: string | null;
-}) {
+function createDocumentReference() {
   return {
-    document: {
-      assetUuid: 'scene-1',
-      path: 'db://assets/Main.scene',
-      filePath: 'E:/project/assets/Main.scene',
-      documentType: 'scene',
-      available: true,
-      raw: {}
-    },
+    assetUuid: 'scene-1',
     revision: 'revision-1',
-    mode: options.mode,
-    page: { offset: 0, pageSize: 100, totalNodes: 0, nextCursor: options.nextCursor },
-    nodes: [],
-    componentSchemas: [],
-    prefabInstances: [],
+    snapshotPath: 'checkpoint.documents/scene-1.json',
+    snapshotHash: 'snapshot-hash-1',
+    summary: {
+      path: 'db://assets/Main.scene',
+      documentType: 'scene',
+      nodes: 0,
+      components: 0,
+      prefabInstances: 0,
+      unresolved: 0,
+      diagnostics: 0
+    },
     coverage: {
       nodes: { total: 0, decoded: 0 },
       components: { total: 0, decoded: 0 },
@@ -45,9 +41,7 @@ function createDocumentSnapshot(options: {
       references: { total: 0, resolved: 0 },
       prefabInstances: { total: 0, resolved: 0 },
       overrides: { total: 0, decoded: 0 }
-    },
-    unresolved: [],
-    diagnostics: []
+    }
   };
 }
 
@@ -112,7 +106,7 @@ describe('scan checkpoint schema', () => {
     })).toThrow('SCAN_CHECKPOINT_INVALID');
   });
 
-  it('拒绝把 summary 或未完成分页快照作为 completed 证据', () => {
+  it('checkpoint 只保存轻量文档引用，不嵌入完整 DocumentSnapshot', () => {
     const runtime = checkpointModule as typeof checkpointModule & {
       parseScanCheckpoint?: (value: unknown) => unknown;
     };
@@ -120,11 +114,28 @@ describe('scan checkpoint schema', () => {
     if (!runtime.parseScanCheckpoint) return;
 
     const checkpoint = createCheckpoint();
-    expect(() => runtime.parseScanCheckpoint({
+    const parsed = runtime.parseScanCheckpoint({
       ...checkpoint,
       assetUuids: ['scene-1'],
       completedAssetUuids: ['scene-1'],
-      documents: [createDocumentSnapshot({ mode: 'summary', nextCursor: 'next-page' })]
+      documents: [createDocumentReference()]
+    }) as { documents: Array<Record<string, unknown>> };
+
+    expect(parsed.documents).toEqual([createDocumentReference()]);
+    expect(parsed.documents[0]).not.toHaveProperty('nodes');
+    expect(parsed.documents[0]).not.toHaveProperty('componentSchemas');
+    expect(parsed.documents[0]).not.toHaveProperty('raw');
+  });
+
+  it('拒绝快照路径或摘要身份缺失的文档引用', () => {
+    const checkpoint = createCheckpoint();
+    const reference = createDocumentReference();
+
+    expect(() => checkpointModule.parseScanCheckpoint({
+      ...checkpoint,
+      assetUuids: ['scene-1'],
+      completedAssetUuids: ['scene-1'],
+      documents: [{ ...reference, snapshotPath: '' }]
     })).toThrow('SCAN_CHECKPOINT_INVALID');
   });
 

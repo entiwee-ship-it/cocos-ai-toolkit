@@ -27,8 +27,8 @@ describe('asset index registration', () => {
     const mainSource = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
 
     expect(BRIDGE_CAPABILITIES).toContain('probe.assetIndex');
-    expect(mainSource).toContain("'probe.assetIndex': () => probeAssetIndex()");
-    expect(mainSource).toContain("'probe-asset-index': () => probeAssetIndex()");
+    expect(mainSource).toContain("'probe.assetIndex': () => probeAssetIndexWithScriptCache()");
+    expect(mainSource).toContain("'probe-asset-index': () => probeAssetIndexWithScriptCache()");
     expect(packageJson.contributions?.messages?.['probe-asset-index']).toEqual({
       methods: ['probe-asset-index']
     });

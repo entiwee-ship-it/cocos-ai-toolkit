@@ -324,35 +324,6 @@ export function buildPrefabGraph(documents: PrefabDocumentInput[]): PrefabGraph 
     );
   }
 
-  const directTargetMapsByAsset = Object.fromEntries(
-    Object.entries(targetMapsByAsset).map(([assetUuid, map]) => [
-      assetUuid,
-      cloneTargetMap(map)
-    ])
-  );
-
-  // 使用未展开的直接索引递归连接跨文档 TargetMap，避免共享依赖导致指数级复制。
-  for (const document of documents) {
-    attachReferencedTargetMaps(
-      targetMapsByAsset[document.assetUuid],
-      readInstances(document),
-      [document.assetUuid],
-      documentByAsset,
-      directTargetMapsByAsset,
-      diagnostics,
-      document.assetUuid
-    );
-    attachReferencedTargetMaps(
-      targetMaps,
-      readInstances(document),
-      [document.assetUuid],
-      documentByAsset,
-      directTargetMapsByAsset,
-      diagnostics,
-      document.assetUuid
-    );
-  }
-
   detectGraphCycles(edges, diagnostics);
 
   return {
@@ -363,81 +334,6 @@ export function buildPrefabGraph(documents: PrefabDocumentInput[]): PrefabGraph 
     blocked: diagnostics.some((diagnostic) => diagnostic.code === 'PREFAB_GRAPH_CYCLE' && diagnostic.severity === 'error'),
     diagnostics
   };
-}
-
-/**
- * 把源 Prefab 的直接 TargetMap 接到当前实例的 FileID 路径下。
- *
- * @param ownerMap 当前宿主文档或上级实例的 TargetMap。
- * @param instances 当前层的 Prefab 实例。
- * @param assetPath 当前递归资产链，用于阻止循环展开。
- * @param documentByAsset Asset UUID 到文档输入的映射。
- * @param targetMapsByAsset Asset UUID 到未展开直接 TargetMap 的映射。
- * @param diagnostics TargetMap 冲突诊断收集器。
- * @param ownerAssetUuid 当前 TargetMap 所属资产 UUID。
- */
-function attachReferencedTargetMaps(
-  ownerMap: PrefabTargetMap,
-  instances: PrefabInstanceInput[],
-  assetPath: string[],
-  documentByAsset: Map<string, PrefabDocumentInput>,
-  targetMapsByAsset: Record<string, PrefabTargetMap>,
-  diagnostics: PrefabGraphDiagnostic[],
-  ownerAssetUuid: string
-): void {
-  for (const instance of instances) {
-    const createsCycle = assetPath.includes(instance.sourceAssetUuid);
-    const aliases = [instance.sourceObjectFileId, instance.instanceFileId]
-      .filter((value): value is string => Boolean(value));
-    const sourceMap = targetMapsByAsset[instance.sourceAssetUuid];
-    const childMaps: PrefabTargetMap[] = [];
-    for (const alias of aliases) {
-      const childMap = ownerMap.children[alias] ?? createTargetMap();
-      ownerMap.children[alias] = childMap;
-      if (!childMaps.includes(childMap)) childMaps.push(childMap);
-      if (sourceMap && !createsCycle) {
-        mergeTargetMaps(childMap, sourceMap, diagnostics, ownerAssetUuid);
-      }
-    }
-    if (createsCycle) continue;
-    const sourceDocument = documentByAsset.get(instance.sourceAssetUuid);
-    if (!sourceDocument) continue;
-    for (const childMap of childMaps) {
-      attachReferencedTargetMaps(
-        childMap,
-        readInstances(sourceDocument),
-        [...assetPath, instance.sourceAssetUuid],
-        documentByAsset,
-        targetMapsByAsset,
-        diagnostics,
-        instance.sourceAssetUuid
-      );
-    }
-  }
-}
-
-/**
- * 把一个 TargetMap 的内容递归合并到另一个 TargetMap。
- *
- * @param destination 接收目标条目的 TargetMap。
- * @param source 提供目标条目的 TargetMap。
- * @param diagnostics FileID 冲突诊断收集器。
- * @param ownerAssetUuid 当前合并目标所属资产 UUID。
- */
-function mergeTargetMaps(
-  destination: PrefabTargetMap,
-  source: PrefabTargetMap,
-  diagnostics: PrefabGraphDiagnostic[],
-  ownerAssetUuid: string
-): void {
-  for (const [fileId, target] of Object.entries(source.targets)) {
-    addTarget(destination, fileId, target, diagnostics, ownerAssetUuid);
-  }
-  for (const [fileId, sourceChild] of Object.entries(source.children)) {
-    const destinationChild = destination.children[fileId] ?? createTargetMap();
-    destination.children[fileId] = destinationChild;
-    mergeTargetMaps(destinationChild, sourceChild, diagnostics, ownerAssetUuid);
-  }
 }
 
 /**
@@ -476,6 +372,67 @@ export function resolveTargetPath(localIds: string[], targetMaps: PrefabTargetMa
     }
     if (!child) return { target: null, localIds: input, failedSegmentIndex: index + 1 };
     current = child;
+  }
+  return { target: null, localIds: input, failedSegmentIndex: input.length - 1 };
+}
+
+/**
+ * 使用按资产保存的直接 FileID 索引和 Prefab 来源边逐段解析 localID。
+ *
+ * 跨资源图只保存每个 Prefab 自己的直接索引；遇到实例段时根据来源边切换到源
+ * Prefab，避免把同一源 Prefab 的完整 TargetMap 复制到每个实例路径。
+ *
+ * @param fromAssetUuid localID 路径所在的宿主 Scene 或 Prefab Asset UUID。
+ * @param localIds Creator TargetInfo 中按层级排列的 localID 数组。
+ * @param graph 包含直接 TargetMap 和实例来源边的 Prefab 图。
+ * @returns 最终稳定目标，或带准确失败段索引的解析结果。
+ */
+export function resolveGraphTargetPath(
+  fromAssetUuid: string,
+  localIds: string[],
+  graph: Pick<PrefabGraph, 'edges' | 'targetMapsByAsset'>
+): PrefabTargetResolution {
+  const input = [...localIds];
+  if (input.length === 0) {
+    return { target: null, localIds: input, failedSegmentIndex: 0 };
+  }
+
+  let currentAssetUuid = fromAssetUuid;
+  let currentMap = graph.targetMapsByAsset[currentAssetUuid];
+  for (let index = 0; index < input.length; index += 1) {
+    const localId = input[index];
+    const target = currentMap?.targets[localId];
+    if (!target) {
+      return { target: null, localIds: input, failedSegmentIndex: index };
+    }
+    if (index === input.length - 1) {
+      return {
+        target: { assetUuid: target.assetUuid, fileId: target.fileId },
+        localIds: input,
+        failedSegmentIndex: null
+      };
+    }
+
+    const edge = graph.edges.find((candidate) =>
+      candidate.fromAssetUuid === currentAssetUuid
+      && candidate.toAssetUuid === target.assetUuid
+      && (candidate.instanceFileId === localId || candidate.sourceObjectFileId === localId)
+    );
+    if (!edge) {
+      return { target: null, localIds: input, failedSegmentIndex: index + 1 };
+    }
+
+    const inlineChildMap = currentMap.children[localId];
+    if (inlineChildMap && Object.keys(inlineChildMap.targets).length > 0) {
+      currentMap = inlineChildMap;
+      currentAssetUuid = edge.toAssetUuid;
+      continue;
+    }
+    currentAssetUuid = edge.toAssetUuid;
+    currentMap = graph.targetMapsByAsset[currentAssetUuid];
+    if (!currentMap) {
+      return { target: null, localIds: input, failedSegmentIndex: index + 1 };
+    }
   }
   return { target: null, localIds: input, failedSegmentIndex: input.length - 1 };
 }
@@ -692,21 +649,4 @@ function readInstances(value: { instances?: PrefabInstanceInput[]; prefabInstanc
  */
 function createTargetMap(): PrefabTargetMap {
   return { targets: {}, children: {} };
-}
-
-/**
- * 深复制未展开的 TargetMap，隔离后续跨文档合并产生的修改。
- *
- * @param source 待复制的直接 TargetMap。
- * @returns 与源内容一致但不共享对象引用的新 TargetMap。
- */
-function cloneTargetMap(source: PrefabTargetMap): PrefabTargetMap {
-  return {
-    targets: Object.fromEntries(
-      Object.entries(source.targets).map(([fileId, target]) => [fileId, { ...target }])
-    ),
-    children: Object.fromEntries(
-      Object.entries(source.children).map(([fileId, child]) => [fileId, cloneTargetMap(child)])
-    )
-  };
 }

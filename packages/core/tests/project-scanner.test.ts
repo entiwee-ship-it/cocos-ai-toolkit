@@ -2,13 +2,16 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ProjectScanReport } from '@cocos-ai/protocol';
+import { ProjectScanReportSchema, type DocumentSnapshot } from '@cocos-ai/protocol';
 import {
   PROJECT_SCAN_READONLY_METHODS,
   ProjectScanner,
   type ReadonlyProbeClient
 } from '../src/project-scanner.js';
-import type { ScanCheckpoint } from '../src/scan-checkpoint.js';
+import type {
+  ScanCheckpoint,
+  ScanCheckpointDocument
+} from '../src/scan-checkpoint.js';
 import {
   JsonScanReportWriter,
   type ScanReportWriter
@@ -21,8 +24,38 @@ interface RequestedCall {
 
 class FakeReportWriter implements ScanReportWriter {
   readonly checkpoints: ScanCheckpoint[] = [];
-  readonly reports: ProjectScanReport[] = [];
+  readonly snapshots = new Map<string, DocumentSnapshot>();
+  readonly reports: unknown[] = [];
   readonly events: Array<'checkpoint' | 'report'> = [];
+
+  async writeDocument(snapshot: DocumentSnapshot) {
+    const assetUuid = snapshot.document.assetUuid;
+    if (!assetUuid) throw new Error('TEST_DOCUMENT_UUID_MISSING');
+    const reference = {
+      assetUuid,
+      revision: snapshot.revision,
+      snapshotPath: `memory/${assetUuid}.json`,
+      snapshotHash: `${assetUuid}-hash`,
+      summary: {
+        path: snapshot.document.path,
+        documentType: snapshot.document.documentType,
+        nodes: snapshot.nodes.length,
+        components: snapshot.componentSchemas.length,
+        prefabInstances: snapshot.prefabInstances.length,
+        unresolved: snapshot.unresolved.length,
+        diagnostics: snapshot.diagnostics.length
+      },
+      coverage: snapshot.coverage
+    };
+    this.snapshots.set(reference.snapshotPath, structuredClone(snapshot));
+    return reference;
+  }
+
+  async readDocument(reference: ScanCheckpointDocument) {
+    const snapshot = this.snapshots.get(reference.snapshotPath);
+    if (!snapshot) throw new Error('TEST_SNAPSHOT_NOT_FOUND');
+    return structuredClone(snapshot);
+  }
 
   async writeCheckpoint(checkpoint: ScanCheckpoint): Promise<string | null> {
     this.checkpoints.push(structuredClone(checkpoint));
@@ -30,7 +63,10 @@ class FakeReportWriter implements ScanReportWriter {
     return null;
   }
 
-  async writeReport(report: ProjectScanReport): Promise<string | null> {
+  async writeReport(
+    report: unknown,
+    _documents: ScanCheckpointDocument[]
+  ): Promise<string | null> {
     this.reports.push(structuredClone(report));
     this.events.push('report');
     return null;
@@ -157,15 +193,13 @@ describe('ProjectScanner', () => {
     const result = await scanner.scan({ projectId: 'project-1', pageSize: 1 });
 
     expect(page).toBe(2);
-    expect(result.documents).toHaveLength(1);
-    expect(result.documents[0].nodes.map((node) => node.identity.objectUuid)).toEqual([
-      'scene-node-1',
-      'scene-node-2'
-    ]);
-    expect(result.documents[0].unresolved).toContainEqual({
-      path: 'componentSchemas.1.scriptPath',
-      reason: 'SCRIPT_PATH_NOT_FOUND'
-    });
+    expect(result.documentSummaries).toEqual([expect.objectContaining({
+      assetUuid: 'scene-a',
+      nodes: 2,
+      components: 1,
+      unresolved: 1
+    })]);
+    expect(result.checkpoint.documents[0]).not.toHaveProperty('nodes');
   });
 
   it('资产清单或版本变化时拒绝使用旧 checkpoint', async () => {
@@ -239,27 +273,29 @@ describe('ProjectScanner', () => {
   });
 
   it('有效 checkpoint 续扫时跳过已完成资产', async () => {
+    const writer = new FakeReportWriter();
     const initialResult = await new ProjectScanner(
       new FakeEditorClient(),
-      new FakeReportWriter()
+      writer
     ).scan({ projectId: 'project-1' });
     const checkpoint: ScanCheckpoint = {
       ...initialResult.checkpoint,
       completedAssetUuids: ['scene-a'],
-      documents: initialResult.checkpoint.documents.filter((snapshot) =>
-        snapshot.document.assetUuid === 'scene-a'
+      documents: initialResult.checkpoint.documents.filter((document) =>
+        document.assetUuid === 'scene-a'
       )
     };
     const resumedClient = new FakeEditorClient();
 
     const result = await new ProjectScanner(
       resumedClient,
-      new FakeReportWriter()
+      writer
     ).scan({ projectId: 'project-1', checkpoint });
 
     expect(resumedClient.openedAssets).toEqual(['prefab-b']);
     expect(result.checkpoint.completedAssetUuids).toEqual(['scene-a', 'prefab-b']);
-    expect(result.documents).toHaveLength(2);
+    expect(result.scanId).toBe(initialResult.scanId);
+    expect(result.documentSummaries).toHaveLength(2);
   });
 
   it('同一项目存在多个编辑器且未指定实例时立即拒绝扫描', async () => {
@@ -295,6 +331,38 @@ describe('ProjectScanner', () => {
       const written = JSON.parse(await readFile(checkpointPath, 'utf8')) as ScanCheckpoint;
       expect(written.completedAssetUuids).toEqual(['scene-a', 'prefab-b']);
       expect(await readdir(directory)).toEqual(['checkpoint.json']);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('JSON writer 逐文档落盘并流式生成符合协议的完整项目报告', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocos-ai-core-'));
+    const reportPath = join(directory, 'report.json');
+    const checkpointPath = join(directory, 'checkpoint.json');
+    try {
+      const result = await new ProjectScanner(
+        new FakeEditorClient(),
+        new JsonScanReportWriter(reportPath, checkpointPath, directory)
+      ).scan({ projectId: 'project-1' });
+
+      const report = ProjectScanReportSchema.parse(
+        JSON.parse(await readFile(reportPath, 'utf8'))
+      );
+      expect(report.scanId).toBe(result.scanId);
+      expect(report.documents).toHaveLength(2);
+      expect(report.documents.map((document) => document.document.assetUuid)).toEqual([
+        'scene-a',
+        'prefab-b'
+      ]);
+      expect(result.checkpoint.documents.every((document) =>
+        !('nodes' in document)
+      )).toBe(true);
+      expect((await readdir(directory)).sort()).toEqual([
+        'checkpoint.json',
+        'checkpoint.json.documents',
+        'report.json'
+      ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

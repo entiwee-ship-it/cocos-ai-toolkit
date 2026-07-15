@@ -8,6 +8,7 @@ const validationScriptPath = fileURLToPath(
 const probeServerScriptPath = fileURLToPath(
   new URL('../../../scripts/start-probe-server.ps1', import.meta.url)
 );
+const gitignorePath = fileURLToPath(new URL('../../../.gitignore', import.meta.url));
 const readmePath = fileURLToPath(new URL('../../../README.md', import.meta.url));
 
 describe('Phase 1 只读统一验证脚本', () => {
@@ -44,10 +45,17 @@ describe('Phase 1 只读统一验证脚本', () => {
       script.indexOf('function Assert-Phase1ReportSchema'),
       script.indexOf('function Wait-ScanCheckpointProgress')
     );
+    expect(reportSchemaFunction).toContain('$Checkpoint');
+    expect(reportSchemaFunction).toContain('$ReportPath');
+    expect(reportSchemaFunction).toContain('snapshotPath');
+    expect(reportSchemaFunction).toContain('snapshotHash');
+    expect(reportSchemaFunction).toContain('Get-FileHash');
     expect(reportSchemaFunction).toContain('$ExpectedProjectId');
     expect(reportSchemaFunction).toContain('$ExpectedProjectPath');
     expect(reportSchemaFunction).toContain('$ExpectedCreatorVersion');
     expect(reportSchemaFunction).toContain('$gapEvidenceCount');
+    expect(mainFlow).not.toContain('Read-JsonFile -Path $scanReportPath');
+    expect(mainFlow).toContain('Read-JsonFile -Path $checkpointPath');
   });
 
   it('从资产索引和完整文档快照自动选择样本', async () => {
@@ -77,6 +85,12 @@ describe('Phase 1 只读统一验证脚本', () => {
     expect(script).toContain('Assert-UnchangedStatus');
     expect(script).toContain('summary');
     expect(script).toContain('finally');
+  });
+
+  it('忽略扫描 checkpoint 的文档快照证据目录', async () => {
+    const gitignore = await readFile(gitignorePath, 'utf8');
+
+    expect(gitignore.split(/\r?\n/)).toContain('reports/*.json.documents/');
   });
 
   it('保留可重复的 Server 中断和同 checkpoint 恢复证据', async () => {
@@ -116,6 +130,9 @@ describe('Phase 1 只读统一验证脚本', () => {
     expect(interruptFunction).toContain('$seedScanCompleted');
     expect(interruptFunction).toMatch(/finally\s*\{/);
     expect(interruptFunction).toContain('种子扫描清理失败');
+    expect(interruptFunction).not.toContain('Read-JsonFile -Path $resumeReportPath');
+    expect(interruptFunction).not.toContain('$resumeReport =');
+    expect(interruptFunction).toContain('$resume.data.status');
 
     const processFunctions = script.slice(
       script.indexOf('function Invoke-NativeCommand'),
@@ -156,6 +173,66 @@ describe('Phase 1 只读统一验证脚本', () => {
     expect(serverStartup).toContain('Stop-ProbeServerProcess');
     expect(serverStartup).toContain('Start-ProbeServerProcess -Generation 1');
     expect(serverStartup).not.toContain('adopted = $true');
+  });
+
+  it('为真实项目长耗时只读请求统一配置端到端超时', async () => {
+    const script = await readFile(validationScriptPath, 'utf8');
+
+    expect(script).toMatch(/\[int\]\$RequestTimeoutSeconds = 120\b/);
+    expect(script).toContain(
+      "$env:COCOS_AI_PROBE_TIMEOUT_MS = [string]($RequestTimeoutSeconds * 1000)"
+    );
+  });
+
+  it('以 Hashtable 解析包含空键的 Creator 原始 JSON', async () => {
+    const script = await readFile(validationScriptPath, 'utf8');
+    const propertyFunction = script.slice(
+      script.indexOf('function Test-ObjectProperty'),
+      script.indexOf('function Write-ReportFile')
+    );
+    const rawReportFunction = script.slice(
+      script.indexOf('function Write-RawJsonReport'),
+      script.indexOf('function Read-JsonFile')
+    );
+    const readJsonFunction = script.slice(
+      script.indexOf('function Read-JsonFile'),
+      script.indexOf('function Invoke-NativeCommand')
+    );
+    const cliJsonFunction = script.slice(
+      script.indexOf('function Invoke-CliJson'),
+      script.indexOf('function Start-NativeCommandProcess')
+    );
+
+    expect(rawReportFunction).toContain('ConvertFrom-Json -AsHashtable');
+    expect(readJsonFunction).toContain('ConvertFrom-Json -AsHashtable');
+    expect(cliJsonFunction).toContain('ConvertFrom-Json -AsHashtable');
+    expect(propertyFunction).toContain('$Value -is [Collections.IDictionary]');
+    expect(propertyFunction).toContain('$Value.Contains($Name)');
+  });
+
+  it('解包 CLI component probe 后分别校验组件身份和类型 Schema', async () => {
+    const script = await readFile(validationScriptPath, 'utf8');
+    const componentSchemaValidation = script.slice(
+      script.indexOf("$componentSchema = Invoke-CliJson"),
+      script.indexOf("$prefabGraph = Invoke-CliJson")
+    );
+
+    expect(componentSchemaValidation).toContain("$componentPayload = $componentSchema.data['data']");
+    expect(componentSchemaValidation).toContain(
+      "$componentIdentity = $componentPayload['identity']"
+    );
+    expect(componentSchemaValidation).toContain(
+      "$componentTypeSchema = $componentPayload['schema']"
+    );
+    expect(componentSchemaValidation).toContain(
+      "[string]$componentIdentity['objectUuid'] -eq [string]$sample.componentSchema.componentUuid"
+    );
+    expect(componentSchemaValidation).toContain("[string]$componentTypeSchema['scriptUuid']");
+    expect(componentSchemaValidation).toContain(
+      "Test-ObjectProperty -Value $componentTypeSchema -Name 'properties'"
+    );
+    expect(componentSchemaValidation).not.toContain('$componentSchema.data.schema');
+    expect(componentSchemaValidation).not.toContain('$componentSchema.data.componentUuid');
   });
 
   it('为 Probe Server 重启和真实 Creator 验证提供公开入口', async () => {

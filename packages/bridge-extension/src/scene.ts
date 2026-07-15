@@ -3,6 +3,7 @@ import { ProbeError } from './probe-errors';
 import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from './scene-probe';
 import { normalizeProbeProjectPath } from './probe-operation';
 import { executeProbeSceneOperation } from './probe-scene-operation';
+import { resolveCreatorDocumentIdentity } from './creator-document-identity';
 
 const { director } = require('cc') as { director: { getScene(): unknown } };
 
@@ -47,6 +48,7 @@ async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const scanRequest = readObject(input.request) as unknown as DocumentScanRequest;
   const scriptPathsByUuid = readScriptPathsByUuid(input.scriptPathsByUuid);
+  const documentIdentity = await resolveCreatorDocumentIdentity(globalThis);
   return scanCurrentDocument(scanRequest, {
     queryNodeTree: () => Editor.Message.request('scene', 'query-node-tree'),
     queryNode: (nodeUuid) => Editor.Message.request('scene', 'query-node', nodeUuid),
@@ -55,7 +57,7 @@ async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
       'query-component',
       componentUuid
     )
-  }, scriptPathsByUuid);
+  }, scriptPathsByUuid, documentIdentity);
 }
 
 /**

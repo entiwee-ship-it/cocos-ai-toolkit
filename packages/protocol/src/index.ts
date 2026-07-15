@@ -8,3 +8,4 @@ export * from './prefab.js';
 export * from './reference.js';
 export * from './scan.js';
 export * from './schema.js';
+export * from './transport.js';

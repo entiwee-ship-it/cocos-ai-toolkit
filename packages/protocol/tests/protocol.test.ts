@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   ComponentTypeSchemaSchema,
   ComponentPropertyDescriptorSchema,
+  DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
   ProbeResponseSchema,
   PrefabProbeSchema,
   PrefabGraphSchema,
   ProjectScanReportSchema,
   ReferenceSchema,
-  createEmptyProjectCoverage
+  createEmptyProjectCoverage,
+  resolveWebSocketMaxPayload
 } from '../src/index.js';
 
 const validResponse = {
@@ -166,6 +168,16 @@ describe('ProbeResponseSchema', () => {
 });
 
 describe('阶段 1 只读协议', () => {
+  it('为大文档传输使用有限的 256 MiB WebSocket 上限', () => {
+    expect(DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES).toBe(256 * 1024 * 1024);
+    expect(resolveWebSocketMaxPayload()).toBe(DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES);
+    expect(resolveWebSocketMaxPayload(64)).toBe(64);
+    expect(() => resolveWebSocketMaxPayload(0)).toThrow('INVALID_WEBSOCKET_MAX_PAYLOAD');
+    expect(() => resolveWebSocketMaxPayload(Number.POSITIVE_INFINITY)).toThrow(
+      'INVALID_WEBSOCKET_MAX_PAYLOAD'
+    );
+  });
+
   it('接受包含脚本路径、Inspector 元数据和原始字段消费状态的组件 Schema', () => {
     const result = ComponentTypeSchemaSchema.parse({
       className: 'VScrollViewMode',

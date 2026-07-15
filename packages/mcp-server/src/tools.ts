@@ -4,6 +4,7 @@ import {
   JsonScanReportWriter,
   parseScanCheckpoint,
   ProjectScanner,
+  type ProjectScanDocumentSummary,
   type ProjectScanResult,
   type ReadonlyProbeClient,
   type ScanCheckpoint
@@ -16,14 +17,14 @@ import {
   PrefabGraphEdgeSchema,
   PrefabGraphNodeSchema,
   ProjectCoverageSchema,
-  ProjectScanReportSchema,
   ScriptAssetRecordSchema,
   UnresolvedItemSchema,
   type AssetRecord,
-  type ProjectScanReport
+  type PrefabGraph,
+  type ProjectCoverage
 } from '@cocos-ai/protocol';
 import { randomUUID, createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, createReadStream } from 'node:fs';
 import {
   access,
   lstat,
@@ -323,12 +324,31 @@ interface PreparedScanPaths {
 
 interface ScanPageContext {
   editor: EditorSession;
-  report: ProjectScanReport;
+  report: ProjectScanView;
   paths: PreparedScanPaths;
   pageSize: number;
   offset: number;
   reportHash: string;
   checkpointHash: string;
+}
+
+interface ProjectScanView {
+  scanId: string;
+  status: 'completed' | 'completed-with-gaps' | 'failed';
+  project: {
+    projectId: string;
+    projectPath: string;
+    creatorVersion: string;
+  };
+  startedAt: string;
+  finishedAt: string;
+  assetCount: number;
+  scriptCount: number;
+  documentSummaries: ProjectScanDocumentSummary[];
+  prefabGraph: PrefabGraph;
+  coverage: ProjectCoverage;
+  unresolvedCount: number;
+  diagnosticsCount: number;
 }
 
 export interface CocosReadonlyToolServiceOptions {
@@ -634,7 +654,7 @@ export class CocosReadonlyToolService {
    */
   async scanProject(input: ProjectScanToolInput) {
     const context = await this.prepareScanPage(input, 'project-scan');
-    const documents = context.report.documents.map(toDocumentSummary);
+    const documents = context.report.documentSummaries.map(toDocumentSummary);
     const page = createReportPage({
       items: documents,
       context,
@@ -647,11 +667,11 @@ export class CocosReadonlyToolService {
       reportPath: context.paths.reportPath,
       checkpointPath: context.paths.checkpointPath,
       summary: {
-        assets: context.report.assets.length,
-        scripts: context.report.scripts.length,
-        documents: context.report.documents.length,
-        unresolved: context.report.unresolved.length,
-        diagnostics: context.report.diagnostics.length,
+        assets: context.report.assetCount,
+        scripts: context.report.scriptCount,
+        documents: context.report.documentSummaries.length,
+        unresolved: context.report.unresolvedCount,
+        diagnostics: context.report.diagnosticsCount,
         coverage: context.report.coverage
       },
       page
@@ -714,8 +734,7 @@ export class CocosReadonlyToolService {
       throw new Error('SCAN_CHECKPOINT_STALE:editorInstanceId');
     }
     const result = await this.runProjectScan(input, editor, paths, checkpoint);
-    const { checkpoint: resultCheckpoint, ...reportValue } = result;
-    const report = ProjectScanReportSchema.parse(reportValue);
+    const report = toProjectScanView(result);
     assertReportMatchesEditor(report, editor);
     return {
       editor,
@@ -723,8 +742,8 @@ export class CocosReadonlyToolService {
       paths,
       pageSize: input.pageSize ?? 50,
       offset: 0,
-      reportHash: hashJson(report),
-      checkpointHash: hashJson(resultCheckpoint)
+      reportHash: await hashFile(paths.reportPath),
+      checkpointHash: hashJson(result.checkpoint)
     };
   }
 
@@ -756,16 +775,15 @@ export class CocosReadonlyToolService {
       throw new Error('MCP_CURSOR_STALE');
     }
     const paths = await prepareCursorPaths(this.options.reportRoot, cursor);
-    let report: ProjectScanReport;
     let checkpoint: ScanCheckpoint;
     try {
-      report = await readStoredProjectReport(paths.reportPath);
       checkpoint = await readStoredCheckpoint(paths.checkpointPath);
     } catch {
       throw new Error('MCP_CURSOR_STALE');
     }
+    const report = toStoredProjectScanView(checkpoint);
     // cursor 同时绑定报告和 checkpoint 内容，防止外部进程替换有效 JSON 后继续翻页。
-    const reportHash = hashJson(report);
+    const reportHash = await hashFile(paths.reportPath).catch(() => '');
     const checkpointHash = hashJson(checkpoint);
     if (
       report.scanId !== cursor.scanId
@@ -1097,24 +1115,70 @@ function hashJson(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+async function hashFile(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
 /**
  * 把完整文档快照压缩为 AI 可分页读取的稳定摘要。
  *
  * @param document 项目报告中的完整文档快照。
  * @returns 不包含节点、组件和原始 Dump 的文档摘要。
  */
-function toDocumentSummary(document: ProjectScanReport['documents'][number]) {
+function toDocumentSummary(document: ProjectScanDocumentSummary) {
   return DocumentSummarySchema.parse({
-    assetUuid: document.document.assetUuid,
-    path: document.document.path,
-    documentType: document.document.documentType,
+    assetUuid: document.assetUuid,
+    path: document.path,
+    documentType: document.documentType,
     revision: document.revision,
-    nodes: document.nodes.length,
-    components: document.componentSchemas.length,
-    prefabInstances: document.prefabInstances.length,
-    unresolved: document.unresolved.length,
-    diagnostics: document.diagnostics.length
+    nodes: document.nodes,
+    components: document.components,
+    prefabInstances: document.prefabInstances,
+    unresolved: document.unresolved,
+    diagnostics: document.diagnostics
   });
+}
+
+function toProjectScanView(result: ProjectScanResult): ProjectScanView {
+  return {
+    scanId: result.scanId,
+    status: result.status === 'running' ? 'failed' : result.status,
+    project: result.project,
+    startedAt: result.startedAt,
+    finishedAt: result.finishedAt ?? new Date().toISOString(),
+    assetCount: result.assets.length,
+    scriptCount: result.scripts.length,
+    documentSummaries: result.documentSummaries,
+    prefabGraph: result.prefabGraph,
+    coverage: result.coverage,
+    unresolvedCount: result.unresolved.length,
+    diagnosticsCount: result.diagnostics.length
+  };
+}
+
+function toStoredProjectScanView(checkpoint: ScanCheckpoint): ProjectScanView {
+  const result = checkpoint.result;
+  if (!result) throw new Error('MCP_CURSOR_STALE');
+  return {
+    scanId: checkpoint.scanId,
+    status: result.status,
+    project: result.project,
+    startedAt: result.startedAt,
+    finishedAt: result.finishedAt,
+    assetCount: result.assetCount,
+    scriptCount: result.scriptCount,
+    documentSummaries: checkpoint.documents.map((document) => ({
+      assetUuid: document.assetUuid,
+      revision: document.revision,
+      ...document.summary
+    })),
+    prefabGraph: result.prefabGraph,
+    coverage: result.coverage,
+    unresolvedCount: result.unresolvedCount,
+    diagnosticsCount: result.diagnostics.length
+  };
 }
 
 /**
@@ -1354,20 +1418,6 @@ async function readResumeCheckpoint(
 }
 
 /**
- * 从磁盘读取并验证完整项目扫描报告。
- *
- * @param path 授权根内的项目报告路径。
- * @returns 经过协议 Schema 校验的项目扫描报告。
- */
-async function readStoredProjectReport(path: string): Promise<ProjectScanReport> {
-  try {
-    return ProjectScanReportSchema.parse(JSON.parse(await readFile(path, 'utf8')));
-  } catch (error) {
-    throw new Error(`PROJECT_SCAN_REPORT_INVALID:${readErrorMessage(error)}`);
-  }
-}
-
-/**
  * 从磁盘读取并验证项目扫描 checkpoint。
  *
  * @param path 授权根内的 checkpoint 路径。
@@ -1390,7 +1440,7 @@ async function readStoredCheckpoint(path: string): Promise<ScanCheckpoint> {
  * @param editor 当前唯一编辑器实例。
  */
 function assertReportMatchesEditor(
-  report: ProjectScanReport,
+  report: ProjectScanView,
   editor: EditorSession
 ): void {
   if (

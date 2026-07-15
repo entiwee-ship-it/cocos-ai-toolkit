@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPrefabGraph,
   buildPrefabGraphFromSnapshots,
-  resolveTarget,
+  resolveGraphTargetPath,
   resolveTargetPath
 } from '../src/prefab-graph.js';
 
@@ -89,9 +89,17 @@ describe('prefab graph', () => {
       }
     ]);
 
-    expect(resolveTarget(['goods-root', 'button-node'], graph.targetMaps)).toEqual({
-      assetUuid: 'button-prefab',
-      fileId: 'button-node'
+    expect(resolveGraphTargetPath(
+      'page-prefab',
+      ['goods-root', 'button-node'],
+      graph
+    )).toEqual({
+      target: {
+        assetUuid: 'button-prefab',
+        fileId: 'button-node'
+      },
+      localIds: ['goods-root', 'button-node'],
+      failedSegmentIndex: null
     });
   });
 
@@ -125,9 +133,17 @@ describe('prefab graph', () => {
       }
     ]);
 
-    expect(resolveTarget(['goods-root', 'button-node'], graph.targetMaps)).toEqual({
-      assetUuid: 'button-prefab',
-      fileId: 'button-node'
+    expect(resolveGraphTargetPath(
+      'page-prefab',
+      ['goods-root', 'button-node'],
+      graph
+    )).toEqual({
+      target: {
+        assetUuid: 'button-prefab',
+        fileId: 'button-node'
+      },
+      localIds: ['goods-root', 'button-node'],
+      failedSegmentIndex: null
     });
   });
 
@@ -143,10 +159,59 @@ describe('prefab graph', () => {
       }]
     }]);
 
-    expect(resolveTargetPath(['goods-root', 'missing-button'], graph.targetMaps)).toEqual({
+    expect(resolveGraphTargetPath(
+      'page-prefab',
+      ['goods-root', 'missing-button'],
+      graph
+    )).toEqual({
       target: null,
       localIds: ['goods-root', 'missing-button'],
       failedSegmentIndex: 1
+    });
+  });
+
+  it('按资产保留直接 FileID 索引，不把共享源 Prefab 复制到每个实例路径', () => {
+    const sourceTargets = Array.from({ length: 100 }, (_, index) => ({
+      fileId: `source-target-${index}`,
+      nodePath: `Source/Target${index}`
+    }));
+    const instances = Array.from({ length: 100 }, (_, index) => ({
+      sourceAssetUuid: 'shared-source-prefab',
+      instanceFileId: `shared-instance-${index}`,
+      sourceObjectFileId: 'shared-source-root'
+    }));
+    const graph = buildPrefabGraph([
+      {
+        assetUuid: 'host-prefab',
+        path: 'db://assets/host.prefab',
+        documentType: 'prefab',
+        instances
+      },
+      {
+        assetUuid: 'shared-source-prefab',
+        path: 'db://assets/shared-source.prefab',
+        documentType: 'prefab',
+        targets: [
+          { fileId: 'shared-source-root', nodePath: 'Source' },
+          ...sourceTargets
+        ]
+      }
+    ]);
+
+    expect(Object.values(graph.targetMapsByAsset['host-prefab'].children).every(
+      (childMap) => Object.keys(childMap.targets).length === 0
+    )).toBe(true);
+    expect(resolveGraphTargetPath(
+      'host-prefab',
+      ['shared-instance-99', 'source-target-99'],
+      graph
+    )).toEqual({
+      target: {
+        assetUuid: 'shared-source-prefab',
+        fileId: 'source-target-99'
+      },
+      localIds: ['shared-instance-99', 'source-target-99'],
+      failedSegmentIndex: null
     });
   });
 

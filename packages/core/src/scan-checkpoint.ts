@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import {
-  DocumentSnapshotSchema,
+  CoverageSchema,
+  DiagnosticSchema,
+  DocumentTypeSchema,
+  PrefabGraphSchema,
+  ProjectCoverageSchema,
   UnresolvedItemSchema,
-  type DocumentSnapshot,
   type UnresolvedItem
 } from '@cocos-ai/protocol';
 
@@ -20,8 +24,58 @@ export const ScanCheckpointFailureSchema = z.object({
   details: z.unknown().optional()
 }).strict();
 
+export const ScanDocumentSummarySchema = z.object({
+  path: z.string().nullable(),
+  documentType: DocumentTypeSchema.nullable(),
+  nodes: z.number().int().nonnegative(),
+  components: z.number().int().nonnegative(),
+  prefabInstances: z.number().int().nonnegative(),
+  unresolved: z.number().int().nonnegative(),
+  diagnostics: z.number().int().nonnegative()
+}).strict();
+
+export const ScanCheckpointDocumentSchema = z.object({
+  assetUuid: z.string().min(1),
+  revision: z.string().min(1),
+  snapshotPath: z.string().min(1),
+  snapshotHash: z.string().min(1),
+  summary: ScanDocumentSummarySchema,
+  coverage: CoverageSchema
+}).strict().superRefine((document, context) => {
+  const segments = document.snapshotPath.split(/[\\/]+/);
+  if (
+    document.snapshotPath.includes('\0')
+    || document.snapshotPath.includes(':')
+    || isAbsolute(document.snapshotPath)
+    || segments.includes('..')
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['snapshotPath'],
+      message: 'snapshotPath 必须是 checkpoint 目录内的安全相对路径'
+    });
+  }
+});
+
+export const ScanCheckpointResultSchema = z.object({
+  status: z.enum(['completed', 'completed-with-gaps', 'failed']),
+  project: z.object({
+    projectId: z.string().min(1),
+    projectPath: z.string().min(1),
+    creatorVersion: z.string().min(1)
+  }).strict(),
+  startedAt: z.string().datetime(),
+  finishedAt: z.string().datetime(),
+  assetCount: z.number().int().nonnegative(),
+  scriptCount: z.number().int().nonnegative(),
+  prefabGraph: PrefabGraphSchema,
+  coverage: ProjectCoverageSchema,
+  unresolvedCount: z.number().int().nonnegative(),
+  diagnostics: z.array(DiagnosticSchema)
+}).strict();
+
 export const ScanCheckpointSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   scanId: z.string().min(1),
   projectId: z.string().min(1),
   editorInstanceId: z.string().min(1),
@@ -35,8 +89,9 @@ export const ScanCheckpointSchema = z.object({
   assetUuids: z.array(z.string().min(1)),
   completedAssetUuids: z.array(z.string().min(1)),
   failures: z.array(ScanCheckpointFailureSchema),
-  documents: z.array(DocumentSnapshotSchema),
+  documents: z.array(ScanCheckpointDocumentSchema),
   unresolved: z.array(UnresolvedItemSchema),
+  result: ScanCheckpointResultSchema.nullable(),
   updatedAt: z.string().datetime()
 }).strict().superRefine((checkpoint, context) => {
   if (checkpoint.parametersHash !== createParametersHash(checkpoint.parameters)) {
@@ -60,7 +115,7 @@ export const ScanCheckpointSchema = z.object({
   const completedAssetUuids = new Set(checkpoint.completedAssetUuids);
   const documentAssetUuids = new Set<string>();
   for (const document of checkpoint.documents) {
-    const assetUuid = document.document.assetUuid;
+    const assetUuid = document.assetUuid;
     if (
       !assetUuid
       || !assetUuids.has(assetUuid)
@@ -71,20 +126,6 @@ export const ScanCheckpointSchema = z.object({
         code: 'custom',
         path: ['documents'],
         message: `文档资产身份无效或重复: ${assetUuid ?? 'null'}`
-      });
-      continue;
-    }
-    if (
-      document.mode !== 'full'
-      || document.document.available !== true
-      || document.page.offset !== 0
-      || document.page.nextCursor !== null
-      || document.page.totalNodes !== document.nodes.length
-    ) {
-      context.addIssue({
-        code: 'custom',
-        path: ['documents'],
-        message: `已完成文档必须是从首节点开始且分页完整的 full 快照: ${assetUuid}`
       });
       continue;
     }
@@ -126,6 +167,9 @@ export const ScanCheckpointSchema = z.object({
 
 export type ScanParameters = z.infer<typeof ScanParametersSchema>;
 export type ScanCheckpointFailure = z.infer<typeof ScanCheckpointFailureSchema>;
+export type ScanDocumentSummary = z.infer<typeof ScanDocumentSummarySchema>;
+export type ScanCheckpointDocument = z.infer<typeof ScanCheckpointDocumentSchema>;
+export type ScanCheckpointResult = z.infer<typeof ScanCheckpointResultSchema>;
 export type ScanCheckpoint = z.infer<typeof ScanCheckpointSchema>;
 
 /*
@@ -190,14 +234,15 @@ export function createParametersHash(parameters: ScanParameters): string {
 export function createScanCheckpoint(input: {
   scanId: string;
   context: ScanCheckpointContext;
-  documents?: DocumentSnapshot[];
+  documents?: ScanCheckpointDocument[];
   completedAssetUuids?: string[];
   failures?: ScanCheckpointFailure[];
   unresolved?: UnresolvedItem[];
+  result?: ScanCheckpointResult | null;
   updatedAt?: string;
 }): ScanCheckpoint {
   return {
-    version: 1,
+    version: 2,
     scanId: input.scanId,
     projectId: input.context.projectId,
     editorInstanceId: input.context.editorInstanceId,
@@ -213,6 +258,7 @@ export function createScanCheckpoint(input: {
     failures: [...(input.failures ?? [])],
     documents: [...(input.documents ?? [])],
     unresolved: [...(input.unresolved ?? [])],
+    result: input.result ?? null,
     updatedAt: input.updatedAt ?? new Date().toISOString()
   };
 }
@@ -229,7 +275,7 @@ export function assertCheckpointCompatible(
   context: ScanCheckpointContext
 ): void {
   const mismatches: string[] = [];
-  if (checkpoint.version !== 1) mismatches.push('version');
+  if (checkpoint.version !== 2) mismatches.push('version');
   if (checkpoint.projectId !== context.projectId) mismatches.push('projectId');
   if (checkpoint.editorInstanceId !== context.editorInstanceId) mismatches.push('editorInstanceId');
   if (checkpoint.projectPath !== context.projectPath) mismatches.push('projectPath');

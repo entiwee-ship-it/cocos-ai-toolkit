@@ -1,5 +1,14 @@
 import type { AddressInfo } from 'node:net';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -371,7 +380,7 @@ describe('local readonly commands', () => {
     }
   });
 
-  it('Prefab 图命令复用项目扫描器且不写报告', async () => {
+  it('Prefab 图命令复用项目扫描器且只返回引用图', async () => {
     const runtime = cliModule as typeof cliModule & {
       executeCommand?: (command: CliCommand, client: FakeClient) => Promise<unknown>;
     };
@@ -383,6 +392,88 @@ describe('local readonly commands', () => {
       createEmptyProjectClient()
     );
     expect(result).toMatchObject({ nodes: [], edges: [], blocked: false });
+  });
+
+  it('Prefab 图命令使用临时文件化扫描产物并在成功后清理', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'cocos-ai-cli-prefab-graph-'));
+    try {
+      const runtime = cliModule as typeof cliModule & {
+        executePrefabGraph?: (
+          command: CliCommand,
+          client: FakeClient,
+          temporaryDirectoryRoot?: string
+        ) => Promise<unknown>;
+      };
+      expect(runtime.executePrefabGraph).toBeTypeOf('function');
+      if (!runtime.executePrefabGraph) throw new Error('EXECUTE_PREFAB_GRAPH_NOT_EXPORTED');
+
+      let inspectedArtifacts = false;
+      const client = createPrefabGraphProjectClient(async (assetUuid) => {
+        if (assetUuid !== 'prefab-b') return;
+        const roots = await readdir(parent, { withFileTypes: true });
+        expect(roots).toHaveLength(1);
+        expect(roots[0]?.isDirectory()).toBe(true);
+        const scanRoot = join(parent, roots[0]!.name);
+        const artifacts = await readdir(scanRoot, { withFileTypes: true });
+        const checkpoint = artifacts.find((entry) => entry.name.endsWith('.checkpoint.json'));
+        const documents = artifacts.find((entry) => entry.name.endsWith('.checkpoint.json.documents'));
+        expect(checkpoint?.isFile()).toBe(true);
+        expect(documents?.isDirectory()).toBe(true);
+        expect(JSON.parse(await readFile(join(scanRoot, checkpoint!.name), 'utf8'))).toMatchObject({
+          completedAssetUuids: ['scene-a']
+        });
+        expect(await readdir(join(scanRoot, documents!.name))).toHaveLength(1);
+        inspectedArtifacts = true;
+      });
+
+      const result = await runtime.executePrefabGraph(
+        parseCommand(['prefab-graph', '--project-id', 'project-1']),
+        client,
+        parent
+      );
+
+      expect(result).toMatchObject({ blocked: false });
+      expect(inspectedArtifacts).toBe(true);
+      expect(await readdir(parent)).toEqual([]);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('Prefab 图命令失败后仍清理临时扫描目录', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'cocos-ai-cli-prefab-graph-'));
+    try {
+      const runtime = cliModule as typeof cliModule & {
+        executePrefabGraph?: (
+          command: CliCommand,
+          client: FakeClient,
+          temporaryDirectoryRoot?: string
+        ) => Promise<unknown>;
+      };
+      expect(runtime.executePrefabGraph).toBeTypeOf('function');
+      if (!runtime.executePrefabGraph) throw new Error('EXECUTE_PREFAB_GRAPH_NOT_EXPORTED');
+
+      let observedTemporaryDirectory = false;
+      const client: FakeClient = {
+        async request(method) {
+          if (method === 'server.editors') {
+            observedTemporaryDirectory = (await readdir(parent)).length === 1;
+            throw new Error('SERVER_CONNECTION_CLOSED');
+          }
+          throw new Error(`UNEXPECTED_METHOD:${method}`);
+        }
+      };
+
+      await expect(runtime.executePrefabGraph(
+        parseCommand(['prefab-graph', '--project-id', 'project-1']),
+        client,
+        parent
+      )).rejects.toThrow('SERVER_CONNECTION_CLOSED');
+      expect(observedTemporaryDirectory).toBe(true);
+      expect(await readdir(parent)).toEqual([]);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
   });
 
   it('连接编辑器前拒绝畸形 resume checkpoint', async () => {
@@ -631,6 +722,79 @@ describe('local readonly commands', () => {
       await rm(parent, { recursive: true, force: true });
     }
   });
+
+  it('runCli 使用环境变量配置请求超时', async () => {
+    const originalTimeout = process.env.COCOS_AI_PROBE_TIMEOUT_MS;
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    let delayedResponse: ReturnType<typeof setTimeout> | null = null;
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    server.on('connection', (socket) => {
+      socket.on('message', (raw) => {
+        const message = JSON.parse(raw.toString()) as {
+          method?: string;
+          requestId?: string;
+        };
+        if (message.method === 'client.hello') {
+          socket.send(JSON.stringify({
+            type: 'response',
+            correlationId: 'client.hello',
+            ok: true,
+            payload: { role: 'client' }
+          }));
+          return;
+        }
+        delayedResponse = setTimeout(() => {
+          if (socket.readyState !== 1) return;
+          socket.send(JSON.stringify({
+            type: 'response',
+            correlationId: message.requestId,
+            ok: true,
+            payload: []
+          }));
+        }, 100);
+      });
+    });
+
+    try {
+      process.env.COCOS_AI_PROBE_TIMEOUT_MS = '20';
+      const stdout = createCaptureStream();
+      const stderr = createCaptureStream();
+      const exitCode = await cliModule.runCli(['editors'], {
+        serverUrl: `ws://127.0.0.1:${port}`,
+        stdout: stdout.stream,
+        stderr: stderr.stream
+      });
+
+      expect(exitCode).toBe(1);
+      expect(JSON.parse(stderr.read())).toMatchObject({
+        code: 'SERVER_REQUEST_TIMEOUT',
+        message: 'Probe Server 请求超时，结果未知'
+      });
+      expect(stdout.read()).toBe('');
+    } finally {
+      if (originalTimeout === undefined) {
+        delete process.env.COCOS_AI_PROBE_TIMEOUT_MS;
+      } else {
+        process.env.COCOS_AI_PROBE_TIMEOUT_MS = originalTimeout;
+      }
+      if (delayedResponse) clearTimeout(delayedResponse);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it.each(['', '0', '-1', '1.5', 'NaN', 'Infinity'])(
+    '非法请求超时环境变量 %j 回退默认值',
+    (value) => {
+      const runtime = cliModule as typeof cliModule & {
+        readRequestTimeoutMs?: (rawValue: string | undefined) => number;
+      };
+      expect(runtime.readRequestTimeoutMs).toBeTypeOf('function');
+      if (!runtime.readRequestTimeoutMs) throw new Error('READ_REQUEST_TIMEOUT_NOT_EXPORTED');
+      expect(runtime.readRequestTimeoutMs(value)).toBe(10_000);
+    }
+  );
 });
 
 describe('ProbeClient', () => {
@@ -702,6 +866,168 @@ function createEmptyProjectClient(): FakeClient {
       throw new Error(`UNEXPECTED_METHOD:${method}`);
     }
   };
+}
+
+/**
+ * 创建两个文档的 Prefab 图扫描 Client，并允许在打开第二个文档前检查首个快照产物。
+ *
+ * @param onOpenAsset 每次打开文档资产时执行的测试观察逻辑。
+ * @returns 可完成完整项目扫描的只读 Client。
+ */
+function createPrefabGraphProjectClient(
+  onOpenAsset: (assetUuid: string) => Promise<void>
+): FakeClient {
+  let activeAssetUuid = '';
+  return {
+    async request(method, payload) {
+      if (method === 'server.editors') {
+        return [{
+          editorInstanceId: 'editor-1',
+          projectId: 'project-1',
+          projectPath: 'E:/project',
+          creatorVersion: '3.8.8',
+          bridgeVersion: '0.1.0',
+          capabilities: [
+            'probe.editorState',
+            'probe.assetIndex',
+            'probe.openAsset',
+            'probe.documentSnapshot'
+          ]
+        }];
+      }
+      if (method === 'probe.assetIndex') return createPrefabGraphAssetIndex();
+      if (method === 'probe.openAsset') {
+        activeAssetUuid = readFakeAssetUuid(payload);
+        await onOpenAsset(activeAssetUuid);
+        return { opened: true, uuid: activeAssetUuid };
+      }
+      if (method === 'probe.editorState') {
+        return { ready: { scene: true, assetDatabase: true }, unresolved: [] };
+      }
+      if (method === 'probe.documentSnapshot') {
+        return createPrefabGraphDocumentSnapshot(activeAssetUuid);
+      }
+      throw new Error(`UNEXPECTED_METHOD:${method}`);
+    }
+  };
+}
+
+/**
+ * 创建包含一个 Scene 和一个 Prefab 的最小资产索引。
+ *
+ * @returns 可由项目扫描器完整消费的资产索引。
+ */
+function createPrefabGraphAssetIndex() {
+  const documents = [
+    createPrefabGraphDocumentRecord('scene-a', 'scene'),
+    createPrefabGraphDocumentRecord('prefab-b', 'prefab')
+  ];
+  return {
+    assets: documents.map((document) => ({
+      assetUuid: document.assetUuid,
+      url: document.path,
+      filePath: document.filePath,
+      type: document.documentType === 'scene' ? 'cc.SceneAsset' : 'cc.Prefab',
+      importer: null,
+      name: document.assetUuid,
+      displayName: document.assetUuid,
+      source: null,
+      path: document.path,
+      isSubAsset: false,
+      isBundle: false,
+      imported: true,
+      invalid: false,
+      isDirectory: false,
+      visible: true,
+      readonly: false,
+      available: true,
+      raw: {}
+    })),
+    scripts: [],
+    documents,
+    unresolved: []
+  };
+}
+
+/**
+ * 创建文档资产记录。
+ *
+ * @param assetUuid 文档资产 UUID。
+ * @param documentType 文档类型。
+ * @returns Scene 或 Prefab 文档记录。
+ */
+function createPrefabGraphDocumentRecord(
+  assetUuid: string,
+  documentType: 'scene' | 'prefab'
+) {
+  const extension = documentType === 'scene' ? 'scene' : 'prefab';
+  return {
+    assetUuid,
+    path: `db://assets/${assetUuid}.${extension}`,
+    filePath: `E:/project/assets/${assetUuid}.${extension}`,
+    documentType,
+    available: true,
+    raw: {}
+  };
+}
+
+/**
+ * 创建单页完整文档快照。
+ *
+ * @param assetUuid 当前已打开文档的资产 UUID。
+ * @returns 可写入文件化快照仓库的完整文档快照。
+ */
+function createPrefabGraphDocumentSnapshot(assetUuid: string) {
+  const documentType = assetUuid === 'scene-a' ? 'scene' : 'prefab';
+  const document = createPrefabGraphDocumentRecord(assetUuid, documentType);
+  const nodeUuid = `${assetUuid}-node`;
+  return {
+    document,
+    revision: `${assetUuid}-revision`,
+    mode: 'full',
+    page: { offset: 0, pageSize: 100, totalNodes: 1, nextCursor: null },
+    nodes: [{
+      kind: 'node',
+      identity: {
+        sessionId: null,
+        objectUuid: nodeUuid,
+        assetUuid: null,
+        fileId: `${nodeUuid}-file`,
+        typeId: 'cc.Node',
+        scriptUuid: null
+      },
+      name: nodeUuid,
+      path: `/${nodeUuid}`,
+      parentObjectUuid: null,
+      childObjectUuids: [],
+      siblingIndex: 0,
+      active: true,
+      layer: 0,
+      localTransform: null
+    }],
+    componentSchemas: [],
+    prefabInstances: [],
+    coverage: {
+      nodes: { total: 1, decoded: 1 },
+      components: { total: 0, decoded: 0 },
+      properties: { total: 0, decoded: 0 },
+      references: { total: 0, resolved: 0 },
+      prefabInstances: { total: 0, resolved: 0 },
+      overrides: { total: 0, decoded: 0 }
+    },
+    unresolved: [],
+    diagnostics: []
+  };
+}
+
+/**
+ * 从假的 openAsset 请求中读取资产 UUID。
+ *
+ * @param payload Server 请求载荷。
+ * @returns 待打开文档的资产 UUID。
+ */
+function readFakeAssetUuid(payload: unknown): string {
+  return (payload as { params: { uuid: string } }).params.uuid;
 }
 
 function createEmptyProjectCheckpoint() {

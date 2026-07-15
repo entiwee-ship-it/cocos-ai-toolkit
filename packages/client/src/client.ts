@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { resolveWebSocketMaxPayload } from '@cocos-ai/protocol';
 import WebSocket, { type RawData } from 'ws';
 
 interface PendingRequest {
@@ -18,9 +19,17 @@ export class ProbeClient {
   private socket: WebSocket | null = null;
   private readonly pending = new Map<string, PendingRequest>();
 
+  /**
+   * 创建共享 Probe Server 客户端。
+   *
+   * @param url Probe Server WebSocket 地址。
+   * @param timeoutMs 单次请求等待超时毫秒数。
+   * @param maxPayload WebSocket 单条消息的最大接收字节数。
+   */
   constructor(
     private readonly url: string,
-    private readonly timeoutMs = 10_000
+    private readonly timeoutMs = 10_000,
+    private readonly maxPayload?: number
   ) {}
 
   /**
@@ -31,7 +40,9 @@ export class ProbeClient {
       throw new Error('CLIENT_ALREADY_CONNECTED');
     }
 
-    const socket = new WebSocket(this.url);
+    const socket = new WebSocket(this.url, {
+      maxPayload: resolveWebSocketMaxPayload(this.maxPayload)
+    });
     this.socket = socket;
     socket.on('message', (raw) => this.handleMessage(raw));
     socket.on('close', () => this.abortPending('SERVER_CONNECTION_CLOSED'));
