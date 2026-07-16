@@ -364,10 +364,23 @@ describe('local readonly commands', () => {
         reportPath: join(canonicalRoot, 'nested', 'run.json'),
         checkpointPath: join(canonicalRoot, 'nested', 'run.checkpoint.json')
       });
-      expect(JSON.parse(await readFile(join(root, 'nested', 'run.json'), 'utf8'))).toMatchObject({
+      const report = JSON.parse(await readFile(join(root, 'nested', 'run.json'), 'utf8'));
+      expect(report).toMatchObject({
+        formatVersion: 2,
         status: 'completed',
-        documents: []
+        summary: {
+          documents: 0,
+          completedDocuments: 0
+        },
+        artifacts: {
+          documentSnapshots: {
+            count: 0,
+            gzipCount: 0,
+            jsonCount: 0
+          }
+        }
       });
+      expect(report).not.toHaveProperty('documents');
       expect(JSON.parse(await readFile(
         join(root, 'nested', 'run.checkpoint.json'),
         'utf8'

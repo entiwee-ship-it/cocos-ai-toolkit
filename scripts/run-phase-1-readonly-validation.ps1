@@ -144,11 +144,74 @@ function Read-JsonFile {
         [string]$Path
     )
 
-    $raw = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+    if ($Path.EndsWith('.gz', [StringComparison]::OrdinalIgnoreCase)) {
+        $fileStream = [IO.File]::OpenRead($Path)
+        try {
+            $gzipStream = [IO.Compression.GZipStream]::new(
+                $fileStream,
+                [IO.Compression.CompressionMode]::Decompress
+            )
+            try {
+                $reader = [IO.StreamReader]::new($gzipStream, [Text.Encoding]::UTF8)
+                try {
+                    $raw = $reader.ReadToEnd()
+                } finally {
+                    $reader.Dispose()
+                }
+            } finally {
+                $gzipStream.Dispose()
+            }
+        } finally {
+            $fileStream.Dispose()
+        }
+    } else {
+        $raw = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+    }
     return [PSCustomObject]@{
         raw = $raw
         data = $raw | ConvertFrom-Json -AsHashtable
     }
+}
+
+function Resolve-ManifestArtifactPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ReportPath,
+        [Parameter(Mandatory = $true)]
+        [object]$Artifact,
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    foreach ($name in @('path', 'sha256', 'bytes', 'encoding')) {
+        Assert-Condition -Condition (Test-ObjectProperty -Value $Artifact -Name $name) -Message "$Label 引用缺少字段: $name"
+    }
+    $relativePath = [string]$Artifact.path
+    Assert-Condition -Condition (-not [IO.Path]::IsPathRooted($relativePath)) -Message "$Label 引用不能使用绝对路径"
+    Assert-Condition -Condition (-not ($relativePath -split '[\\/]' -contains '..')) -Message "$Label 引用不能越过报告目录"
+    Assert-Condition -Condition (([string]$Artifact.sha256) -match '^[a-fA-F0-9]{64}$') -Message "$Label SHA-256 格式无效"
+    Assert-Condition -Condition ([long]$Artifact.bytes -ge 0) -Message "$Label 字节数无效"
+
+    $reportDirectory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ReportPath))
+    $artifactPath = [IO.Path]::GetFullPath((Join-Path $reportDirectory $relativePath))
+    $pathFromReportDirectory = [IO.Path]::GetRelativePath($reportDirectory, $artifactPath)
+    Assert-Condition -Condition (-not ($pathFromReportDirectory -eq '..' -or $pathFromReportDirectory.StartsWith("..$([IO.Path]::DirectorySeparatorChar)"))) -Message "$Label 引用越过报告目录"
+    Assert-Condition -Condition (Test-Path -LiteralPath $artifactPath -PathType Leaf) -Message "$Label 文件不存在: $relativePath"
+
+    $encoding = [string]$Artifact.encoding
+    if ($encoding -eq 'json') {
+        Assert-Condition -Condition ($artifactPath.EndsWith('.json', [StringComparison]::OrdinalIgnoreCase) -and -not $artifactPath.EndsWith('.json.gz', [StringComparison]::OrdinalIgnoreCase)) -Message "$Label JSON 编码与扩展名不一致"
+    } elseif ($encoding -eq 'json-gzip') {
+        Assert-Condition -Condition ($artifactPath.EndsWith('.json.gz', [StringComparison]::OrdinalIgnoreCase)) -Message "$Label gzip 编码与扩展名不一致"
+    } else {
+        throw "$Label 编码无效: $encoding"
+    }
+
+    $actualHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-Condition -Condition ($actualHash -eq ([string]$Artifact.sha256).ToLowerInvariant()) -Message "$Label SHA-256 不一致"
+    $actualBytes = (Get-Item -LiteralPath $artifactPath).Length
+    Assert-Condition -Condition ($actualBytes -eq [long]$Artifact.bytes) -Message "$Label 字节数不一致"
+    return $artifactPath
 }
 
 function Invoke-NativeCommand {
@@ -749,11 +812,41 @@ function Assert-Phase1ReportSchema {
     Assert-Condition -Condition (@($Checkpoint.completedAssetUuids).Count -eq @($Checkpoint.assetUuids).Count) -Message '项目扫描未处理全部 Scene/Prefab 清单'
     Assert-Condition -Condition ((@($Checkpoint.documents).Count + @($Checkpoint.failures).Count) -eq @($Checkpoint.completedAssetUuids).Count) -Message '已完成资产没有且仅有快照或失败证据'
     Assert-Condition -Condition (Test-Path -LiteralPath $ReportPath -PathType Leaf) -Message '项目扫描报告未落盘'
-    Assert-Condition -Condition ((Get-Content -LiteralPath $ReportPath -TotalCount 1).Trim() -eq '{') -Message '项目扫描报告缺少 JSON 对象起始边界'
-    Assert-Condition -Condition ((Get-Content -LiteralPath $ReportPath -Tail 1).Trim() -eq '}') -Message '项目扫描报告缺少 JSON 对象结束边界'
+
+    # 主报告只允许保存有界 manifest，先做体积门禁，禁止再次整体解析历史超大报告。
+    $maximumManifestBytes = 1MB
+    $reportBytes = (Get-Item -LiteralPath $ReportPath).Length
+    Assert-Condition -Condition ($reportBytes -le $maximumManifestBytes) -Message "项目扫描 manifest 过大: $reportBytes bytes"
+    $Manifest = (Read-JsonFile -Path $ReportPath).data
+    foreach ($name in @('formatVersion', 'scanId', 'status', 'project', 'startedAt', 'finishedAt', 'scanParameters', 'summary', 'coverage', 'artifacts')) {
+        Assert-Condition -Condition (Test-ObjectProperty -Value $Manifest -Name $name) -Message "项目扫描 manifest 缺少字段: $name"
+    }
+    Assert-Condition -Condition ($Manifest.formatVersion -eq 2) -Message "项目扫描 manifest 版本无效: $($Manifest.formatVersion)"
+    foreach ($name in @('documents', 'assets', 'scripts', 'prefabGraph', 'unresolved', 'diagnostics')) {
+        Assert-Condition -Condition (-not (Test-ObjectProperty -Value $Manifest -Name $name)) -Message "项目扫描 manifest 不应内联大字段: $name"
+    }
+    Assert-Condition -Condition ($Manifest.scanId -eq $Checkpoint.scanId) -Message '项目扫描 manifest 与 checkpoint scanId 不一致'
+    Assert-Condition -Condition ($Manifest.status -eq $Checkpoint.result.status) -Message '项目扫描 manifest 与 checkpoint 状态不一致'
+    Assert-Condition -Condition ([IO.Path]::GetFullPath([string]$ScanResult.reportPath).Equals([IO.Path]::GetFullPath($ReportPath), [StringComparison]::OrdinalIgnoreCase)) -Message '项目扫描 CLI reportPath 与实际报告路径不一致'
+    Assert-Condition -Condition ([IO.Path]::GetFullPath([string]$ScanResult.checkpointPath).Equals([IO.Path]::GetFullPath($CheckpointPath), [StringComparison]::OrdinalIgnoreCase)) -Message '项目扫描 CLI checkpointPath 与实际 checkpoint 路径不一致'
+
+    foreach ($name in @('checkpoint', 'assetIndex', 'documentSnapshots')) {
+        Assert-Condition -Condition (Test-ObjectProperty -Value $Manifest.artifacts -Name $name) -Message "项目扫描 manifest artifacts 缺少字段: $name"
+    }
+    $manifestCheckpointPath = Resolve-ManifestArtifactPath -ReportPath $ReportPath -Artifact $Manifest.artifacts.checkpoint -Label '项目扫描 checkpoint'
+    Assert-Condition -Condition ($manifestCheckpointPath.Equals([IO.Path]::GetFullPath($CheckpointPath), [StringComparison]::OrdinalIgnoreCase)) -Message '项目扫描 manifest checkpoint 路径与 CLI 不一致'
+    $assetIndexPath = Resolve-ManifestArtifactPath -ReportPath $ReportPath -Artifact $Manifest.artifacts.assetIndex -Label '项目扫描资产索引'
+    $assetIndex = (Read-JsonFile -Path $assetIndexPath).data
+    foreach ($name in @('formatVersion', 'scanId', 'assets', 'scripts')) {
+        Assert-Condition -Condition (Test-ObjectProperty -Value $assetIndex -Name $name) -Message "项目扫描资产索引缺少字段: $name"
+    }
+    Assert-Condition -Condition ($assetIndex.formatVersion -eq 1) -Message "项目扫描资产索引版本无效: $($assetIndex.formatVersion)"
+    Assert-Condition -Condition ($assetIndex.scanId -eq $Checkpoint.scanId) -Message '项目扫描资产索引与 checkpoint scanId 不一致'
 
     $reportDirectory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ReportPath))
     $checkpointDirectory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($CheckpointPath))
+    $gzipSnapshotCount = 0
+    $jsonSnapshotCount = 0
     foreach ($document in @($Checkpoint.documents)) {
         foreach ($name in @('assetUuid', 'revision', 'snapshotPath', 'snapshotHash', 'summary', 'coverage')) {
             Assert-Condition -Condition (Test-ObjectProperty -Value $document -Name $name) -Message "文档快照引用缺少字段: $name"
@@ -765,6 +858,13 @@ function Assert-Phase1ReportSchema {
         $pathFromReportRoot = [IO.Path]::GetRelativePath($reportDirectory, $snapshotPath)
         Assert-Condition -Condition (-not ($pathFromReportRoot -eq '..' -or $pathFromReportRoot.StartsWith("..$([IO.Path]::DirectorySeparatorChar)"))) -Message '文档快照引用越过报告目录'
         Assert-Condition -Condition (Test-Path -LiteralPath $snapshotPath -PathType Leaf) -Message "文档快照文件不存在: $relativeSnapshotPath"
+        if ($relativeSnapshotPath.EndsWith('.json.gz', [StringComparison]::OrdinalIgnoreCase)) {
+            $gzipSnapshotCount += 1
+        } elseif ($relativeSnapshotPath.EndsWith('.json', [StringComparison]::OrdinalIgnoreCase)) {
+            $jsonSnapshotCount += 1
+        } else {
+            throw "文档快照编码不受支持: $relativeSnapshotPath"
+        }
         $actualHash = (Get-FileHash -LiteralPath $snapshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
         Assert-Condition -Condition ($actualHash -eq ([string]$document.snapshotHash).ToLowerInvariant()) -Message "文档快照哈希不一致: $($document.assetUuid)"
         $snapshot = (Read-JsonFile -Path $snapshotPath).data
@@ -779,6 +879,14 @@ function Assert-Phase1ReportSchema {
         Assert-Condition -Condition (@($snapshot.prefabInstances).Count -eq $document.summary.prefabInstances) -Message '文档快照 Prefab 实例数与摘要不一致'
     }
 
+    $snapshotArtifacts = $Manifest.artifacts.documentSnapshots
+    foreach ($name in @('count', 'gzipCount', 'jsonCount')) {
+        Assert-Condition -Condition (Test-ObjectProperty -Value $snapshotArtifacts -Name $name) -Message "文档快照 artifact 摘要缺少字段: $name"
+    }
+    Assert-Condition -Condition ($snapshotArtifacts.count -eq @($Checkpoint.documents).Count) -Message 'manifest 文档快照总数与 checkpoint 不一致'
+    Assert-Condition -Condition ($snapshotArtifacts.gzipCount -eq $gzipSnapshotCount) -Message 'manifest gzip 文档快照数与 checkpoint 不一致'
+    Assert-Condition -Condition ($snapshotArtifacts.jsonCount -eq $jsonSnapshotCount) -Message 'manifest JSON 文档快照数与 checkpoint 不一致'
+
     $Report = $Checkpoint.result
     foreach ($name in @('projectId', 'projectPath', 'creatorVersion')) {
         Assert-Condition -Condition (Test-ObjectProperty -Value $Report.project -Name $name) -Message "项目扫描报告 project 缺少字段: $name"
@@ -786,6 +894,22 @@ function Assert-Phase1ReportSchema {
     Assert-Condition -Condition ($Report.project.projectId -eq $ExpectedProjectId) -Message '项目扫描报告 projectId 与目标编辑器不一致'
     Assert-Condition -Condition ([IO.Path]::GetFullPath([string]$Report.project.projectPath).Equals([IO.Path]::GetFullPath($ExpectedProjectPath), [StringComparison]::OrdinalIgnoreCase)) -Message '项目扫描报告 projectPath 与目标项目不一致'
     Assert-Condition -Condition ($Report.project.creatorVersion -eq $ExpectedCreatorVersion) -Message '项目扫描报告 Creator 版本与认证版本不一致'
+    Assert-Condition -Condition ($Manifest.project.projectId -eq $Report.project.projectId) -Message 'manifest projectId 与 checkpoint 不一致'
+    Assert-Condition -Condition ([IO.Path]::GetFullPath([string]$Manifest.project.projectPath).Equals([IO.Path]::GetFullPath([string]$Report.project.projectPath), [StringComparison]::OrdinalIgnoreCase)) -Message 'manifest projectPath 与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.project.creatorVersion -eq $Report.project.creatorVersion) -Message 'manifest Creator 版本与 checkpoint 不一致'
+    foreach ($name in @('pageSize', 'includeRaw', 'concurrency')) {
+        Assert-Condition -Condition ($Manifest.scanParameters[$name] -eq $Checkpoint.parameters[$name]) -Message "manifest 扫描参数与 checkpoint 不一致: $name"
+    }
+    Assert-Condition -Condition ($Manifest.summary.assets -eq $Report.assetCount -and @($assetIndex.assets).Count -eq $Report.assetCount) -Message 'manifest 或资产索引资产数与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.scripts -eq $Report.scriptCount -and @($assetIndex.scripts).Count -eq $Report.scriptCount) -Message 'manifest 或资产索引脚本数与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.documents -eq @($Checkpoint.assetUuids).Count) -Message 'manifest 文档总数与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.completedDocuments -eq @($Checkpoint.documents).Count) -Message 'manifest 完成文档数与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.failedDocuments -eq @($Checkpoint.failures).Count) -Message 'manifest 失败文档数与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.prefabGraphNodes -eq @($Report.prefabGraph.nodes).Count) -Message 'manifest Prefab 图节点数与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.prefabGraphEdges -eq @($Report.prefabGraph.edges).Count) -Message 'manifest Prefab 图边数与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.prefabGraphBlocked -eq [bool]$Report.prefabGraph.blocked) -Message 'manifest Prefab 图阻断状态与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.unresolved -eq $Report.unresolvedCount) -Message 'manifest unresolved 数与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.summary.diagnostics -eq @($Report.diagnostics).Count) -Message 'manifest diagnostics 数与 checkpoint 不一致'
     $gapEvidenceCount = @($Checkpoint.unresolved).Count + @($Report.diagnostics | Where-Object {
         $_.severity -in @('warning', 'error')
     }).Count
@@ -797,6 +921,8 @@ function Assert-Phase1ReportSchema {
     }
     $null = [DateTimeOffset]::Parse([string]$Report.startedAt)
     $null = [DateTimeOffset]::Parse([string]$Report.finishedAt)
+    Assert-Condition -Condition ($Manifest.startedAt -eq $Report.startedAt) -Message 'manifest startedAt 与 checkpoint 不一致'
+    Assert-Condition -Condition ($Manifest.finishedAt -eq $Report.finishedAt) -Message 'manifest finishedAt 与 checkpoint 不一致'
     Assert-Condition -Condition (Test-ObjectProperty -Value $Report.prefabGraph -Name 'nodes') -Message 'Prefab 图缺少 nodes'
     Assert-Condition -Condition (Test-ObjectProperty -Value $Report.prefabGraph -Name 'edges') -Message 'Prefab 图缺少 edges'
 }
@@ -1054,10 +1180,17 @@ try {
     )) -Label 'CLI scan-project' -TimeoutSeconds $ScanTimeoutSeconds
     $projectScanResultPath = Write-RawJsonReport -Name "$reportPrefix-project-scan-result.json" -RawJson $projectScan.raw
     $scanReportPath = Join-Path $reportsRoot $scanReportName
-    $checkpointName = $scanReportName.Substring(0, $scanReportName.Length - '.json'.Length) + '.checkpoint.json'
-    $checkpointPath = Join-Path $reportsRoot $checkpointName
     Assert-Condition -Condition (Test-Path -LiteralPath $scanReportPath -PathType Leaf) -Message '项目扫描报告未落盘'
+    Assert-Condition -Condition ((Get-Item -LiteralPath $scanReportPath).Length -le 1MB) -Message '项目扫描 manifest 超过 1MB，拒绝整体解析'
+    $scanManifest = Read-JsonFile -Path $scanReportPath
+    Assert-Condition -Condition (Test-ObjectProperty -Value $scanManifest.data -Name 'artifacts') -Message '项目扫描 manifest 缺少 artifacts'
+    Assert-Condition -Condition (Test-ObjectProperty -Value $scanManifest.data.artifacts -Name 'checkpoint') -Message '项目扫描 manifest 缺少 checkpoint 引用'
+    $checkpointReference = [string]$scanManifest.data.artifacts.checkpoint.path
+    Assert-Condition -Condition (-not [IO.Path]::IsPathRooted($checkpointReference)) -Message '项目扫描 manifest checkpoint 不能使用绝对路径'
+    Assert-Condition -Condition (-not ($checkpointReference -split '[\\/]' -contains '..')) -Message '项目扫描 manifest checkpoint 不能越过报告目录'
+    $checkpointPath = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($scanReportPath))) $checkpointReference))
     Assert-Condition -Condition (Test-Path -LiteralPath $checkpointPath -PathType Leaf) -Message '项目扫描 checkpoint 未落盘'
+    Assert-Condition -Condition ([IO.Path]::GetFullPath([string]$projectScan.data.checkpointPath).Equals($checkpointPath, [StringComparison]::OrdinalIgnoreCase)) -Message '项目扫描 CLI 与 manifest checkpoint 路径不一致'
     $scanCheckpoint = Read-JsonFile -Path $checkpointPath
     Assert-Condition -Condition ($projectScan.data.scanId -eq $scanCheckpoint.data.scanId) -Message '项目扫描 CLI 与 checkpoint scanId 不一致'
     Add-PassedStep -Name '项目全量只读扫描' -DurationMs $projectScan.command.durationMs -Evidence $projectScanResultPath

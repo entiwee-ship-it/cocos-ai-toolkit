@@ -45,16 +45,31 @@ describe('Phase 1 只读统一验证脚本', () => {
       script.indexOf('function Assert-Phase1ReportSchema'),
       script.indexOf('function Wait-ScanCheckpointProgress')
     );
+    const artifactValidationFunction = script.slice(
+      script.indexOf('function Resolve-ManifestArtifactPath'),
+      script.indexOf('function Invoke-NativeCommand')
+    );
     expect(reportSchemaFunction).toContain('$Checkpoint');
     expect(reportSchemaFunction).toContain('$ReportPath');
     expect(reportSchemaFunction).toContain('snapshotPath');
     expect(reportSchemaFunction).toContain('snapshotHash');
     expect(reportSchemaFunction).toContain('Get-FileHash');
+    expect(reportSchemaFunction).toContain('$maximumManifestBytes');
+    expect(reportSchemaFunction).toContain('formatVersion');
+    expect(reportSchemaFunction).toContain('artifacts');
+    expect(reportSchemaFunction).toContain('Resolve-ManifestArtifactPath');
+    expect(artifactValidationFunction).toContain('sha256');
+    expect(artifactValidationFunction).toContain('bytes');
+    expect(artifactValidationFunction).toContain('json-gzip');
+    expect(reportSchemaFunction).toContain('Read-JsonFile -Path $ReportPath');
+    expect(reportSchemaFunction).not.toContain('Get-Content -LiteralPath $ReportPath');
     expect(reportSchemaFunction).toContain('$ExpectedProjectId');
     expect(reportSchemaFunction).toContain('$ExpectedProjectPath');
     expect(reportSchemaFunction).toContain('$ExpectedCreatorVersion');
     expect(reportSchemaFunction).toContain('$gapEvidenceCount');
-    expect(mainFlow).not.toContain('Read-JsonFile -Path $scanReportPath');
+    expect(mainFlow).toContain('Read-JsonFile -Path $scanReportPath');
+    expect(mainFlow).toContain('$scanManifest.data.artifacts.checkpoint.path');
+    expect(mainFlow).not.toContain('$scanReportName.Substring');
     expect(mainFlow).toContain('Read-JsonFile -Path $checkpointPath');
   });
 
@@ -91,6 +106,7 @@ describe('Phase 1 只读统一验证脚本', () => {
     const gitignore = await readFile(gitignorePath, 'utf8');
 
     expect(gitignore.split(/\r?\n/)).toContain('reports/*.json.documents/');
+    expect(gitignore.split(/\r?\n/)).toContain('reports/*.json.gz');
   });
 
   it('保留可重复的 Server 中断和同 checkpoint 恢复证据', async () => {
@@ -205,6 +221,8 @@ describe('Phase 1 只读统一验证脚本', () => {
 
     expect(rawReportFunction).toContain('ConvertFrom-Json -AsHashtable');
     expect(readJsonFunction).toContain('ConvertFrom-Json -AsHashtable');
+    expect(readJsonFunction).toContain('GZipStream');
+    expect(readJsonFunction).toContain("EndsWith('.gz'");
     expect(cliJsonFunction).toContain('ConvertFrom-Json -AsHashtable');
     expect(propertyFunction).toContain('$Value -is [Collections.IDictionary]');
     expect(propertyFunction).toContain('$Value.Contains($Name)');

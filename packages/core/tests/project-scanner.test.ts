@@ -1,8 +1,14 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { ProjectScanReportSchema, type DocumentSnapshot } from '@cocos-ai/protocol';
+import {
+  ProjectScanAssetIndexArtifactSchema,
+  ProjectScanReportManifestSchema,
+  type DocumentSnapshot
+} from '@cocos-ai/protocol';
 import {
   PROJECT_SCAN_READONLY_METHODS,
   ProjectScanner,
@@ -141,7 +147,7 @@ describe('ProjectScanner', () => {
     expect(writer.checkpoints).toHaveLength(3);
     expect(writer.reports).toHaveLength(1);
     expect(writer.checkpoints.at(-1)).toEqual(result.checkpoint);
-    expect(writer.events.slice(-2)).toEqual(['report', 'checkpoint']);
+    expect(writer.events.slice(-2)).toEqual(['checkpoint', 'report']);
     expect(new Set(client.calls.map((call) => call.method))).toEqual(new Set(
       PROJECT_SCAN_READONLY_METHODS
     ));
@@ -336,33 +342,121 @@ describe('ProjectScanner', () => {
     }
   });
 
-  it('JSON writer 逐文档落盘并流式生成符合协议的完整项目报告', async () => {
+  it('JSON writer 压缩文档分片并生成不内联大对象的有界 manifest', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'cocos-ai-core-'));
     const reportPath = join(directory, 'report.json');
     const checkpointPath = join(directory, 'checkpoint.json');
     try {
+      const writer = new JsonScanReportWriter(reportPath, checkpointPath, directory);
       const result = await new ProjectScanner(
         new FakeEditorClient(),
-        new JsonScanReportWriter(reportPath, checkpointPath, directory)
+        writer
       ).scan({ projectId: 'project-1' });
 
-      const report = ProjectScanReportSchema.parse(
-        JSON.parse(await readFile(reportPath, 'utf8'))
+      const reportText = await readFile(reportPath, 'utf8');
+      const report = ProjectScanReportManifestSchema.parse(
+        JSON.parse(reportText)
       );
       expect(report.scanId).toBe(result.scanId);
-      expect(report.documents).toHaveLength(2);
-      expect(report.documents.map((document) => document.document.assetUuid)).toEqual([
-        'scene-a',
-        'prefab-b'
-      ]);
+      expect(report.summary).toMatchObject({
+        assets: 3,
+        scripts: 1,
+        documents: 2,
+        completedDocuments: 2,
+        failedDocuments: 0
+      });
+      expect(report.artifacts.documentSnapshots).toEqual({
+        count: 2,
+        gzipCount: 2,
+        jsonCount: 0
+      });
+      const checkpointBytes = await readFile(checkpointPath);
+      expect(report.artifacts.checkpoint).toEqual({
+        path: 'checkpoint.json',
+        sha256: createHash('sha256').update(checkpointBytes).digest('hex'),
+        bytes: checkpointBytes.byteLength,
+        encoding: 'json'
+      });
+      expect(report).not.toHaveProperty('documents');
+      expect(reportText).not.toContain('scene-a-node');
+      expect((await stat(reportPath)).size).toBeLessThan(10_000);
+
+      const assetIndexPath = join(directory, report.artifacts.assetIndex.path);
+      const assetIndexBytes = await readFile(assetIndexPath);
+      expect(report.artifacts.assetIndex).toEqual({
+        path: 'report.assets.json.gz',
+        sha256: createHash('sha256').update(assetIndexBytes).digest('hex'),
+        bytes: assetIndexBytes.byteLength,
+        encoding: 'json-gzip'
+      });
+      const assetIndex = ProjectScanAssetIndexArtifactSchema.parse(JSON.parse(
+        gunzipSync(assetIndexBytes).toString('utf8')
+      ));
+      expect(assetIndex).toMatchObject({
+        formatVersion: 1,
+        scanId: result.scanId
+      });
+      expect(assetIndex.assets).toHaveLength(3);
+      expect(assetIndex.scripts).toHaveLength(1);
+
+      const snapshotFiles = await readdir(join(directory, 'checkpoint.json.documents'));
+      expect(snapshotFiles).toHaveLength(2);
+      expect(snapshotFiles.every((file) => file.endsWith('.json.gz'))).toBe(true);
+      for (const document of result.checkpoint.documents) {
+        const snapshotBytes = await readFile(join(directory, document.snapshotPath));
+        expect(document.snapshotHash).toBe(
+          createHash('sha256').update(snapshotBytes).digest('hex')
+        );
+      }
+      await expect(writer.readDocument(result.checkpoint.documents[0])).resolves.toMatchObject({
+        document: { assetUuid: 'scene-a' }
+      });
       expect(result.checkpoint.documents.every((document) =>
         !('nodes' in document)
       )).toBe(true);
       expect((await readdir(directory)).sort()).toEqual([
         'checkpoint.json',
         'checkpoint.json.documents',
+        'report.assets.json.gz',
         'report.json'
       ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('JSON writer 继续读取旧 checkpoint 的未压缩文档分片', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocos-ai-core-'));
+    const reportPath = join(directory, 'report.json');
+    const checkpointPath = join(directory, 'checkpoint.json');
+    const snapshotDirectory = `${checkpointPath}.documents`;
+    try {
+      await mkdir(snapshotDirectory);
+      const snapshot = createDocumentSnapshot('scene-a');
+      const serialized = `${JSON.stringify(snapshot)}\n`;
+      const snapshotPath = join(snapshotDirectory, 'legacy.json');
+      await writeFile(snapshotPath, serialized, 'utf8');
+      const writer = new JsonScanReportWriter(reportPath, checkpointPath, directory);
+
+      await expect(writer.readDocument({
+        assetUuid: 'scene-a',
+        revision: snapshot.revision,
+        snapshotPath: 'checkpoint.json.documents/legacy.json',
+        snapshotHash: createHash('sha256').update(serialized).digest('hex'),
+        summary: {
+          path: snapshot.document.path,
+          documentType: snapshot.document.documentType,
+          nodes: snapshot.nodes.length,
+          components: snapshot.componentSchemas.length,
+          prefabInstances: snapshot.prefabInstances.length,
+          unresolved: snapshot.unresolved.length,
+          diagnostics: snapshot.diagnostics.length
+        },
+        coverage: snapshot.coverage
+      })).resolves.toMatchObject({
+        document: { assetUuid: 'scene-a' },
+        revision: snapshot.revision
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

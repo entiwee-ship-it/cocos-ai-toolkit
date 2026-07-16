@@ -286,8 +286,8 @@ export class ProjectScanner {
         diagnostics: report.diagnostics
       }
     });
-    await this.writer.writeReport(report, documents);
     await this.writer.writeCheckpoint(checkpoint);
+    await this.writer.writeReport(report, documents);
     return {
       ...report,
       documentSummaries: documents.map((document) => ({

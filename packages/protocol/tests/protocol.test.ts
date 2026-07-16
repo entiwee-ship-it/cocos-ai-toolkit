@@ -6,6 +6,8 @@ import {
   ProbeResponseSchema,
   PrefabProbeSchema,
   PrefabGraphSchema,
+  ProjectScanReportFileSchema,
+  ProjectScanReportManifestSchema,
   ProjectScanReportSchema,
   ReferenceSchema,
   createEmptyProjectCoverage,
@@ -341,6 +343,79 @@ describe('阶段 1 只读协议', () => {
       readonly: false,
       displayName: 'Page'
     });
+  });
+
+  it('接受有界项目扫描 manifest，并继续兼容旧完整报告', () => {
+    const manifest = {
+      formatVersion: 2,
+      scanId: 'scan-1',
+      status: 'completed-with-gaps',
+      project: {
+        projectId: 'project-1',
+        projectPath: 'E:/project',
+        creatorVersion: '3.8.8'
+      },
+      startedAt: '2026-07-13T12:00:00.000Z',
+      finishedAt: '2026-07-13T12:01:00.000Z',
+      scanParameters: {
+        pageSize: 500,
+        includeRaw: true,
+        concurrency: 1
+      },
+      summary: {
+        assets: 6711,
+        scripts: 906,
+        documents: 375,
+        completedDocuments: 375,
+        failedDocuments: 0,
+        prefabGraphNodes: 375,
+        prefabGraphEdges: 1200,
+        prefabGraphBlocked: false,
+        unresolved: 68349,
+        diagnostics: 2048
+      },
+      coverage: createEmptyProjectCoverage(),
+      artifacts: {
+        checkpoint: {
+          path: 'project-scan.checkpoint.json',
+          sha256: 'a'.repeat(64),
+          bytes: 69528704,
+          encoding: 'json'
+        },
+        assetIndex: {
+          path: 'project-scan.assets.json.gz',
+          sha256: 'b'.repeat(64),
+          bytes: 1234567,
+          encoding: 'json-gzip'
+        },
+        documentSnapshots: {
+          count: 375,
+          gzipCount: 375,
+          jsonCount: 0
+        }
+      }
+    };
+
+    expect(ProjectScanReportManifestSchema.parse(manifest).formatVersion).toBe(2);
+    expect(ProjectScanReportFileSchema.parse(manifest)).not.toHaveProperty('documents');
+    expect(ProjectScanReportFileSchema.parse({
+      scanId: 'legacy-scan',
+      status: 'completed',
+      project: {
+        projectId: 'project-1',
+        projectPath: 'E:/project',
+        creatorVersion: '3.8.8'
+      },
+      startedAt: '2026-07-13T12:00:00.000Z',
+      finishedAt: '2026-07-13T12:01:00.000Z',
+      assets: [],
+      scripts: [],
+      documents: [],
+      prefabGraph: { nodes: [], edges: [] },
+      coverage: createEmptyProjectCoverage(),
+      unresolved: [],
+      diagnostics: []
+    })).toHaveProperty('documents');
   });
 
   it('拒绝项目覆盖率中 resolved 大于 total', () => {

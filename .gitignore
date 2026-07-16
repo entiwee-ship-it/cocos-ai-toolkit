@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 reports/*.json
+reports/*.json.gz
 reports/*.json.documents/
 reports/*.log
 reports/*.png

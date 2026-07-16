@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ReadonlyProbeClient } from '@cocos-ai/core';
+import { ProjectScanReportManifestSchema } from '@cocos-ai/protocol';
 import {
   mkdir,
   mkdtemp,
@@ -493,10 +494,16 @@ describe('Cocos readonly MCP tools', () => {
     expect(firstContent.page.nextCursor).toEqual(expect.any(String));
     expect(JSON.stringify(first.structuredContent)).not.toContain('raw-marker');
 
-    const report = JSON.parse(await readFile(firstContent.reportPath, 'utf8')) as {
-      documents: unknown[];
-    };
-    expect(report.documents).toHaveLength(2);
+    const report = ProjectScanReportManifestSchema.parse(JSON.parse(
+      await readFile(firstContent.reportPath, 'utf8')
+    ));
+    expect(report.formatVersion).toBe(2);
+    expect(report.summary).toMatchObject({
+      documents: 2,
+      completedDocuments: 2,
+      failedDocuments: 0
+    });
+    expect(report).not.toHaveProperty('documents');
     const openedBeforePaging = probeClient.requests.filter((request) =>
       request.method === 'probe.openAsset'
     ).length;
@@ -518,7 +525,7 @@ describe('Cocos readonly MCP tools', () => {
     )).toHaveLength(openedBeforePaging);
   });
 
-  it('prefab_graph 把完整图写入报告，只向 AI 返回有界节点和边页', async () => {
+  it('prefab_graph 把完整图写入 checkpoint，只向 AI 返回有界节点和边页', async () => {
     const reportRoot = await createTemporaryRoot();
     const probeClient = createProjectScanProbeClient({ withPrefabEdge: true });
     const { client } = await createHarness(probeClient, reportRoot);
@@ -540,6 +547,7 @@ describe('Cocos readonly MCP tools', () => {
     });
     const firstPage = (result.structuredContent as {
       reportPath: string;
+      checkpointPath: string;
       page: { items: unknown[]; nextCursor: string | null };
     });
     expect(firstPage.page).toMatchObject({
@@ -571,11 +579,11 @@ describe('Cocos readonly MCP tools', () => {
         nextCursor: null
       }
     });
-    const report = JSON.parse(await readFile(firstPage.reportPath, 'utf8')) as {
-      prefabGraph: { nodes: unknown[]; edges: unknown[] };
+    const checkpoint = JSON.parse(await readFile(firstPage.checkpointPath, 'utf8')) as {
+      result: { prefabGraph: { nodes: unknown[]; edges: unknown[] } };
     };
-    expect(report.prefabGraph.nodes).toHaveLength(2);
-    expect(report.prefabGraph.edges).toHaveLength(1);
+    expect(checkpoint.result.prefabGraph.nodes).toHaveLength(2);
+    expect(checkpoint.result.prefabGraph.edges).toHaveLength(1);
   });
 
   it('报告内容失效后拒绝继续使用旧 cursor，并且不再请求 Creator', async () => {
@@ -634,13 +642,9 @@ describe('Cocos readonly MCP tools', () => {
       page: { nextCursor: string };
     };
     const report = JSON.parse(await readFile(content.reportPath, 'utf8')) as {
-      diagnostics: unknown[];
+      summary: { diagnostics: number };
     };
-    report.diagnostics.push({
-      code: 'EXTERNAL_CHANGE',
-      message: '报告已被外部进程修改',
-      severity: 'warning'
-    });
+    report.summary.diagnostics += 1;
     await writeFile(content.reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 
     const changedReport = await client.callTool({

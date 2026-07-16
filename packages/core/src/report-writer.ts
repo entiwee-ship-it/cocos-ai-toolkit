@@ -1,10 +1,14 @@
 import {
   DocumentSnapshotSchema,
+  ProjectScanAssetIndexArtifactSchema,
+  ProjectScanReportManifestSchema,
   ProjectScanReportSchema,
-  type DocumentSnapshot
+  type DocumentSnapshot,
+  type ProjectScanArtifactReference
 } from '@cocos-ai/protocol';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import {
   basename,
   dirname,
@@ -14,8 +18,12 @@ import {
   resolve,
   sep
 } from 'node:path';
+import { Readable, Transform, Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { createGunzip, createGzip } from 'node:zlib';
 import { z } from 'zod';
 import {
+  parseScanCheckpoint,
   type ScanCheckpoint,
   type ScanCheckpointDocument
 } from './scan-checkpoint.js';
@@ -79,7 +87,7 @@ export class NoopScanReportWriter implements ScanReportWriter {
 }
 
 /**
- * 使用独立文档快照文件、轻量 checkpoint 和流式最终 JSON 报告保存扫描产物。
+ * 使用压缩文档快照、轻量 checkpoint 和有界 manifest 保存扫描产物。
  *
  * @param reportPath 最终项目报告路径。
  * @param checkpointPath 最终 checkpoint 路径。
@@ -103,14 +111,18 @@ export class JsonScanReportWriter implements ScanReportWriter {
     if (!assetUuid) throw new Error('SCAN_SNAPSHOT_IDENTITY_MISSING');
     const snapshotDirectory = `${this.checkpointPath}.documents`;
     await ensureAuthorizedDirectory(snapshotDirectory, this.reportRoot);
-    const fileName = `${createHash('sha256').update(assetUuid).digest('hex')}.json`;
+    const fileName = `${createHash('sha256').update(assetUuid).digest('hex')}.json.gz`;
     const snapshotPath = join(snapshotDirectory, fileName);
     const serialized = `${JSON.stringify(snapshot)}\n`;
-    await writeTextAtomically(snapshotPath, serialized, this.reportRoot);
+    const digest = await writeGzipTextAtomically(
+      snapshotPath,
+      serialized,
+      this.reportRoot
+    );
     return createDocumentReference(
       snapshot,
       normalizeRelativePath(relative(dirname(this.checkpointPath), snapshotPath)),
-      hashText(serialized)
+      digest.sha256
     );
   }
 
@@ -137,7 +149,7 @@ export class JsonScanReportWriter implements ScanReportWriter {
   }
 
   /**
-   * 逐个读取文档快照并流式拼装最终完整项目报告，避免创建整份巨大 JSON 字符串。
+   * 读取最终 checkpoint，写入独立压缩资产索引，并以小型 manifest 收口扫描产物。
    *
    * @param report 不含 documents 的项目报告元数据。
    * @param documents 按资产清单顺序排列的文档快照引用。
@@ -148,22 +160,69 @@ export class JsonScanReportWriter implements ScanReportWriter {
     documents: ScanCheckpointDocument[]
   ): Promise<string> {
     const metadata = ProjectScanReportMetadataSchema.parse(report);
-    await writeAtomically(this.reportPath, this.reportRoot, async (temporaryPath) => {
-      const handle = await open(temporaryPath, 'wx');
-      try {
-        await handle.write('{\n  "documents": [');
-        for (let index = 0; index < documents.length; index += 1) {
-          const { raw } = await this.readDocumentSource(documents[index]);
-          await handle.write(index === 0 ? '\n' : ',\n');
-          await handle.write(raw.trimEnd());
+    const checkpointPath = await resolveExistingArtifactPath(
+      this.checkpointPath,
+      this.reportRoot
+    );
+    const checkpointSource = await readTextArtifact(checkpointPath, false);
+    const checkpoint = parseScanCheckpoint(JSON.parse(checkpointSource.raw));
+    const result = assertFinalCheckpointMatchesReport(checkpoint, metadata, documents);
+
+    const assetIndex = ProjectScanAssetIndexArtifactSchema.parse({
+      formatVersion: 1,
+      scanId: checkpoint.scanId,
+      assets: metadata.assets,
+      scripts: metadata.scripts
+    });
+    const assetIndexPath = createAssetIndexPath(this.reportPath);
+    const assetIndexDigest = await writeGzipTextAtomically(
+      assetIndexPath,
+      `${JSON.stringify(assetIndex)}\n`,
+      this.reportRoot
+    );
+    const snapshotEncodings = countSnapshotEncodings(checkpoint.documents);
+    const manifest = ProjectScanReportManifestSchema.parse({
+      formatVersion: 2,
+      scanId: checkpoint.scanId,
+      status: result.status,
+      project: result.project,
+      startedAt: result.startedAt,
+      finishedAt: result.finishedAt,
+      scanParameters: checkpoint.parameters,
+      summary: {
+        assets: result.assetCount,
+        scripts: result.scriptCount,
+        documents: checkpoint.assetUuids.length,
+        completedDocuments: checkpoint.documents.length,
+        failedDocuments: checkpoint.failures.length,
+        prefabGraphNodes: result.prefabGraph.nodes.length,
+        prefabGraphEdges: result.prefabGraph.edges.length,
+        prefabGraphBlocked: result.prefabGraph.blocked,
+        unresolved: result.unresolvedCount,
+        diagnostics: result.diagnostics.length
+      },
+      coverage: result.coverage,
+      artifacts: {
+        checkpoint: createArtifactReference(
+          this.reportPath,
+          this.checkpointPath,
+          checkpointSource,
+          'json'
+        ),
+        assetIndex: createArtifactReference(
+          this.reportPath,
+          assetIndexPath,
+          assetIndexDigest,
+          'json-gzip'
+        ),
+        documentSnapshots: {
+          count: checkpoint.documents.length,
+          gzipCount: snapshotEncodings.gzip,
+          jsonCount: snapshotEncodings.json
         }
-        if (documents.length > 0) await handle.write('\n');
-        const metadataJson = JSON.stringify(metadata, null, 2);
-        await handle.write(`  ],\n${metadataJson.slice(2, -2)}\n}\n`);
-      } finally {
-        await handle.close();
       }
     });
+    await writeJsonAtomically(this.reportPath, manifest, this.reportRoot);
     return this.reportPath;
   }
 
@@ -176,8 +235,14 @@ export class JsonScanReportWriter implements ScanReportWriter {
       document.snapshotPath,
       this.reportRoot
     );
-    const raw = await readFile(snapshotPath, 'utf8');
-    if (hashText(raw) !== document.snapshotHash) throw new Error('SCAN_SNAPSHOT_HASH_MISMATCH');
+    const source = await readTextArtifact(
+      snapshotPath,
+      document.snapshotPath.toLowerCase().endsWith('.gz')
+    );
+    if (source.sha256 !== document.snapshotHash) {
+      throw new Error('SCAN_SNAPSHOT_HASH_MISMATCH');
+    }
+    const raw = source.raw;
     const snapshot = DocumentSnapshotSchema.parse(JSON.parse(raw));
     if (
       snapshot.document.assetUuid !== document.assetUuid
@@ -214,6 +279,122 @@ function createDocumentReference(
   };
 }
 
+interface ArtifactDigest {
+  /** 文件原始字节的 SHA-256。 */
+  sha256: string;
+
+  /** 文件实际写入或读取的原始字节数。 */
+  bytes: number;
+}
+
+interface TextArtifactSource extends ArtifactDigest {
+  /** JSON 文本；gzip 文件在返回前已经完成解压。 */
+  raw: string;
+}
+
+/**
+ * 确认最终 checkpoint 与待写 manifest 的内存结果完全对应。
+ *
+ * @param checkpoint 已经原子落盘并重新解析的最终 checkpoint。
+ * @param report 扫描器生成的不含文档快照的报告元数据。
+ * @param documents 本次扫描按资产顺序生成的文档快照引用。
+ * @returns checkpoint 内可用于生成 manifest 的最终结果。
+ */
+function assertFinalCheckpointMatchesReport(
+  checkpoint: ScanCheckpoint,
+  report: ProjectScanReportMetadata,
+  documents: ScanCheckpointDocument[]
+): NonNullable<ScanCheckpoint['result']> {
+  const result = checkpoint.result;
+  if (!result) throw new Error('SCAN_CHECKPOINT_RESULT_MISSING');
+  const documentMismatch = checkpoint.documents.length !== documents.length
+    || checkpoint.documents.some((document, index) => {
+      const expected = documents[index];
+      return !expected
+        || document.assetUuid !== expected.assetUuid
+        || document.revision !== expected.revision
+        || document.snapshotPath !== expected.snapshotPath
+        || document.snapshotHash !== expected.snapshotHash;
+    });
+  if (
+    checkpoint.scanId !== report.scanId
+    || result.status !== report.status
+    || JSON.stringify(result.project) !== JSON.stringify(report.project)
+    || result.startedAt !== report.startedAt
+    || result.finishedAt !== report.finishedAt
+    || result.assetCount !== report.assets.length
+    || result.scriptCount !== report.scripts.length
+    || result.unresolvedCount !== report.unresolved.length
+    || result.diagnostics.length !== report.diagnostics.length
+    || JSON.stringify(result.prefabGraph) !== JSON.stringify(report.prefabGraph)
+    || JSON.stringify(result.coverage) !== JSON.stringify(report.coverage)
+    || documentMismatch
+  ) {
+    throw new Error('SCAN_REPORT_CHECKPOINT_MISMATCH');
+  }
+  return result;
+}
+
+/**
+ * 为主报告生成同目录、同前缀的压缩资产索引路径。
+ *
+ * @param reportPath 主报告目标路径。
+ * @returns 压缩资产索引目标路径。
+ */
+function createAssetIndexPath(reportPath: string): string {
+  return reportPath.toLowerCase().endsWith('.json')
+    ? `${reportPath.slice(0, -'.json'.length)}.assets.json.gz`
+    : `${reportPath}.assets.json.gz`;
+}
+
+/**
+ * 把已落盘产物转换为相对主报告目录的 manifest 引用。
+ *
+ * @param reportPath 主报告目标路径。
+ * @param artifactPath 被引用产物的目标路径。
+ * @param digest 被引用产物的真实摘要和字节数。
+ * @param encoding 被引用产物的 JSON 编码方式。
+ * @returns 可通过协议 Schema 校验的产物引用。
+ */
+function createArtifactReference(
+  reportPath: string,
+  artifactPath: string,
+  digest: ArtifactDigest,
+  encoding: ProjectScanArtifactReference['encoding']
+): ProjectScanArtifactReference {
+  return {
+    path: normalizeRelativePath(relative(dirname(reportPath), artifactPath)),
+    sha256: digest.sha256,
+    bytes: digest.bytes,
+    encoding
+  };
+}
+
+/**
+ * 统计 checkpoint 引用的新 gzip 分片和旧 JSON 分片数量。
+ *
+ * @param documents 最终 checkpoint 中的文档快照引用。
+ * @returns gzip 为压缩分片数，json 为旧未压缩分片数。
+ */
+function countSnapshotEncodings(documents: ScanCheckpointDocument[]): {
+  gzip: number;
+  json: number;
+} {
+  let gzip = 0;
+  let json = 0;
+  for (const document of documents) {
+    const path = document.snapshotPath.toLowerCase();
+    if (path.endsWith('.json.gz')) {
+      gzip += 1;
+    } else if (path.endsWith('.json')) {
+      json += 1;
+    } else {
+      throw new Error(`SCAN_SNAPSHOT_ENCODING_UNSUPPORTED:${document.snapshotPath}`);
+    }
+  }
+  return { gzip, json };
+}
+
 async function writeJsonAtomically(
   path: string,
   value: unknown,
@@ -230,6 +411,99 @@ async function writeTextAtomically(
   await writeAtomically(path, reportRoot, async (temporaryPath) => {
     await writeFile(temporaryPath, value, { encoding: 'utf8', flag: 'wx' });
   });
+}
+
+/**
+ * 以 gzip 流写入文本，并在压缩字节进入磁盘前同步计算摘要。
+ *
+ * @param path 最终 gzip 文件路径。
+ * @param value 待压缩的 UTF-8 文本。
+ * @param reportRoot 调用方授权的报告根目录。
+ * @returns 压缩文件的 SHA-256 和实际字节数。
+ */
+async function writeGzipTextAtomically(
+  path: string,
+  value: string,
+  reportRoot?: string
+): Promise<ArtifactDigest> {
+  let written: ArtifactDigest | null = null;
+  await writeAtomically(path, reportRoot, async (temporaryPath) => {
+    const measured = createDigestTransform();
+    await pipeline(
+      Readable.from([value]),
+      createGzip(),
+      measured.stream,
+      createWriteStream(temporaryPath, { flags: 'wx' })
+    );
+    written = measured.digest();
+  });
+  if (!written) throw new Error('REPORT_GZIP_WRITE_INCOMPLETE');
+  return written;
+}
+
+/**
+ * 流式读取 JSON 或 gzip JSON，并按磁盘原始字节计算摘要。
+ *
+ * @param path 待读取的产物路径。
+ * @param gzip 是否在收集 UTF-8 文本前执行 gzip 解压。
+ * @returns 解压后的文本以及磁盘文件的 SHA-256 和字节数。
+ */
+async function readTextArtifact(path: string, gzip: boolean): Promise<TextArtifactSource> {
+  const measured = createDigestTransform();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  const collector = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(decoder.decode(chunk, { stream: true }));
+      callback();
+    },
+    final(callback) {
+      const tail = decoder.decode();
+      if (tail) chunks.push(tail);
+      callback();
+    }
+  });
+  if (gzip) {
+    await pipeline(
+      createReadStream(path),
+      measured.stream,
+      createGunzip(),
+      collector
+    );
+  } else {
+    await pipeline(createReadStream(path), measured.stream, collector);
+  }
+  return {
+    raw: chunks.join(''),
+    ...measured.digest()
+  };
+}
+
+/**
+ * 创建透传字节且累计 SHA-256 和长度的流组件。
+ *
+ * @returns stream 为可插入 pipeline 的透传流，digest 用于在流结束后读取摘要。
+ */
+function createDigestTransform(): {
+  stream: Transform;
+  digest: () => ArtifactDigest;
+} {
+  const hash = createHash('sha256');
+  let bytes = 0;
+  return {
+    stream: new Transform({
+      transform(chunk, _encoding, callback) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        hash.update(buffer);
+        bytes += buffer.byteLength;
+        callback(null, buffer);
+      }
+    }),
+    digest: () => ({
+      sha256: hash.digest('hex'),
+      bytes
+    })
+  };
 }
 
 /**
@@ -351,6 +625,25 @@ async function resolveSnapshotPath(
     throw new Error('SCAN_SNAPSHOT_PATH_OUTSIDE_ROOT');
   }
   return target;
+}
+
+/**
+ * 解析已存在的报告产物，并在提供授权根时复核真实路径边界。
+ *
+ * @param path 待读取的现有产物路径。
+ * @param reportRoot 调用方授权的报告根目录。
+ * @returns 可安全读取的真实绝对路径。
+ */
+async function resolveExistingArtifactPath(
+  path: string,
+  reportRoot?: string
+): Promise<string> {
+  const target = resolve(path);
+  if (!reportRoot) return target;
+  const canonicalRoot = await realpath(reportRoot);
+  const canonicalTarget = await realpath(target);
+  assertWithinRoot(canonicalRoot, canonicalTarget);
+  return canonicalTarget;
 }
 
 async function resolveAuthorizedTarget(path: string, reportRoot: string): Promise<string> {
