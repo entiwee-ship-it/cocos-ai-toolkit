@@ -370,7 +370,35 @@ async function debugPrefabLifecycle(request: unknown): Promise<unknown> {
       return { duplicated };
     });
   }
-  // 5. asset-db 删除预制体
+  // 5. cce 门面 createPrefab（候选内部 API：从场景节点生成预制体）
+  const facadeOwner = facade && (typeof facade === 'object' || typeof facade === 'function')
+    ? facade as Record<string, unknown>
+    : null;
+  const facadeAssetUrl = assetUrl.replace('.prefab', '-facade.prefab');
+  if (nodeUuid && facadeOwner && typeof facadeOwner.createPrefab === 'function') {
+    await tryAttempt('facade.createPrefab(nodeUuid,url)', async () => {
+      const created = await (facadeOwner.createPrefab as (uuid: string, url: string) => Promise<unknown>)
+        .call(facadeOwner, nodeUuid, facadeAssetUrl);
+      return { created: created === undefined ? null : created };
+    });
+    await tryAttempt('facade.createPrefab 结果查询', async () => {
+      const info = await Editor.Message.request('asset-db', 'query-asset-info', facadeAssetUrl);
+      return { uuid: readObject(info).uuid ?? null, type: readObject(info).type ?? null };
+    });
+    await tryAttempt('facade.createPrefab 结果删除', async () => {
+      const deleted = await Editor.Message.request('asset-db', 'delete-asset', facadeAssetUrl as never);
+      return { deleted: Boolean(deleted) };
+    });
+  }
+  if (nodeUuid && facadeOwner && typeof facadeOwner.getPrefabData === 'function') {
+    await tryAttempt('facade.getPrefabData(nodeUuid)', async () => {
+      const data = await (facadeOwner.getPrefabData as (uuid: string) => Promise<unknown>)
+        .call(facadeOwner, nodeUuid);
+      const serialized = JSON.stringify(data) ?? 'null';
+      return { bytes: serialized.length, head: serialized.slice(0, 200) };
+    });
+  }
+  // 6. asset-db 删除预制体
   await tryAttempt('asset-db.delete-asset', async () => {
     const deleted = await Editor.Message.request('asset-db', 'delete-asset', assetUrl as never);
     return { deleted };
