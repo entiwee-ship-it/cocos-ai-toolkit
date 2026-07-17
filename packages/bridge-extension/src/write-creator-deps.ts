@@ -7,7 +7,7 @@ import {
   type ComponentWriterDependencies
 } from './component-writer';
 import { buildComponentTypeSchema } from './component-schema';
-import { readDumpValueAtPath, writeDumpValueAtPath } from './write-scene-channel';
+import { readDumpValueAtPath } from './write-scene-channel';
 import { saveAndVerifyWriteTransaction, type WriteVerifierDependencies } from './write-verifier';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
 
@@ -24,6 +24,8 @@ const { director, js, instantiate } = require('cc') as {
   js: { getClassByName(name: string): unknown };
   instantiate(node: unknown): unknown;
 };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ccModule = require('cc') as Record<string, any>;
 
 type RuntimeNode = Record<string, any>;
 
@@ -210,23 +212,27 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       return readDumpValueAtPath(raw, parsePropertyPath(propertyPath));
     },
     setComponentProperty: async (componentUuid, propertyPath, value) => {
-      const segments = parsePropertyPath(propertyPath);
-      const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
-      if (!raw) {
+      // 组件属性写入走运行时对象：scene/set-property 对组件属性实测不生效（3.8.8，0.1.10 验证）。
+      // 引用值按 kind 解析为运行时对象；资产引用暂不支持运行时写入。
+      const runtime = findRuntimeComponent(componentUuid);
+      if (!runtime) {
         throw new ProbeError('COMPONENT_NOT_FOUND', { componentUuid });
       }
-      const topLevel = String(segments[0]);
-      const template = readObject(readObject(raw).value)[topLevel];
-      if (!template || typeof template !== 'object') {
-        throw new ProbeError('PROPERTY_NOT_FOUND', { componentUuid, propertyPath });
+      const segments = parsePropertyPath(propertyPath);
+      let container: unknown = runtime.component;
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        container = (container as Record<string | number, unknown>)?.[segments[index]];
+        if (container === null || container === undefined) {
+          throw new ProbeError('PROPERTY_PATH_NOT_TRAVERSABLE', { componentUuid, propertyPath });
+        }
       }
-      const updated = writeDumpValueAtPath(template, segments.slice(1), value);
-      await Editor.Message.request('scene', 'set-property', {
-        uuid: componentUuid,
-        path: topLevel,
-        dump: updated,
-        record: true
-      } as never);
+      const leafKey = segments[segments.length - 1];
+      const currentValue = (container as Record<string | number, unknown>)[leafKey];
+      (container as Record<string | number, unknown>)[leafKey] = coerceRuntimeWriteValue(
+        value,
+        currentValue,
+        propertyPath
+      );
     },
     resizeComponentArray: async (componentUuid, propertyPath, length) => {
       const runtime = findRuntimeComponent(componentUuid);
@@ -463,4 +469,43 @@ function readObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+/**
+ * 把协议写值转换为运行时赋值：引用按 kind 解析为运行时对象；
+ * Color/Vec2/Vec3/Size 按当前值构造对应 cc 类实例，其余原样赋值。
+ */
+function coerceRuntimeWriteValue(value: unknown, currentValue: unknown, propertyPath: string): unknown {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const reference = value as Record<string, unknown>;
+    if (typeof reference.kind === 'string') {
+      if (reference.kind === 'node') {
+        const node = typeof reference.objectUuid === 'string' ? findRuntimeNode(reference.objectUuid) : null;
+        if (!node) throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
+        return node;
+      }
+      if (reference.kind === 'component') {
+        const target = typeof reference.objectUuid === 'string'
+          ? findRuntimeComponent(reference.objectUuid)
+          : null;
+        if (!target) throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
+        return target.component;
+      }
+      throw new ProbeError('REFERENCE_ASSET_NOT_SUPPORTED', { propertyPath, kind: reference.kind });
+    }
+    const ctorName = (currentValue as { constructor?: { name?: string } })?.constructor?.name;
+    if (ctorName === 'Color' && typeof ccModule.Color === 'function') {
+      return new ccModule.Color(reference.r, reference.g, reference.b, reference.a);
+    }
+    if (ctorName === 'Vec2' && typeof ccModule.Vec2 === 'function') {
+      return new ccModule.Vec2(reference.x, reference.y);
+    }
+    if (ctorName === 'Vec3' && typeof ccModule.Vec3 === 'function') {
+      return new ccModule.Vec3(reference.x, reference.y, reference.z);
+    }
+    if (ctorName === 'Size' && typeof ccModule.Size === 'function') {
+      return new ccModule.Size(reference.width, reference.height);
+    }
+  }
+  return value;
 }
