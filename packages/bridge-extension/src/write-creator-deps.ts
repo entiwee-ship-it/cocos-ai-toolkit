@@ -144,18 +144,29 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
     },
     addComponent: async (nodeUuid, componentType, scriptUuid) => {
       if (scriptUuid !== null) {
-        // 自定义脚本经挂载守卫核对后走运行时挂载，类注册信息携带脚本绑定。
+        // 自定义脚本经挂载守卫核对后走运行时挂载；UUID 同样按组件清单差集确认，
+        // 运行时对象 UUID 仅作兜底（编辑器登记前可能尚未分配）。
         const node = requireRuntimeNode(nodeUuid);
         const componentClass = js.getClassByName(componentType);
         if (!componentClass) {
           throw new ProbeError('SCRIPT_CLASS_NOT_REGISTERED', { componentType, scriptUuid });
         }
+        const beforeUuids = readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid));
         const component = node.addComponent(componentClass);
-        return readRuntimeUuid(component);
+        const afterUuids = readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid));
+        for (const [uuid, type] of afterUuids) {
+          if (!beforeUuids.has(uuid) && type === componentType) {
+            return uuid;
+          }
+        }
+        try {
+          return readRuntimeUuid(component);
+        } catch {
+          throw new ProbeError('COMPONENT_ADD_FAILED', { nodeUuid, componentType, scriptUuid });
+        }
       }
       // create-component 不保证返回可用 UUID：按前后组件清单差集确认新组件身份。
-      const before = await Editor.Message.request('scene', 'query-node', nodeUuid);
-      const beforeUuids = readNodeComponentUuids(before);
+      const beforeUuids = readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid));
       const created = await Editor.Message.request('scene', 'create-component', {
         uuid: nodeUuid,
         component: componentType
@@ -164,8 +175,8 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       if (typeof directUuid === 'string' && directUuid && !beforeUuids.has(directUuid)) {
         return directUuid;
       }
-      const after = await Editor.Message.request('scene', 'query-node', nodeUuid);
-      for (const [uuid, type] of readNodeComponentUuids(after)) {
+      const afterUuids = readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid));
+      for (const [uuid, type] of afterUuids) {
         if (!beforeUuids.has(uuid) && type === componentType) {
           return uuid;
         }
@@ -355,15 +366,15 @@ function requireRuntimeNode(uuid: string): RuntimeNode {
   return node;
 }
 
-/** 从 query-node Dump 读取组件 UUID → 类型映射（Dump 包装：__comps__.value.{type,uuid.value}）。 */
+/** 从 query-node Dump 读取组件 UUID → 类型映射（条目级 type 为类名，value.uuid.value 为组件 UUID）。 */
 function readNodeComponentUuids(nodeDump: unknown): Map<string, string> {
   const components = new Map<string, string>();
   const node = readObject(nodeDump);
   const list = Array.isArray(node.__comps__) ? node.__comps__ : [];
   for (const entry of list) {
-    const value = readObject(readObject(entry).value);
-    const type = typeof value.type === 'string' ? value.type : null;
-    const uuid = typeof value.uuid === 'string' ? value.uuid : readObject(value.uuid).value;
+    const item = readObject(entry);
+    const type = typeof item.type === 'string' ? item.type : null;
+    const uuid = readObject(readObject(item.value).uuid).value;
     if (type && typeof uuid === 'string' && uuid) {
       components.set(uuid, type);
     }
