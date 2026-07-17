@@ -307,6 +307,70 @@ async function writeRollback(request: unknown): Promise<unknown> {
 }
 
 /**
+ * 临时能力探测：预制体生命周期的消息/API 可用性。
+ * 依次尝试候选入口并保留每个入口的成功/失败证据，不做任何状态修改之外的兜底。
+ */
+async function debugPrefabLifecycle(request: unknown): Promise<unknown> {
+  const input = readObject(unwrapRequest(request));
+  const nodeUuid = typeof input.nodeUuid === 'string' ? input.nodeUuid : null;
+  const assetUrl = typeof input.assetUrl === 'string' && input.assetUrl
+    ? input.assetUrl
+    : 'db://assets/CocosAiDebugPrefab.prefab';
+  const attempts: Array<Record<string, unknown>> = [];
+
+  // cce 门面自省：预制体相关候选方法
+  const cce = readObject((globalThis as Record<string, unknown>).cce);
+  const facade = cce.SceneFacadeManager ?? cce.sceneFacadeManager ?? cce.SceneFacade ?? cce.sceneFacade;
+  const facadeKeys = facade && (typeof facade === 'object' || typeof facade === 'function')
+    ? Object.getOwnPropertyNames(facade).concat(Object.getOwnPropertyNames(Object.getPrototypeOf(facade) ?? {}))
+      .filter((key, index, all) => all.indexOf(key) === index)
+      .filter((key) => /prefab|undo|group/i.test(key))
+      .sort()
+    : [];
+
+  const tryAttempt = async (name: string, run: () => Promise<unknown>) => {
+    try {
+      const result = await run();
+      attempts.push({ name, ok: true, result });
+    } catch (error) {
+      attempts.push({ name, ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  // 1. asset-db 模板创建空预制体
+  await tryAttempt('asset-db.create-asset', async () => {
+    const created = await Editor.Message.request('asset-db', 'create-asset', assetUrl, null);
+    return { created };
+  });
+  // 2. 查询创建结果
+  await tryAttempt('asset-db.query-asset-info', async () => {
+    const info = await Editor.Message.request('asset-db', 'query-asset-info', assetUrl);
+    return { uuid: readObject(info).uuid ?? null, type: readObject(info).type ?? null };
+  });
+  // 3. 场景节点生成预制体（候选消息入口）
+  if (nodeUuid) {
+    await tryAttempt('scene.create-prefab', async () => {
+      const created = await Editor.Message.request('scene', 'create-prefab', nodeUuid, assetUrl);
+      return { created };
+    });
+  }
+  // 4. duplicate-node 消息可用性
+  if (nodeUuid) {
+    await tryAttempt('scene.duplicate-node', async () => {
+      const duplicated = await Editor.Message.request('scene', 'duplicate-node', nodeUuid);
+      return { duplicated };
+    });
+  }
+  // 5. asset-db 删除预制体
+  await tryAttempt('asset-db.delete-asset', async () => {
+    const deleted = await Editor.Message.request('asset-db', 'delete-asset', assetUrl as never);
+    return { deleted };
+  });
+
+  return { facadeKeys, attempts };
+}
+
+/**
  * 恢复主进程传入的脚本 UUID 路径 Map。
  *
  * @param value UUID、路径元组数组。
@@ -356,5 +420,6 @@ export const methods = {
   probeUndoSaveConfirm,
   writeDocumentIdentity,
   writeExecute,
-  writeRollback
+  writeRollback,
+  debugPrefabLifecycle
 };
