@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   COCOS_READONLY_TOOL_NAMES,
+  COCOS_WRITE_TOOL_NAMES,
   createCocosMcpServer
 } from '../src/server.js';
 
@@ -893,9 +894,10 @@ describe('Cocos readonly MCP tools', () => {
 
 async function createHarness(
   probeClient: ReadonlyProbeClient,
-  reportRoot = 'reports'
+  reportRoot = 'reports',
+  runtime: { enableWrites?: boolean } = {}
 ): Promise<McpHarness> {
-  const server = createCocosMcpServer({ probeClient, reportRoot });
+  const server = createCocosMcpServer({ probeClient, reportRoot }, runtime);
   const client = new Client({ name: 'cocos-ai-mcp-test', version: '0.1.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -1128,4 +1130,152 @@ function decodeOpaqueCursor(value: string): Record<string, unknown> & { pageSize
 
 function encodeOpaqueCursor(value: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+describe('Cocos write MCP tools', () => {
+  it('未显式 enableWrites 时不注册写工具', async () => {
+    const probeClient = new RecordingProbeClient(() => []);
+    const { client } = await createHarness(probeClient, 'reports', { enableWrites: false });
+
+    const result = await client.listTools();
+    expect(result.tools.map((tool) => tool.name)).toEqual(COCOS_READONLY_TOOL_NAMES);
+  });
+
+  it('显式 enableWrites 后注册五个写工具且标注非只读', async () => {
+    const probeClient = new RecordingProbeClient(() => []);
+    const { client } = await createHarness(probeClient, 'reports', { enableWrites: true });
+
+    const result = await client.listTools();
+    expect(result.tools.map((tool) => tool.name)).toEqual([
+      ...COCOS_READONLY_TOOL_NAMES,
+      ...COCOS_WRITE_TOOL_NAMES
+    ]);
+    const writeTools = result.tools.filter((tool) =>
+      (COCOS_WRITE_TOOL_NAMES as readonly string[]).includes(tool.name)
+    );
+    expect(writeTools.every((tool) => tool.annotations?.readOnlyHint === false)).toBe(true);
+    expect(writeTools.every((tool) => tool.annotations?.destructiveHint === true)).toBe(true);
+  });
+
+  it('cocos_write_prepare 校验请求、转发事务并把审计落盘', async () => {
+    const reportRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-mcp-journal-'));
+    temporaryRoots.push(reportRoot);
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+      if (method === 'probe.writePrepare') return writeTransactionResult();
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient, reportRoot, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_write_prepare',
+      arguments: {
+        projectId: 'project-a',
+        transactionId: 'tx-1',
+        idempotencyKey: 'key-1',
+        revision: { document: 'sha256:doc', hierarchy: null, assetDatabase: null, scriptCompilation: null },
+        operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+        save: true,
+        undoGroup: 'rename-node'
+      }
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(probeClient.requests).toContainEqual({
+      method: 'probe.writePrepare',
+      payload: {
+        selector: { projectId: 'project-a', editorInstanceId: 'editor-a' },
+        params: {
+          transactionId: 'tx-1',
+          idempotencyKey: 'key-1',
+          scope: 'current-document',
+          revision: { document: 'sha256:doc', hierarchy: null, assetDatabase: null, scriptCompilation: null },
+          operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+          save: true,
+          undoGroup: 'rename-node'
+        }
+      }
+    });
+    expect(result.structuredContent).toMatchObject({
+      result: { transactionId: 'tx-1', status: 'committed' }
+    });
+    const journal = JSON.parse(
+      (await readFile(join(reportRoot, 'write-journal', 'tx-1.jsonl'), 'utf8')).trim().split('\n')[0]
+    );
+    expect(journal).toMatchObject({
+      transactionId: 'tx-1',
+      idempotencyKey: 'key-1',
+      event: 'cocos_write_prepare',
+      source: 'mcp'
+    });
+  });
+
+  it('缺少幂等键时写请求被拒绝且不转发到 Bridge', async () => {
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient, 'reports', { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_write_prepare',
+      arguments: {
+        projectId: 'project-a',
+        transactionId: 'tx-1',
+        revision: { document: null, hierarchy: null, assetDatabase: null, scriptCompilation: null },
+        operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+        save: true,
+        undoGroup: 'rename-node'
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(probeClient.requests.every((request) => request.method !== 'probe.writePrepare')).toBe(true);
+  });
+
+  it('Bridge 未登记写能力时写工具拒绝执行', async () => {
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient, 'reports', { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_transaction_rollback',
+      arguments: { projectId: 'project-a', transactionId: 'tx-1' }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(probeClient.requests.every((request) => request.method !== 'probe.transactionRollback')).toBe(true);
+  });
+});
+
+function createWriteCapableEditorSession(editorInstanceId: string) {
+  const session = createEditorSession(editorInstanceId);
+  return {
+    ...session,
+    capabilities: [
+      ...session.capabilities,
+      'probe.writePrepare',
+      'probe.writeConfirm',
+      'probe.transactionStatus',
+      'probe.transactionList',
+      'probe.transactionRollback'
+    ]
+  };
+}
+
+function writeTransactionResult() {
+  return {
+    transactionId: 'tx-1',
+    status: 'committed',
+    executedOps: 1,
+    verification: {
+      passed: true,
+      verifiedAt: '2026-07-17T00:00:01.000Z',
+      items: [{ operationIndex: 0, description: '节点重命名', expected: 'NewName', actual: 'NewName', passed: true }]
+    },
+    failure: null,
+    rollbackEvidence: null
+  };
 }

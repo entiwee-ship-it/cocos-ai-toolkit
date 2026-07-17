@@ -183,6 +183,32 @@ node packages/cli/dist/index.js scan-project `
 
 CLI 只允许预定义命令，不提供任意 JavaScript 执行入口。
 
+## 阶段 2 事务式写入命令
+
+写命令走事务管理器：每个事务必须携带 `transactionId`、幂等键和 Revision 前置；
+`scope` 只允许 `current-document`（`source-prefab`/`apply-to-source` 属阶段 3，直接拒绝）。
+
+```powershell
+# 准备写事务（--request 为符合写事务协议的 JSON）
+node packages/cli/dist/index.js write-prepare `
+  --project-id <project-id> `
+  --editor-instance-id <editor-id> `
+  --request '{"transactionId":"tx-1","idempotencyKey":"key-1","scope":"current-document","revision":{"document":null,"hierarchy":null,"assetDatabase":null,"scriptCompilation":null},"operations":[{"type":"node.rename","nodeUuid":"n1","name":"NewName"}],"save":true,"undoGroup":"rename-node"}'
+
+# 确认执行 / 查询状态 / 只列未完成事务 / 回滚
+node packages/cli/dist/index.js write-confirm --project-id <project-id> --transaction-id tx-1
+node packages/cli/dist/index.js transaction-status --project-id <project-id> --transaction-id tx-1
+node packages/cli/dist/index.js transaction-list --project-id <project-id>
+node packages/cli/dist/index.js transaction-rollback --project-id <project-id> --transaction-id tx-1
+```
+
+- 相同幂等键重试返回原事务状态（带 `duplicateOf`），不会重复写入。
+- Revision 前置不一致返回 `REVISION_CONFLICT` 及冲突明细；执行超时标记 `outcome-unknown`，禁止盲目重试。
+- 写事务审计落盘到 `<报告根>/write-journal/<transactionId>.jsonl`（JSONL，含调用来源、参数、验证结果和状态历史）；CLI 默认报告根为 `reports`，可用 `COCOS_AI_REPORT_ROOT` 覆盖。
+
+MCP 写工具（`cocos_write_prepare` 等五个）默认不注册，仅当 MCP Server 以显式 `--enable-writes`
+启动时开放；环境变量无法开启写能力。写工具响应同样按协议 Schema 校验并写入审计。
+
 ## 两阶段 Undo 写探针
 
 写探针只用于隔离 Worktree，节点名必须以 `CocosAiProbe_` 开头：

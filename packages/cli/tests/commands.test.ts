@@ -810,6 +810,150 @@ describe('local readonly commands', () => {
   );
 });
 
+describe('write commands', () => {
+  it('解析 write-prepare 并按协议校验请求', () => {
+    const command = parseCommand([
+      'write-prepare',
+      '--project-id', 'project-1',
+      '--request', writeRequestJson()
+    ]);
+
+    expect(command.command).toBe('write-prepare');
+    expect(toRequest(command)).toEqual(['probe.writePrepare', {
+      selector: { projectId: 'project-1' },
+      params: {
+        transactionId: 'tx-1',
+        idempotencyKey: 'key-1',
+        scope: 'current-document',
+        revision: { document: 'sha256:doc', hierarchy: null, assetDatabase: null, scriptCompilation: null },
+        operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+        save: true,
+        undoGroup: 'rename-node'
+      }
+    }]);
+  });
+
+  it('拒绝缺少幂等键和非法 JSON 的写事务请求', () => {
+    expect(() => parseCommand([
+      'write-prepare',
+      '--project-id', 'project-1',
+      '--request', JSON.stringify({ transactionId: 'tx-1', scope: 'current-document' })
+    ])).toThrow('INVALID_WRITE_REQUEST');
+    expect(() => parseCommand([
+      'write-prepare',
+      '--project-id', 'project-1',
+      '--request', '{not-json'
+    ])).toThrow('INVALID_WRITE_REQUEST_JSON');
+    expect(() => parseCommand([
+      'write-prepare',
+      '--project-id', 'project-1'
+    ])).toThrow('WRITE_REQUEST_REQUIRED');
+  });
+
+  it('拒绝阶段三作用域的写事务请求', () => {
+    expect(() => parseCommand([
+      'write-prepare',
+      '--project-id', 'project-1',
+      '--request', JSON.stringify({
+        transactionId: 'tx-1',
+        idempotencyKey: 'key-1',
+        scope: 'source-prefab',
+        revision: { document: null, hierarchy: null, assetDatabase: null, scriptCompilation: null },
+        operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+        save: true,
+        undoGroup: 'rename-node'
+      })
+    ])).toThrow('INVALID_WRITE_REQUEST');
+  });
+
+  it('解析事务状态、列表、确认和回滚命令', () => {
+    expect(toRequest(parseCommand([
+      'write-confirm', '--project-id', 'project-1', '--transaction-id', 'tx-1'
+    ]))).toEqual(['probe.writeConfirm', {
+      selector: { projectId: 'project-1' },
+      params: { transactionId: 'tx-1' }
+    }]);
+    expect(toRequest(parseCommand([
+      'transaction-status', '--project-id', 'project-1', '--transaction-id', 'tx-1'
+    ]))).toEqual(['probe.transactionStatus', {
+      selector: { projectId: 'project-1' },
+      params: { transactionId: 'tx-1' }
+    }]);
+    expect(toRequest(parseCommand([
+      'transaction-list', '--project-id', 'project-1'
+    ]))).toEqual(['probe.transactionList', {
+      selector: { projectId: 'project-1' },
+      params: {}
+    }]);
+    expect(toRequest(parseCommand([
+      'transaction-rollback', '--project-id', 'project-1', '--transaction-id', 'tx-1'
+    ]))).toEqual(['probe.transactionRollback', {
+      selector: { projectId: 'project-1' },
+      params: { transactionId: 'tx-1' }
+    }]);
+  });
+
+  it('写命令响应按协议校验，缺重读验证的 committed 被拒绝', async () => {
+    const client: FakeClient = {
+      async request() {
+        return {
+          transactionId: 'tx-1',
+          status: 'committed',
+          executedOps: 1,
+          verification: null,
+          failure: null,
+          rollbackEvidence: null
+        };
+      }
+    };
+
+    await expect(cliModule.executeCommand(
+      parseCommand(['write-confirm', '--project-id', 'project-1', '--transaction-id', 'tx-1']),
+      client
+    )).rejects.toThrow('INVALID_WRITE_RESULT');
+  });
+
+  it('写命令把审计条目落盘到授权报告根', async () => {
+    const journalRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-cli-journal-'));
+    try {
+      const client: FakeClient = {
+        async request() {
+          return writeResultPayload();
+        }
+      };
+      const runtime = cliModule as typeof cliModule & {
+        executeCommand: (
+          command: CliCommand,
+          client: FakeClient,
+          prepared?: unknown,
+          options?: { journalRoot?: string }
+        ) => Promise<unknown>;
+      };
+
+      const result = await runtime.executeCommand(
+        parseCommand(['write-prepare', '--project-id', 'project-1', '--request', writeRequestJson()]),
+        client,
+        undefined,
+        { journalRoot }
+      );
+
+      expect(result).toMatchObject({ transactionId: 'tx-1', status: 'committed' });
+      const journal = JSON.parse(
+        (await readFile(join(journalRoot, 'write-journal', 'tx-1.jsonl'), 'utf8')).trim().split('\n')[0]
+      );
+      expect(journal).toMatchObject({
+        transactionId: 'tx-1',
+        idempotencyKey: 'key-1',
+        event: 'write-prepare',
+        source: 'cli'
+      });
+      expect(journal.request).toMatchObject({ transactionId: 'tx-1', undoGroup: 'rename-node' });
+    } finally {
+      await rm(journalRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ProbeClient', () => {
   it('完成 client.hello 后发送控制请求', async () => {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
@@ -1071,5 +1215,32 @@ function createCaptureStream(): { stream: NodeJS.WritableStream; read(): string 
       }
     } as NodeJS.WritableStream,
     read: () => output
+  };
+}
+
+function writeRequestJson(): string {
+  return JSON.stringify({
+    transactionId: 'tx-1',
+    idempotencyKey: 'key-1',
+    scope: 'current-document',
+    revision: { document: 'sha256:doc', hierarchy: null, assetDatabase: null, scriptCompilation: null },
+    operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+    save: true,
+    undoGroup: 'rename-node'
+  });
+}
+
+function writeResultPayload() {
+  return {
+    transactionId: 'tx-1',
+    status: 'committed',
+    executedOps: 1,
+    verification: {
+      passed: true,
+      verifiedAt: '2026-07-17T00:00:01.000Z',
+      items: [{ operationIndex: 0, description: '节点重命名', expected: 'NewName', actual: 'NewName', passed: true }]
+    },
+    failure: null,
+    rollbackEvidence: null
   };
 }

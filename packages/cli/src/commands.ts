@@ -1,3 +1,8 @@
+import {
+  WriteTransactionRequestSchema,
+  type WriteTransactionRequest
+} from '@cocos-ai/protocol';
+
 export type CliCommand =
   | { command: 'editors' }
   | { command: 'state'; projectId: string; editorInstanceId?: string }
@@ -25,7 +30,12 @@ export type CliCommand =
   | { command: 'save-report'; projectId: string; editorInstanceId?: string; sample: string }
   | { command: 'probe-undo-save-prepare'; projectId: string; editorInstanceId?: string; projectPath: string; documentUuid: string; probeName: string }
   | { command: 'probe-undo-save-confirm'; projectId: string; editorInstanceId?: string; transactionId: string; expectedRevision: string }
-  | { command: 'probe-undo-save-status'; projectId: string; editorInstanceId?: string; transactionId: string };
+  | { command: 'probe-undo-save-status'; projectId: string; editorInstanceId?: string; transactionId: string }
+  | { command: 'write-prepare'; projectId: string; editorInstanceId?: string; request: WriteTransactionRequest }
+  | { command: 'write-confirm'; projectId: string; editorInstanceId?: string; transactionId: string }
+  | { command: 'transaction-status'; projectId: string; editorInstanceId?: string; transactionId: string }
+  | { command: 'transaction-list'; projectId: string; editorInstanceId?: string }
+  | { command: 'transaction-rollback'; projectId: string; editorInstanceId?: string; transactionId: string };
 
 interface ParsedArguments {
   command: string;
@@ -69,7 +79,12 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
     'transaction-id',
     'expected-revision'
   ],
-  'probe-undo-save-status': [...PROJECT_SELECTOR_FLAGS, 'transaction-id']
+  'probe-undo-save-status': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
+  'write-prepare': [...PROJECT_SELECTOR_FLAGS, 'request'],
+  'write-confirm': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
+  'transaction-status': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
+  'transaction-list': PROJECT_SELECTOR_FLAGS,
+  'transaction-rollback': [...PROJECT_SELECTOR_FLAGS, 'transaction-id']
 };
 
 /**
@@ -196,8 +211,44 @@ export function parseCommand(argv: string[]): CliCommand {
         ...selector,
         transactionId: requireFlag(flags, 'transaction-id', 'TRANSACTION_ID_REQUIRED')
       };
+    case 'write-prepare':
+      return {
+        command,
+        ...selector,
+        request: readWriteTransactionRequest(requireFlag(flags, 'request', 'WRITE_REQUEST_REQUIRED'))
+      };
+    case 'write-confirm':
+    case 'transaction-status':
+    case 'transaction-rollback':
+      return {
+        command,
+        ...selector,
+        transactionId: requireFlag(flags, 'transaction-id', 'TRANSACTION_ID_REQUIRED')
+      };
+    case 'transaction-list':
+      return { command, ...selector };
     default:
       throw new Error('UNKNOWN_COMMAND');
+  }
+}
+
+/**
+ * 解析并按协议 Schema 校验写事务请求 JSON。
+ *
+ * @param value CLI --request 传入的 JSON 字符串。
+ * @returns 通过协议校验的写事务请求。
+ */
+function readWriteTransactionRequest(value: string): WriteTransactionRequest {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('INVALID_WRITE_REQUEST_JSON');
+  }
+  try {
+    return WriteTransactionRequestSchema.parse(parsed);
+  } catch {
+    throw new Error('INVALID_WRITE_REQUEST');
   }
 }
 

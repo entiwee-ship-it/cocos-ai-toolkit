@@ -26,20 +26,25 @@ export interface McpRuntime {
 export interface McpRuntimeConfig {
   serverUrl: string;
   reportRoot: string;
+  enableWrites: boolean;
 }
 
 /**
- * 从进程环境读取 Probe Server 地址和 MCP 服务端授权报告根。
+ * 从进程环境和启动参数读取 Probe Server 地址、MCP 服务端授权报告根和写能力开关。
+ * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力。
  *
  * @param environment 环境变量键值；缺失值使用本机默认配置。
+ * @param argv 启动参数（不含 node 和入口脚本路径）。
  * @returns 可直接创建 Probe Client 和 MCP Server 的运行配置。
  */
 export function readMcpRuntimeConfig(
-  environment: Readonly<Record<string, string | undefined>> = process.env
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  argv: readonly string[] = process.argv.slice(2)
 ): McpRuntimeConfig {
   return {
     serverUrl: environment.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL,
-    reportRoot: resolve(environment.COCOS_AI_MCP_REPORT_ROOT ?? DEFAULT_REPORT_ROOT)
+    reportRoot: resolve(environment.COCOS_AI_MCP_REPORT_ROOT ?? DEFAULT_REPORT_ROOT),
+    enableWrites: argv.includes('--enable-writes')
   };
 }
 
@@ -81,14 +86,15 @@ export async function startMcpRuntime<TTransport>(options: {
  * @returns 已连接且可关闭的 MCP 运行时。
  */
 export async function runMcpServer(
-  environment: Readonly<Record<string, string | undefined>> = process.env
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  argv: readonly string[] = process.argv.slice(2)
 ): Promise<McpRuntime> {
-  const config = readMcpRuntimeConfig(environment);
+  const config = readMcpRuntimeConfig(environment, argv);
   const probeClient = new ProbeClient(config.serverUrl);
-  const server = createCocosMcpServer({
-    probeClient,
-    reportRoot: config.reportRoot
-  });
+  const server = createCocosMcpServer(
+    { probeClient, reportRoot: config.reportRoot },
+    { enableWrites: config.enableWrites }
+  );
   const transport = new StdioServerTransport();
   return startMcpRuntime({ probeClient, server, transport });
 }

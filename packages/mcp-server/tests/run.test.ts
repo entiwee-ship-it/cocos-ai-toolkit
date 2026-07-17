@@ -79,11 +79,19 @@ describe('Cocos MCP stdio runtime', () => {
       COCOS_AI_MCP_REPORT_ROOT: 'E:/reports/cocos'
     })).toEqual({
       serverUrl: 'ws://127.0.0.1:40000',
-      reportRoot: resolve('E:/reports/cocos')
+      reportRoot: resolve('E:/reports/cocos'),
+      enableWrites: false
     });
     expect(readMcpRuntimeConfig({})).toEqual({
       serverUrl: 'ws://127.0.0.1:32188',
-      reportRoot: resolve('reports')
+      reportRoot: resolve('reports'),
+      enableWrites: false
     });
+  });
+
+  it('写工具仅当显式 --enable-writes 启动参数存在时开放', () => {
+    expect(readMcpRuntimeConfig({}, ['--enable-writes']).enableWrites).toBe(true);
+    expect(readMcpRuntimeConfig({}, []).enableWrites).toBe(false);
+    expect(readMcpRuntimeConfig({ COCOS_AI_MCP_ENABLE_WRITES: 'true' }, []).enableWrites).toBe(false);
   });
 });

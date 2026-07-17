@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
+  appendWriteJournalEntry,
   createAssetManifestHash,
   JsonScanReportWriter,
   parseScanCheckpoint,
@@ -17,8 +18,12 @@ import {
   PrefabGraphEdgeSchema,
   PrefabGraphNodeSchema,
   ProjectCoverageSchema,
+  RevisionPreconditionSchema,
   ScriptAssetRecordSchema,
   UnresolvedItemSchema,
+  WriteOperationSchema,
+  WriteTransactionRequestSchema,
+  WriteTransactionResultSchema,
   type AssetRecord,
   type PrefabGraph,
   type ProjectCoverage
@@ -1510,4 +1515,177 @@ function decodeReportCursor(value: string): ReportCursor {
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true
+} as const;
+
+const WriteTransactionOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  result: WriteTransactionResultSchema
+});
+
+const WriteTransactionListOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  results: z.array(WriteTransactionResultSchema)
+});
+
+const TransactionIdInput = {
+  ...ProjectSelectorInput,
+  transactionId: z.string().min(1)
+};
+
+/**
+ * 阶段二写工具服务。与只读工具共享 Probe Client、编辑器发现和报告根；
+ * 每次写调用都把调用来源、参数、结果写入事务审计。
+ */
+export class CocosWriteToolService {
+  constructor(
+    private readonly options: CocosReadonlyToolServiceOptions,
+    private readonly editors: CocosReadonlyToolService
+  ) {}
+
+  async prepareWrite(input: {
+    projectId: string;
+    editorInstanceId?: string;
+    transactionId: string;
+    idempotencyKey: string;
+    revision: unknown;
+    operations: unknown[];
+    save: boolean;
+    undoGroup: string;
+  }) {
+    const editor = await this.editors.resolveEditor(input);
+    assertCapability(editor, 'probe.writePrepare');
+    const request = WriteTransactionRequestSchema.parse({
+      transactionId: input.transactionId,
+      idempotencyKey: input.idempotencyKey,
+      scope: 'current-document',
+      revision: input.revision,
+      operations: input.operations,
+      save: input.save,
+      undoGroup: input.undoGroup
+    });
+    const result = WriteTransactionResultSchema.parse(await this.options.probeClient.request(
+      'probe.writePrepare',
+      { selector: toSelector(editor), params: request }
+    ));
+    await this.audit('cocos_write_prepare', request, result);
+    return { editor, result };
+  }
+
+  async confirmWrite(input: { projectId: string; editorInstanceId?: string; transactionId: string }) {
+    const editor = await this.editors.resolveEditor(input);
+    assertCapability(editor, 'probe.writeConfirm');
+    const result = WriteTransactionResultSchema.parse(await this.options.probeClient.request(
+      'probe.writeConfirm',
+      { selector: toSelector(editor), params: { transactionId: input.transactionId } }
+    ));
+    await this.audit('cocos_write_confirm', null, result);
+    return { editor, result };
+  }
+
+  async readTransactionStatus(input: { projectId: string; editorInstanceId?: string; transactionId: string }) {
+    const editor = await this.editors.resolveEditor(input);
+    assertCapability(editor, 'probe.transactionStatus');
+    const result = WriteTransactionResultSchema.parse(await this.options.probeClient.request(
+      'probe.transactionStatus',
+      { selector: toSelector(editor), params: { transactionId: input.transactionId } }
+    ));
+    return { editor, result };
+  }
+
+  async listTransactions(input: { projectId: string; editorInstanceId?: string }) {
+    const editor = await this.editors.resolveEditor(input);
+    assertCapability(editor, 'probe.transactionList');
+    const results = WriteTransactionResultSchema.array().parse(await this.options.probeClient.request(
+      'probe.transactionList',
+      { selector: toSelector(editor), params: {} }
+    ));
+    return { editor, results };
+  }
+
+  async rollbackTransaction(input: { projectId: string; editorInstanceId?: string; transactionId: string }) {
+    const editor = await this.editors.resolveEditor(input);
+    assertCapability(editor, 'probe.transactionRollback');
+    const result = WriteTransactionResultSchema.parse(await this.options.probeClient.request(
+      'probe.transactionRollback',
+      { selector: toSelector(editor), params: { transactionId: input.transactionId } }
+    ));
+    await this.audit('cocos_transaction_rollback', null, result);
+    return { editor, result };
+  }
+
+  private async audit(
+    event: string,
+    request: unknown,
+    result: { transactionId: string; status: string; verification: unknown }
+  ): Promise<void> {
+    await appendWriteJournalEntry(this.options.reportRoot, {
+      transactionId: result.transactionId,
+      idempotencyKey: request
+        ? (request as { idempotencyKey: string }).idempotencyKey
+        : '',
+      at: new Date().toISOString(),
+      event,
+      source: 'mcp',
+      request: request ?? undefined,
+      verification: result.verification ?? undefined,
+      details: { status: result.status }
+    });
+  }
+}
+
+/**
+ * 登记阶段二写工具。仅当 MCP 以显式 --enable-writes 启动时由 server.ts 调用；
+ * 默认只读启动路径不经过这里，写工具无法因配置错误而暴露。
+ *
+ * @param server 待登记工具的 MCP Server。
+ * @param service 写事务服务。
+ */
+export function registerCocosWriteTools(server: McpServer, service: CocosWriteToolService): void {
+  server.registerTool('cocos_write_prepare', {
+    description: '准备事务式写入：登记事务、幂等去重并校验 Revision 前置（scope 限当前文档）。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      transactionId: z.string().min(1),
+      idempotencyKey: z.string().min(1),
+      revision: RevisionPreconditionSchema,
+      operations: z.array(WriteOperationSchema).min(1),
+      save: z.boolean(),
+      undoGroup: z.string().min(1)
+    },
+    outputSchema: WriteTransactionOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.prepareWrite(input)));
+
+  server.registerTool('cocos_write_confirm', {
+    description: '确认并执行已准备的事务：复查 Revision 前置、执行写入、保存并重读验证。',
+    inputSchema: TransactionIdInput,
+    outputSchema: WriteTransactionOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.confirmWrite(input)));
+
+  server.registerTool('cocos_transaction_status', {
+    description: '查询单个写事务的当前状态、验证报告和回滚证据。',
+    inputSchema: TransactionIdInput,
+    outputSchema: WriteTransactionOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.readTransactionStatus(input)));
+
+  server.registerTool('cocos_transaction_list', {
+    description: '只列出未完成写事务，供重连恢复入口使用。',
+    inputSchema: ProjectSelectorInput,
+    outputSchema: WriteTransactionListOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.listTransactions(input)));
+
+  server.registerTool('cocos_transaction_rollback', {
+    description: '回滚已提交或已失败的写事务，并返回回滚验证证据。',
+    inputSchema: TransactionIdInput,
+    outputSchema: WriteTransactionOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.rollbackTransaction(input)));
 }

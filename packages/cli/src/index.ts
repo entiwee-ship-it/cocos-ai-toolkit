@@ -5,11 +5,13 @@ import { parseCommand, type CliCommand } from './commands.js';
 import {
   JsonScanReportWriter,
   ProjectScanner,
+  appendWriteJournalEntry,
   parseScanCheckpoint,
   type ProjectScanResult,
   type ReadonlyProbeClient,
   type ScanCheckpoint
 } from '@cocos-ai/core';
+import { WriteTransactionResultSchema } from '@cocos-ai/protocol';
 import { constants } from 'node:fs';
 import {
   access,
@@ -46,10 +48,16 @@ const HELP = `用法:
   cocos-ai-probe probe-undo-save-prepare --project-id <id> --project-path <path> --document-uuid <uuid> --probe-name <name>
   cocos-ai-probe probe-undo-save-confirm --project-id <id> --transaction-id <id> --expected-revision <sha256>
   cocos-ai-probe probe-undo-save-status --project-id <id> --transaction-id <id>
+  cocos-ai-probe write-prepare --project-id <id> --request <json> [--editor-instance-id <id>]
+  cocos-ai-probe write-confirm --project-id <id> --transaction-id <id> [--editor-instance-id <id>]
+  cocos-ai-probe transaction-status --project-id <id> --transaction-id <id> [--editor-instance-id <id>]
+  cocos-ai-probe transaction-list --project-id <id> [--editor-instance-id <id>]
+  cocos-ai-probe transaction-rollback --project-id <id> --transaction-id <id> [--editor-instance-id <id>]
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
-  COCOS_AI_PROBE_TIMEOUT_MS  单次请求等待毫秒数，默认 10000`;
+  COCOS_AI_PROBE_TIMEOUT_MS  单次请求等待毫秒数，默认 10000
+  COCOS_AI_REPORT_ROOT       写事务审计落盘根目录，默认 reports`;
 
 export async function runCli(
   argv: string[],
@@ -180,10 +188,14 @@ export async function prepareScanProject(command: CliCommand): Promise<PreparedS
 export async function executeCommand(
   command: CliCommand,
   client: ReadonlyProbeClient,
-  preparedScan?: PreparedScanProject
+  preparedScan?: PreparedScanProject,
+  options: { journalRoot?: string } = {}
 ): Promise<unknown> {
   if (command.command === 'prefab-graph') {
     return executePrefabGraph(command, client);
+  }
+  if (WRITE_RESULT_COMMANDS.has(command.command)) {
+    return executeWriteCommand(command, client, options);
   }
   if (command.command === 'scan-project') {
     if (!preparedScan) throw new Error('SCAN_PROJECT_NOT_PREPARED');
@@ -222,6 +234,74 @@ export async function executeCommand(
     };
   }
   return client.request(...toRequest(command));
+}
+
+/** 需要协议结果校验的写命令。 */
+const WRITE_RESULT_COMMANDS = new Set([
+  'write-prepare',
+  'write-confirm',
+  'transaction-status',
+  'transaction-list',
+  'transaction-rollback'
+]);
+
+/** 需要写事务审计落盘的命令（状态查询不产生审计）。 */
+const AUDITED_WRITE_COMMANDS = new Set(['write-prepare', 'write-confirm', 'transaction-rollback']);
+
+/**
+ * 执行阶段二写命令：响应按协议 Schema 校验，并把调用来源、参数和结果写入事务审计。
+ *
+ * @param command 已解析的写命令。
+ * @param client 已连接的共享 Client。
+ * @param options.journalRoot 审计落盘的授权报告根，默认 reports 或 COCOS_AI_REPORT_ROOT。
+ * @returns 协议校验后的写事务结果。
+ */
+async function executeWriteCommand(
+  command: CliCommand,
+  client: ReadonlyProbeClient,
+  options: { journalRoot?: string } = {}
+): Promise<unknown> {
+  const result = await client.request(...toRequest(command));
+  const validated = validateWriteCommandResult(command.command, result);
+  if (!AUDITED_WRITE_COMMANDS.has(command.command)) {
+    return validated;
+  }
+
+  const record = Array.isArray(validated) ? undefined : validated;
+  await appendWriteJournalEntry(readJournalRoot(options.journalRoot), {
+    transactionId: command.command === 'write-prepare'
+      ? command.request.transactionId
+      : command.transactionId,
+    idempotencyKey: command.command === 'write-prepare' ? command.request.idempotencyKey : '',
+    at: new Date().toISOString(),
+    event: command.command,
+    source: 'cli',
+    request: command.command === 'write-prepare' ? command.request : undefined,
+    verification: record?.verification ?? undefined,
+    details: record ? { status: record.status } : undefined
+  });
+  return validated;
+}
+
+/**
+ * 按协议校验写命令响应，防止未验证的写结果流出。
+ *
+ * @param command 写命令名。
+ * @param result Bridge 返回的原始载荷。
+ * @returns 协议校验后的结果。
+ */
+function validateWriteCommandResult(command: string, result: unknown): unknown {
+  try {
+    return command === 'transaction-list'
+      ? WriteTransactionResultSchema.array().parse(result)
+      : WriteTransactionResultSchema.parse(result);
+  } catch {
+    throw new Error('INVALID_WRITE_RESULT');
+  }
+}
+
+function readJournalRoot(journalRoot?: string): string {
+  return journalRoot ?? resolve(process.env.COCOS_AI_REPORT_ROOT ?? 'reports');
 }
 
 /**
@@ -340,6 +420,25 @@ export function toRequest(command: CliCommand): [string, unknown] {
       }];
     case 'probe-undo-save-status':
       return ['probe.undoSaveStatus', {
+        selector,
+        params: { transactionId: command.transactionId }
+      }];
+    case 'write-prepare':
+      return ['probe.writePrepare', { selector, params: command.request }];
+    case 'write-confirm':
+      return ['probe.writeConfirm', {
+        selector,
+        params: { transactionId: command.transactionId }
+      }];
+    case 'transaction-status':
+      return ['probe.transactionStatus', {
+        selector,
+        params: { transactionId: command.transactionId }
+      }];
+    case 'transaction-list':
+      return ['probe.transactionList', { selector, params: {} }];
+    case 'transaction-rollback':
+      return ['probe.transactionRollback', {
         selector,
         params: { transactionId: command.transactionId }
       }];
@@ -478,6 +577,10 @@ function errorMessage(code: string): string {
     PROBE_NAME_REQUIRED: '缺少 probe-name',
     TRANSACTION_ID_REQUIRED: '缺少 transaction-id',
     EXPECTED_REVISION_REQUIRED: '缺少 expected-revision',
+    WRITE_REQUEST_REQUIRED: '缺少 request',
+    INVALID_WRITE_REQUEST_JSON: 'request 必须是合法 JSON',
+    INVALID_WRITE_REQUEST: 'request 不符合写事务协议',
+    INVALID_WRITE_RESULT: '写事务结果不符合协议',
     SAMPLE_REQUIRED: '缺少 sample',
     SNAPSHOT_MODE_REQUIRED: '缺少 mode',
     PAGE_SIZE_REQUIRED: '缺少 page-size',
