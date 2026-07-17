@@ -329,11 +329,20 @@ async function debugPrefabLifecycle(request: unknown): Promise<unknown> {
     : [];
 
   const tryAttempt = async (name: string, run: () => Promise<unknown>) => {
+    // 每个候选入口独立限时：消息不可用时可能挂起而非报错，超时按失败留证。
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     try {
-      const result = await run();
+      const result = await Promise.race([
+        run(),
+        new Promise<never>((_resolve, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error('ATTEMPT_TIMEOUT')), 5000);
+        })
+      ]);
       attempts.push({ name, ok: true, result });
     } catch (error) {
       attempts.push({ name, ok: false, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   };
 
