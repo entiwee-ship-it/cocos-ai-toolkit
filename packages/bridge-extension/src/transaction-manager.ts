@@ -182,27 +182,66 @@ export interface WriteTransactionManagerOptions {
   rollback: (transaction: WriteTransactionRecord, context: WriteExecutionContext) => Promise<WriteRollbackEvidence>;
 }
 
+/** 重连恢复时的项目/文档上下文（由 main.ts 按当前编辑器状态提供）。 */
+export interface WriteRecoveryContext {
+  projectPath: string;
+  documentId: string;
+  creatorVersion: string | null;
+}
+
+/** 未完成事务的恢复分类，与设计规格 13.4 对齐。 */
+export type WriteRecoveryClassification =
+  | 'committed'
+  | 'not-executed'
+  | 'rollbackable'
+  | 'manual-recovery-required';
+
+export interface WriteRecoveredTransaction {
+  transactionId: string;
+  classification: WriteRecoveryClassification;
+  state: WriteTransactionState;
+  lastSuccessfulStep: WriteTransactionState | null;
+  recommendedAction: 'none' | 'rollback' | 'manual';
+}
+
+/** 恢复摘要：当前项目、文档、未完成事务、最近成功步骤和推荐安全下一步。不提供从中断点续写入口。 */
+export interface WriteRecoverySummary {
+  project: { path: string; creatorVersion: string | null };
+  document: { documentId: string };
+  unfinishedTransactions: WriteRecoveredTransaction[];
+  lastSuccessfulStep: WriteTransactionState | null;
+  recommendedNextStep: string;
+}
+
 /** 状态机合法转移表；恢复链路（connection-lost/recovering）在 Task 7 接线。 */
 const STATE_TRANSITIONS: Record<WriteTransactionState, WriteTransactionState[]> = {
   draft: ['planned'],
   planned: ['validated'],
   validated: ['locked', 'failed'],
   locked: ['executing', 'failed'],
-  executing: ['saving', 'verifying', 'failed', 'outcome-unknown', 'connection-lost'],
-  saving: ['verifying', 'failed', 'outcome-unknown', 'connection-lost'],
-  verifying: ['committed', 'failed', 'outcome-unknown'],
+  executing: ['saving', 'verifying', 'failed', 'outcome-unknown', 'connection-lost', 'recovering'],
+  saving: ['verifying', 'failed', 'outcome-unknown', 'connection-lost', 'recovering'],
+  verifying: ['committed', 'failed', 'outcome-unknown', 'recovering'],
   committed: ['rolling-back'],
   failed: ['rolling-back'],
   'rolling-back': ['rolled-back', 'manual-recovery-required'],
   'rolled-back': [],
   'connection-lost': ['recovering'],
   'outcome-unknown': ['recovering'],
-  recovering: ['committed', 'rolled-back', 'manual-recovery-required'],
+  recovering: ['committed', 'failed', 'rolled-back', 'manual-recovery-required'],
   'manual-recovery-required': []
 };
 
 /** transactionList 视为未完成的状态：终态（committed/failed/rolled-back）之外的全部。 */
 const FINISHED_STATES: WriteTransactionState[] = ['committed', 'failed', 'rolled-back'];
+
+/** 重连恢复需要处理的状态；validated/locked 尚未执行，可直接 confirm 或等待过期，不参与恢复。 */
+const RECOVERABLE_STATES: WriteTransactionState[] = [
+  'executing', 'saving', 'verifying', 'connection-lost', 'outcome-unknown', 'recovering', 'manual-recovery-required'
+];
+
+/** 推进成功步骤的状态序列，用于恢复摘要的最近成功步骤。 */
+const SUCCESS_STEP_STATES: WriteTransactionState[] = ['validated', 'locked', 'executing', 'saving', 'verifying', 'committed'];
 
 /** 释放文档锁的状态。outcome-unknown 也释放：后续事务靠 Revision 前置兜底冲突，避免文档被永久锁死。 */
 const LOCK_RELEASE_STATES: WriteTransactionState[] = [
@@ -383,6 +422,98 @@ export class WriteTransactionManager {
       .map((record) => toResult(record));
   }
 
+  /**
+   * Bridge 重连后的恢复链路（设计规格 13.4）：比对受影响资源内容指纹，
+   * 把未完成事务分类为 committed / not-executed / rollbackable / manual-recovery-required。
+   * 禁止从中断位置盲目续写：rollbackable 只能经 transactionRollback 收口。
+   *
+   * @param context 当前项目和文档上下文。
+   * @param captureFingerprint 重采受影响文档指纹。
+   * @returns 恢复摘要。
+   */
+  async recover(
+    context: WriteRecoveryContext,
+    captureFingerprint: (documentId: string) => Promise<RevisionFingerprint>
+  ): Promise<WriteRecoverySummary> {
+    const candidates = this.store.list().filter(
+      (record) => !FINISHED_STATES.includes(record.state) && RECOVERABLE_STATES.includes(record.state)
+    );
+    const recovered: WriteRecoveredTransaction[] = [];
+    for (const record of candidates) {
+      recovered.push(await this.recoverRecord(record, captureFingerprint));
+    }
+
+    let lastSuccessfulStep: WriteTransactionState | null = null;
+    let lastSuccessfulAt = '';
+    for (const record of candidates) {
+      const step = readLastSuccessfulStep(record);
+      const at = record.stateHistory[record.stateHistory.length - 1]?.at ?? '';
+      if (step && at >= lastSuccessfulAt) {
+        lastSuccessfulAt = at;
+        lastSuccessfulStep = step;
+      }
+    }
+
+    return {
+      project: { path: context.projectPath, creatorVersion: context.creatorVersion },
+      document: { documentId: context.documentId },
+      unfinishedTransactions: recovered,
+      lastSuccessfulStep,
+      recommendedNextStep: recovered.some((item) => item.recommendedAction === 'manual')
+        ? '存在需人工恢复的事务：先人工核对文档状态，再继续任何写入'
+        : recovered.some((item) => item.recommendedAction === 'rollback')
+          ? '对未完成事务执行 transactionRollback 回滚；禁止从中断点续写'
+          : '无待处理写入，可安全开始新事务'
+    };
+  }
+
+  private async recoverRecord(
+    record: WriteTransactionRecord,
+    captureFingerprint: (documentId: string) => Promise<RevisionFingerprint>
+  ): Promise<WriteRecoveredTransaction> {
+    if (record.state === 'manual-recovery-required') {
+      return toRecoveredTransaction(record, 'manual-recovery-required', 'manual');
+    }
+
+    let updated = record.state === 'recovering' ? record : this.transition(record, 'recovering', 'reconnect');
+    let fingerprint: RevisionFingerprint;
+    try {
+      fingerprint = await captureFingerprint(record.documentId);
+    } catch (error) {
+      updated = this.updateRecord(updated, {
+        failure: { code: 'RECOVERY_FINGERPRINT_FAILED', message: readReason(error), operationIndex: null }
+      });
+      updated = this.transition(updated, 'manual-recovery-required', 'fingerprint-capture-failed');
+      this.releaseDocumentLock(updated);
+      return toRecoveredTransaction(updated, 'manual-recovery-required', 'manual');
+    }
+
+    if (fingerprintMatchesPrecondition(updated.request.revision, fingerprint)) {
+      // 文档指纹仍处基线：写入未落盘或已随编辑器重启丢失，无需回滚。
+      updated = this.updateRecord(updated, {
+        failure: { code: 'WRITE_NOT_EXECUTED', message: '受影响资源指纹仍处基线，写入未生效', operationIndex: null }
+      });
+      updated = this.transition(updated, 'failed', 'not-executed');
+      this.releaseDocumentLock(updated);
+      return toRecoveredTransaction(updated, 'not-executed', 'none');
+    }
+
+    if (updated.verification?.passed) {
+      // 断连前已完成保存且重读验证通过，按已提交收口。
+      updated = this.transition(updated, 'committed', 'recovered-committed');
+      this.releaseDocumentLock(updated);
+      return toRecoveredTransaction(updated, 'committed', 'none');
+    }
+
+    // 指纹已偏离基线但缺少通过的验证：按可回滚收口，只允许经 transactionRollback 处理。
+    updated = this.updateRecord(updated, {
+      failure: { code: 'WRITE_OUTCOME_UNCERTAIN', message: '写入结局未知且指纹已变化，需回滚', operationIndex: null }
+    });
+    updated = this.transition(updated, 'failed', 'rollbackable');
+    this.releaseDocumentLock(updated);
+    return toRecoveredTransaction(updated, 'rollbackable', 'rollback');
+  }
+
   private async performRollback(record: WriteTransactionRecord): Promise<WriteTransactionRecord> {
     let updated = this.transition(record, 'rolling-back', record.failure?.code);
     try {
@@ -512,8 +643,7 @@ export function validateTransactionIdRequest(value: unknown): { transactionId: s
   return { transactionId: readRequiredString(request.transactionId, 'TRANSACTION_ID_REQUIRED') };
 }
 
-function checkRevisionPrecondition(expected: RevisionFingerprint, actual: RevisionFingerprint): void {
-  const conflicts: WriteConflict[] = [];
+function checkRevisionPrecondition(expected: RevisionFingerprint, actual: RevisionFingerprint): void {  const conflicts: WriteConflict[] = [];
   for (const scope of REVISION_SCOPES) {
     const expectedValue = expected[scope];
     if (expectedValue === null) continue;
@@ -536,6 +666,33 @@ function toResult(record: WriteTransactionRecord, duplicateOf?: string): WriteTr
     failure: record.failure,
     rollbackEvidence: record.rollbackEvidence
   };
+}
+
+/** 指纹逐维比对：前置为 null 的维度不参与判定，全部参与维度一致才视为仍处基线。 */
+function fingerprintMatchesPrecondition(expected: RevisionFingerprint, actual: RevisionFingerprint): boolean {
+  return REVISION_SCOPES.every((scope) => expected[scope] === null || expected[scope] === actual[scope]);
+}
+
+function toRecoveredTransaction(
+  record: WriteTransactionRecord,
+  classification: WriteRecoveryClassification,
+  recommendedAction: WriteRecoveredTransaction['recommendedAction']
+): WriteRecoveredTransaction {
+  return {
+    transactionId: record.transactionId,
+    classification,
+    state: record.state,
+    lastSuccessfulStep: readLastSuccessfulStep(record),
+    recommendedAction
+  };
+}
+
+function readLastSuccessfulStep(record: WriteTransactionRecord): WriteTransactionState | null {
+  for (let index = record.stateHistory.length - 1; index >= 0; index -= 1) {
+    const state = record.stateHistory[index].state;
+    if (SUCCESS_STEP_STATES.includes(state)) return state;
+  }
+  return null;
 }
 
 function toWriteFailure(error: unknown): WriteFailure {
