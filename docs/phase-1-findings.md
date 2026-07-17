@@ -1,6 +1,25 @@
 # 阶段 1 最终发现
 
-## 结论：建议 GO（待 Task 12 逐项复核确认）
+## 结论：GO
+
+阶段 1 的 12 项完成标准经 Task 12 逐项复核全部满足，允许进入阶段 2"事务式基础写入"的设计与实施。本 GO 严格限定 Creator 3.8.8，仅覆盖只读能力与真实项目验收，不表示其它 3.8.x 已兼容，也不表示写操作已可用。
+
+逐项复核（证据见本文对应章节与 `reports/phase-1-20260717T020912815Z-a7983452-*`）：
+
+| # | 完成标准 | 结果 |
+| --- | --- | --- |
+| 1 | MCP/CLI 精确选择 Creator 3.8.8 实例 | 满足：editors 列表 + projectId/editorInstanceId 选择，断言版本 3.8.8 |
+| 2 | 资产目录完整、脚本 UUID 稳定映射路径 | 满足：6,711 资产、906 脚本，组件 Schema 步骤验证 scriptUuid 映射 |
+| 3 | 默认/自定义组件完整 Schema、Inspector 元数据、原始状态 | 满足：157,613/157,613 组件解码，自定义组件 Schema 断言通过，includeRaw 保留原始数据 |
+| 4 | MissingScript、失效引用、未知字段不静默丢弃 | 满足：unresolved 机制 66,144 条分类记录；MissingScript 实测 0；未知字段进 rawConsumedKeys/unresolved |
+| 5 | Scene/Prefab 断点续扫、报告含覆盖率与失败原因 | 满足：375/375 处理，同 scanId 恢复证明，报告含 coverage 与 failure code |
+| 6 | Prefab 实例、来源链、FileID、Override 可查询引用图 | 满足：375 节点、3,195 边、最大嵌套 3、Override 33,868 解码 |
+| 7 | 多段 localID 逐层解析、失败指出准确段 | 满足：多段 1,015 个，解析 32,851/32,870（99.94%），19 个失败报告准确失败段 |
+| 8 | MCP 不暴露写工具、大结果摘要分页 | 满足：8 个只读工具、24 项工具测试、有界分页与授权报告根 |
+| 9 | Server 中断恢复独立可重复 JSON 证据 | 满足：before/error/reconnect/recovery 四份证据，同 checkpoint 同 scanId 恢复 |
+| 10 | 隔离与真实项目扫描前后 Git 状态一致 | 满足：Task 10 隔离轮哈希一致；本轮真实项目逐字一致（工具仓库 tmp 事件已修复并验证干净） |
+| 11 | 自动化测试、类型检查、构建、git diff --check 通过 | 满足：262/262 测试，typecheck/build 退出 0，diff --check 通过，仓库无未提交改动 |
+| 12 | 发现文档明确 GO/NO-GO | 满足：本节 |
 
 阶段 1 的完整只读能力已在当前真实 `xy-client`（含未提交内容）上完成全量验收：375 个 Scene/Prefab 全部处理，373 个完整解码，2 个扫描期失败经事后单独重读均证实为瞬时状态、可正常读取。节点、组件、属性、Override 解码率均为 100%，多段 localID 解析率 99.94%，扫描前后真实项目 Git 状态逐字一致。
 

@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过受限 CLI、Probe Server 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件、Undo 和保存语义。
 
-阶段 0 已在真实游戏前端 `xy-client` 的隔离 Git Worktree 和 Cocos Creator 3.8.8 上完成验证，结论为 **GO**。阶段 1 已建立完整只读协议、CLI 和 AI 正式使用的 stdio MCP Server，并已在当前真实 `xy-client`（含未提交内容）上完成无污染全量只读验收扫描：375 个 Scene/Prefab 全部处理，节点、组件、属性、Override 解码率 100%，扫描前后真实项目 Git 状态逐字一致，详见 [阶段 1 最终发现](docs/phase-1-findings.md)；最终 GO/NO-GO 以阶段 1 收口复核为准。
+阶段 0 已在真实游戏前端 `xy-client` 的隔离 Git Worktree 和 Cocos Creator 3.8.8 上完成验证，结论为 **GO**。阶段 1 已建立完整只读协议、CLI 和 AI 正式使用的 stdio MCP Server，并已在当前真实 `xy-client`（含未提交内容）上完成无污染全量只读验收扫描：375 个 Scene/Prefab 全部处理，节点、组件、属性、Override 解码率 100%，扫描前后真实项目 Git 状态逐字一致。阶段 1 收口复核结论为 **GO**（严格限定 Creator 3.8.8），详见 [阶段 1 最终发现](docs/phase-1-findings.md)。
 
 ## 架构
 
