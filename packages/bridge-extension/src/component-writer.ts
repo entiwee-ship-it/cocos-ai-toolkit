@@ -410,7 +410,7 @@ async function requireComponentInfo(
   return info;
 }
 
-function deepEqual(left: unknown, right: unknown): boolean {
+export function deepEqual(left: unknown, right: unknown): boolean {
   if (left === right) return true;
   if (typeof left !== typeof right || left === null || right === null) return false;
   if (Array.isArray(left) || Array.isArray(right)) {
