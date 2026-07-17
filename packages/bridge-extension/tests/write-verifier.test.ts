@@ -42,6 +42,27 @@ describe('saveAndVerifyWriteTransaction', () => {
     });
   });
 
+  it('node.create 按回填的 resultNodeUuid 重读验证', async () => {
+    const dependencies = createDependencies();
+    dependencies.getNodeInfo = async (nodeUuid) => nodeUuid === 'created-1'
+      ? { uuid: 'created-1', name: 'New' }
+      : null;
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [{
+        operation: { type: 'node.create', parentNodeUuid: 'p', name: 'New', resultNodeUuid: 'created-1' },
+        nodeUuid: 'created-1',
+        before: null,
+        after: { uuid: 'created-1', name: 'New' },
+        inverse: [{ type: 'node.delete', nodeUuid: 'created-1' }]
+      }],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({ expected: '节点存在', actual: '节点存在', passed: true });
+  });
+
   it('node.delete 后节点仍可读到时验证失败', async () => {
     const dependencies = createDependencies({ nodeStillExists: true });
     const report = await saveAndVerifyWriteTransaction(

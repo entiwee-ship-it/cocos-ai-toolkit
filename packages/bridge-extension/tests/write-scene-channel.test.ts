@@ -36,8 +36,31 @@ describe('executeWriteSceneOperations', () => {
     expect(evidence[0].inverse).toHaveLength(1);
   });
 
-  it('第三个操作失败时返回 operation-failed 并保留前两个证据', async () => {
-    const dependencies = createDependencies({ failAtType: 'component.enable' });
+  it('为新建节点和组件回填结果 UUID 供重读验证', async () => {
+    const dependencies = createDependencies();
+    const outcome = await executeWriteSceneOperations({
+      operations: [
+        { type: 'node.create', parentNodeUuid: 'p', name: 'New' },
+        { type: 'component.add', nodeUuid: 'n1', componentType: 'cc.Sprite', scriptUuid: null }
+      ],
+      save: false,
+      undoGroup: 'backfill'
+    }, dependencies);
+
+    const evidence = outcome.evidence as Array<{ operation: Record<string, unknown> }>;
+    expect(evidence[0].operation.resultNodeUuid).toBe('n1');
+    expect(evidence[1].operation.resultComponentUuid).toBe('c1');
+    // 已有目标 UUID 的操作不重复回填
+    const outcomeExisting = await executeWriteSceneOperations({
+      operations: [{ type: 'node.rename', nodeUuid: 'keep-me', name: 'X' }],
+      save: false,
+      undoGroup: 'no-backfill'
+    }, dependencies);
+    const evidenceExisting = outcomeExisting.evidence as Array<{ operation: Record<string, unknown> }>;
+    expect(evidenceExisting[0].operation.resultNodeUuid).toBeUndefined();
+  });
+
+  it('第三个操作失败时返回 operation-failed 并保留前两个证据', async () => {    const dependencies = createDependencies({ failAtType: 'component.enable' });
     const outcome = await executeWriteSceneOperations({
       operations: [
         { type: 'node.rename', nodeUuid: 'n1', name: 'NewName' },

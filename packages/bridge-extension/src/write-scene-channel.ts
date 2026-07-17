@@ -43,7 +43,15 @@ export async function executeWriteSceneOperations(
       const result = operation.type.startsWith('node.')
         ? await dependencies.executeNodeOperation(operation)
         : await dependencies.executeComponentOperation(operation);
-      executed.push({ operation, ...result } as VerifiedOperation);
+      // 回填执行结果产生的目标 UUID，重读验证据此定位新建节点/组件。
+      const resultNodeUuid = 'nodeUuid' in result ? result.nodeUuid : null;
+      const resultComponentUuid = 'componentUuid' in result ? result.componentUuid : null;
+      const enrichedOperation = {
+        ...operation,
+        ...(resultNodeUuid && !operation.nodeUuid ? { resultNodeUuid } : {}),
+        ...(resultComponentUuid && !operation.componentUuid ? { resultComponentUuid } : {})
+      };
+      executed.push({ operation: enrichedOperation, ...result } as VerifiedOperation);
     } catch (error) {
       const probeError = error instanceof ProbeError
         ? error
