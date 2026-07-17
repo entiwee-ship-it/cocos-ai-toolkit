@@ -69,7 +69,7 @@ export interface AssetIndexResult {
 }
 
 /**
- * 把 AssetDB 资源列表整理为稳定 UUID 索引、脚本表和可扫描文档表。
+ * 把 AssetDB 资源列表整理为稳定 UUID 索引、脚本表和项目可扫描文档表。
  *
  * @param values AssetDB 已规范化资源记录。
  * @returns 包含资产、脚本、文档、UUID Map 和未解析项的索引。
@@ -149,7 +149,7 @@ export function buildAssetIndex(values: AssetIndexInput[]): AssetIndexResult {
       });
       continue;
     }
-    if (documentType.value) {
+    if (documentType.value && isProjectDocumentAsset(asset)) {
       documents.push({
         assetUuid,
         path: asset.url,
@@ -209,6 +209,16 @@ function isScriptAsset(asset: IndexedAsset): boolean {
     || type.includes('script')
     || importer === 'typescript'
     || importer === 'javascript';
+}
+
+/**
+ * 判断文档资产是否归当前项目所有，避免扫描 Creator 内置只读文档。
+ *
+ * @param asset AssetDB 中的完整资产记录。
+ * @returns 资源是否位于当前项目的 db://assets 命名空间。
+ */
+function isProjectDocumentAsset(asset: IndexedAsset): boolean {
+  return asset.url?.toLowerCase().startsWith('db://assets/') === true;
 }
 
 function classifyDocumentType(asset: IndexedAsset): {

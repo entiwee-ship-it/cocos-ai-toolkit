@@ -213,6 +213,36 @@ describe('buildComponentTypeSchema', () => {
     ]));
     expect(schema.rawClassAttributes).toMatchObject({ type: 'cc.MissingScript' });
   });
+
+  it('内建扩展组件不伪造脚本 UUID 缺口，同时保留未注册自定义组件诊断', () => {
+    for (const className of ['sp.Skeleton', 'dragonBones.ArmatureDisplay']) {
+      const schema = buildComponentTypeSchema({
+        value: {
+          uuid: { value: `${className}-component`, type: 'String' }
+        },
+        type: className,
+        cid: `${className}-type-id`,
+        extends: ['cc.Component', 'cc.Object']
+      });
+
+      expect(schema.unresolved).not.toContainEqual(expect.objectContaining({
+        reason: 'SCRIPT_UUID_MISSING'
+      }));
+    }
+
+    const customSchema = buildComponentTypeSchema({
+      value: {
+        uuid: { value: 'custom-component', type: 'String' }
+      },
+      type: 'UnregisteredCustomComponent',
+      cid: 'custom-type-id',
+      extends: ['cc.Component', 'cc.Object']
+    });
+    expect(customSchema.unresolved).toContainEqual(expect.objectContaining({
+      path: 'scriptUuid',
+      reason: 'SCRIPT_UUID_MISSING'
+    }));
+  });
 });
 
 describe('normalizeSerializedReferences', () => {

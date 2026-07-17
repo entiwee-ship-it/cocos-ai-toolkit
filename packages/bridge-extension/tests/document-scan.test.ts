@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { Buffer } from 'node:buffer';
+import { describe, expect, it, vi } from 'vitest';
 import { DocumentSnapshotSchema } from '../../protocol/src/index.js';
-import { scanCurrentDocument, type DocumentScanSource } from '../src/document-scan.js';
+import {
+  clearDefaultDocumentScanSessions,
+  createDocumentScanSessionStore,
+  scanCurrentDocument,
+  type DocumentScanSource
+} from '../src/document-scan.js';
 
 describe('scanCurrentDocument', () => {
   it('按层级顺序完整读取 74 个节点和 212 个组件，并限制 Creator 查询并发', async () => {
@@ -207,6 +213,82 @@ describe('scanCurrentDocument', () => {
     });
   });
 
+  it('空固定快照从 offset 0 返回空页而不是游标越界', async () => {
+    const sessionStore = createDocumentScanSessionStore();
+    const document = {
+      assetUuid: 'empty-prefab',
+      path: 'db://assets/empty.prefab',
+      filePath: 'E:/project/assets/empty.prefab',
+      documentType: 'prefab' as const
+    };
+    const content = {
+      document: {
+        ...document,
+        available: true,
+        raw: {}
+      },
+      revision: 'empty-revision',
+      mode: 'summary' as const,
+      nodes: [],
+      componentSchemas: [],
+      prefabInstances: [],
+      coverage: {
+        nodes: { total: 0, decoded: 0 },
+        components: { total: 0, decoded: 0 },
+        properties: { total: 0, decoded: 0 },
+        references: { total: 0, resolved: 0 },
+        prefabInstances: { total: 0, resolved: 0 },
+        overrides: { total: 0, decoded: 0 }
+      },
+      unresolved: [],
+      diagnostics: []
+    };
+    const session = sessionStore.create(content, false);
+    const cursor = Buffer.from(JSON.stringify({
+      version: 1,
+      snapshotId: session.snapshotId,
+      revision: content.revision,
+      offset: 0,
+      pageSize: 100,
+      mode: content.mode,
+      includeRaw: false,
+      document
+    }), 'utf8').toString('base64url');
+    const source: DocumentScanSource = {
+      queryNodeTree: async () => {
+        throw new Error('EMPTY_CURSOR_SHOULD_NOT_QUERY_CREATOR');
+      },
+      queryNode: async () => {
+        throw new Error('EMPTY_CURSOR_SHOULD_NOT_QUERY_CREATOR');
+      },
+      queryComponent: async () => {
+        throw new Error('EMPTY_CURSOR_SHOULD_NOT_QUERY_CREATOR');
+      }
+    };
+
+    try {
+      const snapshot = await scanCurrentDocument({ cursor }, source, new Map(), {
+        assetUuid: document.assetUuid,
+        mode: document.documentType,
+        source: 'test',
+        failures: []
+      }, sessionStore);
+
+      expect(() => DocumentSnapshotSchema.parse(snapshot)).not.toThrow();
+      expect(snapshot.page).toEqual({
+        offset: 0,
+        pageSize: 100,
+        totalNodes: 0,
+        nextCursor: null
+      });
+      expect(snapshot.nodes).toEqual([]);
+      expect(snapshot.componentSchemas).toEqual([]);
+      expect(snapshot.prefabInstances).toEqual([]);
+    } finally {
+      sessionStore.dispose();
+    }
+  });
+
   it('文档 Asset UUID 未确认时也不把当前 Prefab 根误计为嵌套实例', async () => {
     const fixture = createDocumentFixture();
     fixture.hierarchy.prefab = {
@@ -286,15 +368,22 @@ describe('scanCurrentDocument', () => {
     ]));
   });
 
-  it('文档内容变化后拒绝旧 cursor，并返回 SCAN_CURSOR_STALE', async () => {
+  it('cursor 固定第一页快照，后续页不重新读取 Creator，新的首屏扫描才观察内容变化', async () => {
     const fixture = createDocumentFixture();
+    let allowQueries = true;
     const source: DocumentScanSource = {
-      queryNodeTree: async () => fixture.hierarchy,
-      queryNode: async (nodeUuid) => readFixtureValue(fixture.nodeDumps, nodeUuid),
-      queryComponent: async (componentUuid) => readFixtureValue(
-        fixture.componentDumps,
-        componentUuid
-      )
+      queryNodeTree: async () => {
+        if (!allowQueries) throw new Error('CURSOR_SHOULD_USE_FIXED_SNAPSHOT');
+        return fixture.hierarchy;
+      },
+      queryNode: async (nodeUuid) => {
+        if (!allowQueries) throw new Error('CURSOR_SHOULD_USE_FIXED_SNAPSHOT');
+        return readFixtureValue(fixture.nodeDumps, nodeUuid);
+      },
+      queryComponent: async (componentUuid) => {
+        if (!allowQueries) throw new Error('CURSOR_SHOULD_USE_FIXED_SNAPSHOT');
+        return readFixtureValue(fixture.componentDumps, componentUuid);
+      }
     };
     const firstPage = await scanCurrentDocument({
       mode: 'full',
@@ -305,16 +394,22 @@ describe('scanCurrentDocument', () => {
       ...originalRootDump,
       name: { value: 'Changed Root' }
     });
+    allowQueries = false;
 
-    await expect(scanCurrentDocument({
+    const secondPage = await scanCurrentDocument({
       cursor: firstPage.page.nextCursor
-    }, source)).rejects.toMatchObject({
-      code: 'SCAN_CURSOR_STALE',
-      details: {
-        expectedRevision: firstPage.revision,
-        currentRevision: expect.any(String)
-      }
-    });
+    }, source);
+
+    expect(secondPage.revision).toBe(firstPage.revision);
+    expect(secondPage.nodes[0].identity.objectUuid).toBe('node-10');
+
+    allowQueries = true;
+    const refreshedFirstPage = await scanCurrentDocument({
+      mode: 'full',
+      pageSize: 10
+    }, source);
+    expect(refreshedFirstPage.revision).not.toBe(firstPage.revision);
+    expect(refreshedFirstPage.nodes[0].name).toBe('Changed Root');
   });
 
   it('内容相同但文档资产身份变化时也拒绝旧 cursor', async () => {
@@ -351,9 +446,240 @@ describe('scanCurrentDocument', () => {
       code: 'SCAN_CURSOR_STALE',
       details: {
         expectedRevision: firstPage.revision,
-        currentRevision: expect.any(String)
+        reason: 'SNAPSHOT_CONTEXT_CHANGED',
+        expectedDocument: { assetUuid: 'document-a' },
+        currentDocument: { assetUuid: 'document-b' }
       }
     });
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    '拒绝非法快照会话 TTL: %s',
+    (ttlMs) => {
+      expect(() => createDocumentScanSessionStore({ ttlMs })).toThrowError(
+        'INVALID_DOCUMENT_SCAN_SESSION_STORE'
+      );
+    }
+  );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY])(
+    '拒绝返回非法时间的快照会话时钟: %s',
+    async (currentTime) => {
+      vi.useFakeTimers();
+      const fixture = createDocumentFixture();
+      const sessionStore = createDocumentScanSessionStore({
+        now: () => currentTime
+      });
+      const source: DocumentScanSource = {
+        queryNodeTree: async () => fixture.hierarchy,
+        queryNode: async () => {
+          throw new Error('SUMMARY_SHOULD_NOT_QUERY_NODE');
+        },
+        queryComponent: async () => {
+          throw new Error('SUMMARY_SHOULD_NOT_QUERY_COMPONENT');
+        }
+      };
+      try {
+        await expect(scanCurrentDocument({
+          mode: 'summary'
+        }, source, new Map(), undefined, sessionStore)).rejects.toMatchObject({
+          code: 'INVALID_DOCUMENT_SCAN_SESSION_STORE',
+          details: { currentTime }
+        });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('默认会话仓库重置后拒绝卸载中的旧扫描，并允许新生命周期继续扫描', async () => {
+    clearDefaultDocumentScanSessions();
+    const fixture = createDocumentFixture();
+    let resolveHierarchy: ((value: unknown) => void) | null = null;
+    const pendingHierarchy = new Promise<unknown>((resolve) => {
+      resolveHierarchy = resolve;
+    });
+    const pendingSource: DocumentScanSource = {
+      queryNodeTree: () => pendingHierarchy,
+      queryNode: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_NODE');
+      },
+      queryComponent: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_COMPONENT');
+      }
+    };
+    const pendingScan = scanCurrentDocument({ mode: 'summary' }, pendingSource);
+
+    clearDefaultDocumentScanSessions();
+    resolveHierarchy?.(fixture.hierarchy);
+
+    await expect(pendingScan).rejects.toMatchObject({
+      code: 'DOCUMENT_SCAN_SESSION_STORE_DISPOSED'
+    });
+
+    const currentSource: DocumentScanSource = {
+      queryNodeTree: async () => fixture.hierarchy,
+      queryNode: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_NODE');
+      },
+      queryComponent: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_COMPONENT');
+      }
+    };
+    const currentSnapshot = await scanCurrentDocument({ mode: 'summary' }, currentSource);
+    expect(currentSnapshot.nodes).toHaveLength(74);
+    clearDefaultDocumentScanSessions();
+  });
+
+  it('clear 主动释放快照会话、取消清理计时器，并让旧 cursor 返回 stale', async () => {
+    vi.useFakeTimers();
+    const fixture = createDocumentFixture();
+    const sessionStore = createDocumentScanSessionStore();
+    const source: DocumentScanSource = {
+      queryNodeTree: async () => fixture.hierarchy,
+      queryNode: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_NODE');
+      },
+      queryComponent: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_COMPONENT');
+      }
+    };
+    try {
+      const firstPage = await scanCurrentDocument({
+        mode: 'summary',
+        pageSize: 10
+      }, source, new Map(), undefined, sessionStore);
+
+      sessionStore.clear();
+
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(scanCurrentDocument({
+        cursor: firstPage.page.nextCursor
+      }, source, new Map(), undefined, sessionStore)).rejects.toMatchObject({
+        code: 'SCAN_CURSOR_STALE',
+        details: { reason: 'SNAPSHOT_SESSION_NOT_FOUND' }
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('快照会话无人继续读写时也按 TTL 定时释放', async () => {
+    vi.useFakeTimers();
+    const fixture = createDocumentFixture();
+    const sessionStore = createDocumentScanSessionStore({
+      ttlMs: 10,
+      now: () => 0
+    });
+    const source: DocumentScanSource = {
+      queryNodeTree: async () => fixture.hierarchy,
+      queryNode: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_NODE');
+      },
+      queryComponent: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_COMPONENT');
+      }
+    };
+    try {
+      const firstPage = await scanCurrentDocument({
+        mode: 'summary',
+        pageSize: 10
+      }, source, new Map(), undefined, sessionStore);
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(scanCurrentDocument({
+        cursor: firstPage.page.nextCursor
+      }, source, new Map(), undefined, sessionStore)).rejects.toMatchObject({
+        code: 'SCAN_CURSOR_STALE',
+        details: { reason: 'SNAPSHOT_SESSION_NOT_FOUND' }
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('快照会话过期后旧 cursor 返回 stale，且不重新读取 Creator', async () => {
+    const fixture = createDocumentFixture();
+    let now = 1000;
+    let hierarchyQueryCount = 0;
+    const sessionStore = createDocumentScanSessionStore({
+      ttlMs: 10,
+      now: () => now
+    });
+    const source: DocumentScanSource = {
+      queryNodeTree: async () => {
+        hierarchyQueryCount += 1;
+        return fixture.hierarchy;
+      },
+      queryNode: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_NODE');
+      },
+      queryComponent: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_COMPONENT');
+      }
+    };
+    const firstPage = await scanCurrentDocument({
+      mode: 'summary',
+      pageSize: 10
+    }, source, new Map(), undefined, sessionStore);
+    now += 11;
+
+    await expect(scanCurrentDocument({
+      cursor: firstPage.page.nextCursor
+    }, source, new Map(), undefined, sessionStore)).rejects.toMatchObject({
+      code: 'SCAN_CURSOR_STALE',
+      details: { reason: 'SNAPSHOT_SESSION_NOT_FOUND' }
+    });
+    expect(hierarchyQueryCount).toBe(1);
+  });
+
+  it('快照会话达到容量上限时逐出最旧会话', async () => {
+    const fixture = createDocumentFixture();
+    let hierarchyQueryCount = 0;
+    const sessionStore = createDocumentScanSessionStore({ maxEntries: 1 });
+    const source: DocumentScanSource = {
+      queryNodeTree: async () => {
+        hierarchyQueryCount += 1;
+        return fixture.hierarchy;
+      },
+      queryNode: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_NODE');
+      },
+      queryComponent: async () => {
+        throw new Error('SUMMARY_SHOULD_NOT_QUERY_COMPONENT');
+      }
+    };
+    const firstPage = await scanCurrentDocument({
+      mode: 'summary',
+      pageSize: 10,
+      document: {
+        assetUuid: 'document-a',
+        path: 'db://assets/ui/A.prefab',
+        filePath: 'E:/project/assets/ui/A.prefab',
+        documentType: 'prefab'
+      }
+    }, source, new Map(), undefined, sessionStore);
+    await scanCurrentDocument({
+      mode: 'summary',
+      pageSize: 10,
+      document: {
+        assetUuid: 'document-b',
+        path: 'db://assets/ui/B.prefab',
+        filePath: 'E:/project/assets/ui/B.prefab',
+        documentType: 'prefab'
+      }
+    }, source, new Map(), undefined, sessionStore);
+
+    await expect(scanCurrentDocument({
+      cursor: firstPage.page.nextCursor
+    }, source, new Map(), undefined, sessionStore)).rejects.toMatchObject({
+      code: 'SCAN_CURSOR_STALE',
+      details: { reason: 'SNAPSHOT_SESSION_NOT_FOUND' }
+    });
+    expect(hierarchyQueryCount).toBe(2);
   });
 
   it('全量扫描期间层级变化时拒绝混合快照', async () => {

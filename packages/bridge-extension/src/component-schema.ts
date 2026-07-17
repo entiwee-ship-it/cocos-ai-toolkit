@@ -41,6 +41,8 @@ const INSPECTOR_METADATA_KEYS = [
   'elementTypeData'
 ] as const;
 
+const BUILT_IN_COMPONENT_CLASS_PREFIXES = ['cc.', 'sp.', 'dragonBones.'] as const;
+
 export interface ComponentPropertySchemaResult {
   propertyPath: string;
   serializedName: string;
@@ -71,6 +73,17 @@ export interface ComponentTypeSchemaResult {
   properties: ComponentPropertySchemaResult[];
   rawClassAttributes: Record<string, unknown>;
   unresolved: Array<{ path: string; reason: string; details?: unknown }>;
+}
+
+/**
+ * 判断组件类是否由 Creator 引擎或内建扩展命名空间提供。
+ *
+ * @param className Creator 注册的组件类名。
+ * @returns `cc`、Spine、DragonBones 等内建组件返回 true。
+ */
+export function isBuiltInComponentClass(className: string | null): boolean {
+  return className !== null
+    && BUILT_IN_COMPONENT_CLASS_PREFIXES.some((prefix) => className.startsWith(prefix));
 }
 
 /**
@@ -121,7 +134,7 @@ export function buildComponentTypeSchema(
       details: { scriptUuid }
     });
   }
-  if (className && !className.startsWith('cc.') && !scriptUuid) {
+  if (className && !isBuiltInComponentClass(className) && !scriptUuid) {
     unresolved.push({
       path: 'scriptUuid',
       reason: 'SCRIPT_UUID_MISSING'

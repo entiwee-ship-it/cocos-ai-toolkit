@@ -74,6 +74,39 @@ describe('buildAssetIndex', () => {
     ]);
   });
 
+  it('保留 Creator 内置资产，但不把 internal Scene 和 Prefab 加入项目文档候选', () => {
+    const result = buildAssetIndex([
+      {
+        uuid: 'internal-scene-uuid',
+        url: 'db://internal/default.scene',
+        file: 'C:/Creator/resources/default.scene',
+        type: 'cc.SceneAsset',
+        importer: 'scene',
+        readonly: true,
+        invalid: false,
+        raw: {}
+      },
+      {
+        uuid: 'project-scene-uuid',
+        url: 'db://assets/main.scene',
+        file: 'E:/project/assets/main.scene',
+        type: 'cc.SceneAsset',
+        importer: 'scene',
+        readonly: false,
+        invalid: false,
+        raw: {}
+      }
+    ]);
+
+    expect(result.assets.map((asset) => asset.assetUuid)).toEqual([
+      'internal-scene-uuid',
+      'project-scene-uuid'
+    ]);
+    expect(result.documents).toEqual([
+      expect.objectContaining({ assetUuid: 'project-scene-uuid', documentType: 'scene' })
+    ]);
+  });
+
   it('保留重复 UUID 和文档类型冲突，且序列化结果不泄漏 Map', () => {
     const result = buildAssetIndex([
       {

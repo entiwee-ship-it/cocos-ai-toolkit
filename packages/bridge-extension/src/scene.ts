@@ -1,4 +1,8 @@
-import { scanCurrentDocument, type DocumentScanRequest } from './document-scan';
+import {
+  clearDefaultDocumentScanSessions,
+  scanCurrentDocument,
+  type DocumentScanRequest
+} from './document-scan';
 import { ProbeError } from './probe-errors';
 import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from './scene-probe';
 import { normalizeProbeProjectPath } from './probe-operation';
@@ -271,7 +275,12 @@ function unwrapRequest(value: unknown): unknown {
 
 export function load(): void {}
 
-export function unload(): void {}
+/**
+ * 卸载 Creator 场景脚本时释放文档快照和清理计时器。
+ */
+export function unload(): void {
+  clearDefaultDocumentScanSessions();
+}
 
 export const methods = {
   probeEditorState: notImplemented,

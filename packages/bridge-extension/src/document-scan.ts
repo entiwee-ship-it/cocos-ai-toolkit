@@ -105,10 +105,12 @@ type DocumentPrefabInstance = ReturnType<typeof normalizePrefabDump> & {
 
 interface DocumentScanCursor {
   version: 1;
+  snapshotId: string;
   revision: string;
   offset: number;
   pageSize: number;
   mode: DocumentScanMode;
+  includeRaw: boolean;
   document: DocumentScanDocument;
 }
 
@@ -145,12 +147,200 @@ export interface DocumentSnapshotResult {
   raw?: unknown;
 }
 
+type DocumentSnapshotContent = Omit<DocumentSnapshotResult, 'page'>;
+
+interface DocumentSnapshotSession {
+  snapshotId: string;
+  includeRaw: boolean;
+  content: DocumentSnapshotContent;
+}
+
+interface StoredDocumentSnapshotSession extends DocumentSnapshotSession {
+  expiresAt: number;
+}
+
+export interface DocumentScanSessionStoreOptions {
+  ttlMs?: number;
+  maxEntries?: number;
+  now?: () => number;
+}
+
+export interface DocumentScanSessionStore {
+  create: (
+    content: DocumentSnapshotContent,
+    includeRaw: boolean
+  ) => DocumentSnapshotSession;
+  read: (snapshotId: string) => DocumentSnapshotSession | null;
+  clear: () => void;
+  dispose: () => void;
+}
+
+const DEFAULT_DOCUMENT_SCAN_SESSION_TTL_MS = 120_000;
+const DEFAULT_DOCUMENT_SCAN_SESSION_MAX_ENTRIES = 2;
+const MAX_DOCUMENT_SCAN_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
+ * 创建固定快照分页会话仓库。
+ *
+ * @param options 会话空闲 TTL、最大快照数和当前时间来源。
+ * @returns 可登记和读取固定文档快照的会话仓库。
+ */
+export function createDocumentScanSessionStore(
+  options: DocumentScanSessionStoreOptions = {}
+): DocumentScanSessionStore {
+  const ttlMs = options.ttlMs ?? DEFAULT_DOCUMENT_SCAN_SESSION_TTL_MS;
+  const maxEntries = options.maxEntries ?? DEFAULT_DOCUMENT_SCAN_SESSION_MAX_ENTRIES;
+  const now = options.now ?? Date.now;
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+    throw new ProbeError('INVALID_DOCUMENT_SCAN_SESSION_STORE', { ttlMs });
+  }
+  if (!Number.isInteger(maxEntries) || maxEntries < 1) {
+    throw new ProbeError('INVALID_DOCUMENT_SCAN_SESSION_STORE', { maxEntries });
+  }
+  const sessions = new Map<string, StoredDocumentSnapshotSession>();
+  let sequence = 0;
+  let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+  let isDisposed = false;
+
+  /**
+   * 读取并校验会话时钟，同时避免系统时钟回拨破坏 TTL 顺序。
+   *
+   * @returns 当前可用于会话过期计算的单调时间。
+   */
+  const readCurrentTime = (): number => {
+    const currentTime = now();
+    if (!Number.isFinite(currentTime)) {
+      throw new ProbeError('INVALID_DOCUMENT_SCAN_SESSION_STORE', { currentTime });
+    }
+    latestTime = Math.max(latestTime, currentTime);
+    return latestTime;
+  };
+
+  const removeExpired = (currentTime: number): void => {
+    for (const [snapshotId, session] of sessions) {
+      if (session.expiresAt <= currentTime) sessions.delete(snapshotId);
+    }
+  };
+
+  /**
+   * 取消当前等待执行的快照释放计时器。
+   */
+  const cancelCleanup = (): void => {
+    if (cleanupTimer === null) return;
+    clearTimeout(cleanupTimer);
+    cleanupTimer = null;
+  };
+
+  /**
+   * 按最早快照的过期时刻安排下一次主动释放。
+   *
+   * @param currentTime 当前会话时钟，用于计算下一次等待时长。
+   */
+  const scheduleCleanup = (currentTime: number): void => {
+    cancelCleanup();
+    let nextExpiresAt: number | null = null;
+    for (const session of sessions.values()) {
+      nextExpiresAt = nextExpiresAt === null
+        ? session.expiresAt
+        : Math.min(nextExpiresAt, session.expiresAt);
+    }
+    if (nextExpiresAt === null) return;
+
+    const delayMs = Math.min(
+      Math.max(nextExpiresAt - currentTime, 0),
+      MAX_DOCUMENT_SCAN_TIMER_DELAY_MS
+    );
+    const scheduledTime = currentTime + delayMs;
+    cleanupTimer = setTimeout(() => {
+      cleanupTimer = null;
+      const observedTime = now();
+      latestTime = Number.isFinite(observedTime)
+        ? Math.max(latestTime, observedTime, scheduledTime)
+        : Math.max(latestTime, scheduledTime);
+      const cleanupTime = latestTime;
+      removeExpired(cleanupTime);
+      scheduleCleanup(cleanupTime);
+    }, delayMs);
+
+    // Node 环境下不让缓存清理计时器阻止测试或扩展进程退出。
+    const timerWithUnref = cleanupTimer as unknown as { unref?: () => void };
+    timerWithUnref.unref?.();
+  };
+
+  return {
+    create: (content, includeRaw) => {
+      if (isDisposed) {
+        throw new ProbeError('DOCUMENT_SCAN_SESSION_STORE_DISPOSED');
+      }
+      const currentTime = readCurrentTime();
+      removeExpired(currentTime);
+      while (sessions.size >= maxEntries) {
+        const oldestSnapshotId = sessions.keys().next().value as string | undefined;
+        if (!oldestSnapshotId) break;
+        sessions.delete(oldestSnapshotId);
+      }
+      sequence += 1;
+      const snapshotId = sha256(stableStringify({
+        revision: content.revision,
+        sequence,
+        createdAt: currentTime
+      }));
+      const session = {
+        snapshotId,
+        includeRaw,
+        content,
+        expiresAt: currentTime + ttlMs
+      };
+      sessions.set(snapshotId, session);
+      scheduleCleanup(currentTime);
+      return session;
+    },
+    read: (snapshotId) => {
+      if (isDisposed) return null;
+      const currentTime = readCurrentTime();
+      removeExpired(currentTime);
+      const session = sessions.get(snapshotId);
+      if (!session) {
+        scheduleCleanup(currentTime);
+        return null;
+      }
+      session.expiresAt = currentTime + ttlMs;
+      sessions.delete(snapshotId);
+      sessions.set(snapshotId, session);
+      scheduleCleanup(currentTime);
+      return session;
+    },
+    clear: () => {
+      sessions.clear();
+      cancelCleanup();
+    },
+    dispose: () => {
+      isDisposed = true;
+      sessions.clear();
+      cancelCleanup();
+    }
+  };
+}
+
+let defaultDocumentScanSessionStore = createDocumentScanSessionStore();
+
+/**
+ * 清理默认文档扫描快照会话及其释放计时器。
+ */
+export function clearDefaultDocumentScanSessions(): void {
+  defaultDocumentScanSessionStore.dispose();
+  defaultDocumentScanSessionStore = createDocumentScanSessionStore();
+}
+
 /**
  * 扫描 Creator 当前打开文档并返回可分页的只读快照。
  *
  * @param request 扫描模式、分页、原始数据和并发配置。
  * @param source Creator Scene 消息读取适配器。
  * @param scriptPathsByUuid 脚本 UUID 到 db 路径的资产索引。
+ * @param documentIdentity Creator 当前可确认的文档身份。
+ * @param sessionStore 固定快照分页会话仓库。
  * @returns 当前文档只读快照。
  */
 export async function scanCurrentDocument(
@@ -162,16 +352,19 @@ export async function scanCurrentDocument(
     mode: null,
     source: null,
     failures: []
-  }
+  },
+  sessionStore: DocumentScanSessionStore = defaultDocumentScanSessionStore
 ): Promise<DocumentSnapshotResult> {
   const cursor = request.cursor ? decodeCursor(request.cursor) : null;
-  const requestedMode = readMode(request.mode);
-  const mode = cursor?.mode ?? requestedMode;
-  const pageSize = readPageSize(request.pageSize ?? cursor?.pageSize);
-  const offset = cursor?.offset ?? 0;
+  if (cursor) {
+    return readSnapshotPageFromCursor(request, cursor, documentIdentity, sessionStore);
+  }
+
+  const mode = readMode(request.mode);
+  const pageSize = readPageSize(request.pageSize);
   const concurrency = readConcurrency(request.concurrency);
   const includeRaw = request.includeRaw === true;
-  const requestedDocument = request.document ?? cursor?.document ?? {
+  const requestedDocument = request.document ?? {
     assetUuid: null,
     path: null,
     filePath: null,
@@ -191,8 +384,7 @@ export async function scanCurrentDocument(
   if (mode === 'summary') {
     const nodes = hierarchyEntries.map(buildHierarchyNodeResult);
     const revision = sha256(stableStringify({ document, hierarchy }));
-    assertCursorRevision(cursor, revision);
-    return {
+    const session = sessionStore.create({
       document: {
         ...document,
         available: true,
@@ -200,20 +392,7 @@ export async function scanCurrentDocument(
       },
       revision,
       mode,
-      page: {
-        offset,
-        pageSize,
-        totalNodes: nodes.length,
-        nextCursor: createNextCursor({
-          revision,
-          offset,
-          pageSize,
-          totalNodes: nodes.length,
-          mode,
-          document
-        })
-      },
-      nodes: nodes.slice(offset, offset + pageSize),
+      nodes,
       componentSchemas: [],
       prefabInstances: [],
       coverage: {
@@ -234,7 +413,8 @@ export async function scanCurrentDocument(
         }
       }],
       ...(includeRaw ? { raw: { hierarchy } } : {})
-    };
+    }, includeRaw);
+    return buildSnapshotPage(session, 0, pageSize);
   }
 
   const nodeDumps = await mapWithConcurrency(
@@ -321,38 +501,7 @@ export async function scanCurrentDocument(
     nodeDumps,
     componentDumps
   }));
-  assertCursorRevision(cursor, revision);
-  const pageNodeUuids = new Set(
-    hierarchyEntries
-      .slice(offset, offset + pageSize)
-      .map((entry) => entry.nodeUuid)
-  );
-  const pageComponentSchemas = componentSchemas.filter((schema) =>
-    pageNodeUuids.has(schema.nodeUuid)
-  );
-  const pagePrefabInstances = prefabInstances.filter((instance) =>
-    instance.instanceRootObjectUuid !== null
-    && pageNodeUuids.has(instance.instanceRootObjectUuid)
-  );
-  const unresolved = buildDocumentUnresolved(requestedDocument, document, documentIdentity);
-  for (let index = 0; index < pageComponentSchemas.length; index += 1) {
-    for (const item of pageComponentSchemas[index].unresolved) {
-      unresolved.push({
-        ...item,
-        path: `componentSchemas.${index}.${item.path}`
-      });
-    }
-  }
-  for (let index = 0; index < pagePrefabInstances.length; index += 1) {
-    for (const item of pagePrefabInstances[index].unresolved) {
-      unresolved.push({
-        ...item,
-        path: `prefabInstances.${index}.${item.path}`
-      });
-    }
-  }
-
-  return {
+  const session = sessionStore.create({
     document: {
       ...document,
       available: true,
@@ -360,22 +509,9 @@ export async function scanCurrentDocument(
     },
     revision,
     mode,
-    page: {
-      offset,
-      pageSize,
-      totalNodes: nodes.length,
-      nextCursor: createNextCursor({
-        revision,
-        offset,
-        pageSize,
-        totalNodes: nodes.length,
-        mode,
-        document
-      })
-    },
-    nodes: nodes.slice(offset, offset + pageSize),
-    componentSchemas: pageComponentSchemas,
-    prefabInstances: pagePrefabInstances,
+    nodes,
+    componentSchemas,
+    prefabInstances,
     coverage: {
       nodes: { total: hierarchyEntries.length, decoded: nodes.length },
       components: { total: componentEntries.length, decoded: componentSchemas.length },
@@ -396,7 +532,7 @@ export async function scanCurrentDocument(
       },
       overrides: { total: overrideCount, decoded: overrideCount }
     },
-    unresolved,
+    unresolved: buildDocumentUnresolved(requestedDocument, document, documentIdentity),
     diagnostics: [{
       code: 'DOCUMENT_SCAN_COMPLETE',
       message: '当前文档只读快照已完成',
@@ -407,7 +543,158 @@ export async function scanCurrentDocument(
       }
     }],
     ...(includeRaw ? { raw: { hierarchy, nodeDumps, componentDumps } } : {})
+  }, includeRaw);
+  return buildSnapshotPage(session, 0, pageSize);
+}
+
+/**
+ * 从 cursor 绑定的固定快照返回下一页，不重新读取 Creator 动态 Dump。
+ *
+ * @param request 当前分页请求，用于校验显式文档和模式没有跨会话变化。
+ * @param cursor 已解码的快照 cursor。
+ * @param documentIdentity Creator 当前可确认的文档身份。
+ * @param sessionStore 固定快照分页会话仓库。
+ * @returns cursor 指向的固定快照页。
+ */
+function readSnapshotPageFromCursor(
+  request: DocumentScanRequest,
+  cursor: DocumentScanCursor,
+  documentIdentity: DocumentIdentityEvidence,
+  sessionStore: DocumentScanSessionStore
+): DocumentSnapshotResult {
+  const session = sessionStore.read(cursor.snapshotId);
+  if (!session) {
+    throw new ProbeError('SCAN_CURSOR_STALE', {
+      expectedRevision: cursor.revision,
+      reason: 'SNAPSHOT_SESSION_NOT_FOUND'
+    });
+  }
+  assertCursorContext(request, cursor, session, documentIdentity);
+  return buildSnapshotPage(session, cursor.offset, cursor.pageSize);
+}
+
+/**
+ * 校验 cursor 与已登记快照、显式请求和当前文档身份仍属于同一分页会话。
+ *
+ * @param request 当前分页请求。
+ * @param cursor 已解码的快照 cursor。
+ * @param session cursor 指向的固定快照会话。
+ * @param documentIdentity Creator 当前可确认的文档身份。
+ */
+function assertCursorContext(
+  request: DocumentScanRequest,
+  cursor: DocumentScanCursor,
+  session: DocumentSnapshotSession,
+  documentIdentity: DocumentIdentityEvidence
+): void {
+  const sessionDocument = readSnapshotDocument(session.content);
+  const requestedDocument = request.document
+    ? mergeDocumentIdentity(request.document, documentIdentity)
+    : documentIdentity.assetUuid
+      ? mergeDocumentIdentity(cursor.document, documentIdentity)
+      : cursor.document;
+  const contextMatches = session.content.revision === cursor.revision
+    && session.content.mode === cursor.mode
+    && session.includeRaw === cursor.includeRaw
+    && documentsEqual(sessionDocument, cursor.document)
+    && documentsEqual(requestedDocument, cursor.document)
+    && (request.mode === undefined || readMode(request.mode) === cursor.mode)
+    && (request.includeRaw === undefined || (request.includeRaw === true) === cursor.includeRaw);
+  if (!contextMatches) {
+    throw new ProbeError('SCAN_CURSOR_STALE', {
+      expectedRevision: cursor.revision,
+      reason: 'SNAPSHOT_CONTEXT_CHANGED',
+      expectedDocument: cursor.document,
+      currentDocument: requestedDocument
+    });
+  }
+}
+
+/**
+ * 从固定快照切出一页节点，以及这些节点对应的组件和 Prefab 实例。
+ *
+ * @param session 已登记的完整快照会话。
+ * @param offset 当前页起始节点下标。
+ * @param pageSize 当前页大小。
+ * @returns 不触发 Creator 查询的分页快照。
+ */
+function buildSnapshotPage(
+  session: DocumentSnapshotSession,
+  offset: number,
+  pageSize: number
+): DocumentSnapshotResult {
+  const { content } = session;
+  const offsetOutOfRange = content.nodes.length === 0
+    ? offset !== 0
+    : offset >= content.nodes.length;
+  if (offset < 0 || offsetOutOfRange) {
+    throw new ProbeError('INVALID_DOCUMENT_SCAN_CURSOR', {
+      reason: 'CURSOR_OFFSET_OUT_OF_RANGE',
+      offset,
+      totalNodes: content.nodes.length
+    });
+  }
+  const pageNodes = content.nodes.slice(offset, offset + pageSize);
+  const pageNodeUuids = new Set(pageNodes.map((node) => node.identity.objectUuid));
+  const pageComponentSchemas = content.componentSchemas.filter((schema) =>
+    pageNodeUuids.has(schema.nodeUuid)
+  );
+  const pagePrefabInstances = content.prefabInstances.filter((instance) =>
+    instance.instanceRootObjectUuid !== null
+    && pageNodeUuids.has(instance.instanceRootObjectUuid)
+  );
+  const unresolved = [...content.unresolved];
+  for (let index = 0; index < pageComponentSchemas.length; index += 1) {
+    for (const item of pageComponentSchemas[index].unresolved) {
+      unresolved.push({
+        ...item,
+        path: `componentSchemas.${index}.${item.path}`
+      });
+    }
+  }
+  for (let index = 0; index < pagePrefabInstances.length; index += 1) {
+    for (const item of pagePrefabInstances[index].unresolved) {
+      unresolved.push({
+        ...item,
+        path: `prefabInstances.${index}.${item.path}`
+      });
+    }
+  }
+
+  return {
+    ...content,
+    page: {
+      offset,
+      pageSize,
+      totalNodes: content.nodes.length,
+      nextCursor: createNextCursor({
+        session,
+        offset,
+        pageSize,
+        totalNodes: content.nodes.length
+      })
+    },
+    nodes: pageNodes,
+    componentSchemas: pageComponentSchemas,
+    prefabInstances: pagePrefabInstances,
+    unresolved
   };
+}
+
+function readSnapshotDocument(content: DocumentSnapshotContent): DocumentScanDocument {
+  return {
+    assetUuid: content.document.assetUuid,
+    path: content.document.path,
+    filePath: content.document.filePath,
+    documentType: content.document.documentType
+  };
+}
+
+function documentsEqual(left: DocumentScanDocument, right: DocumentScanDocument): boolean {
+  return left.assetUuid === right.assetUuid
+    && left.path === right.path
+    && left.filePath === right.filePath
+    && left.documentType === right.documentType;
 }
 
 /**
@@ -437,6 +724,8 @@ function decodeCursor(value: string): DocumentScanCursor {
     const document = readObject(cursor.document);
     if (
       cursor.version !== 1
+      || typeof cursor.snapshotId !== 'string'
+      || cursor.snapshotId.length === 0
       || typeof cursor.revision !== 'string'
       || cursor.revision.length === 0
       || !Number.isInteger(cursor.offset)
@@ -445,6 +734,7 @@ function decodeCursor(value: string): DocumentScanCursor {
       || (cursor.pageSize as number) < 1
       || (cursor.pageSize as number) > 500
       || (cursor.mode !== 'summary' && cursor.mode !== 'full')
+      || typeof cursor.includeRaw !== 'boolean'
       || !('assetUuid' in document)
       || (document.assetUuid !== null && typeof document.assetUuid !== 'string')
       || !('path' in document)
@@ -462,10 +752,12 @@ function decodeCursor(value: string): DocumentScanCursor {
     }
     return {
       version: 1,
+      snapshotId: cursor.snapshotId as string,
       revision: cursor.revision as string,
       offset: cursor.offset as number,
       pageSize: cursor.pageSize as number,
       mode: cursor.mode as DocumentScanMode,
+      includeRaw: cursor.includeRaw as boolean,
       document: document as unknown as DocumentScanDocument
     };
   } catch (error) {
@@ -478,52 +770,32 @@ function decodeCursor(value: string): DocumentScanCursor {
 /**
  * 在仍有后续节点时生成绑定 Revision 的下一页 cursor。
  *
- * @param state 当前 Revision、分页位置、页大小、节点总数和扫描模式。
- * @param state.revision 当前文档内容 Revision。
+ * @param state 当前快照会话、分页位置、页大小和节点总数。
+ * @param state.session 当前固定快照会话。
  * @param state.offset 当前页起始节点下标。
  * @param state.pageSize 当前页大小。
  * @param state.totalNodes 当前文档节点总数。
- * @param state.mode 当前扫描模式。
- * @param state.document 当前扫描文档的稳定资产身份。
  * @returns 下一页 cursor；已经到末页时返回 null。
  */
 function createNextCursor(state: {
-  revision: string;
+  session: DocumentSnapshotSession;
   offset: number;
   pageSize: number;
   totalNodes: number;
-  mode: DocumentScanMode;
-  document: DocumentScanDocument;
 }): string | null {
   const nextOffset = state.offset + state.pageSize;
   if (nextOffset >= state.totalNodes) return null;
   const cursor: DocumentScanCursor = {
     version: 1,
-    revision: state.revision,
+    snapshotId: state.session.snapshotId,
+    revision: state.session.content.revision,
     offset: nextOffset,
     pageSize: state.pageSize,
-    mode: state.mode,
-    document: state.document
+    mode: state.session.content.mode,
+    includeRaw: state.session.includeRaw,
+    document: readSnapshotDocument(state.session.content)
   };
   return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
-}
-
-/**
- * 校验 cursor 绑定的 Revision 是否仍等于当前文档内容。
- *
- * @param cursor 当前分页 cursor；首屏请求为 null。
- * @param revision 本次重新读取后计算出的 Revision。
- */
-function assertCursorRevision(
-  cursor: DocumentScanCursor | null,
-  revision: string
-): void {
-  if (cursor && cursor.revision !== revision) {
-    throw new ProbeError('SCAN_CURSOR_STALE', {
-      expectedRevision: cursor.revision,
-      currentRevision: revision
-    });
-  }
 }
 
 /**

@@ -169,11 +169,14 @@ export function buildPrefabGraphFromSnapshots(snapshots: PrefabDocumentSnapshotI
     });
   }
 
-  // 第二遍按 instanceChain 把扁平实例重新归属到真实父 Prefab，并去除重复来源边。
+  // 第二遍把实例归属到当前扫描文档。源 Prefab 自身的静态嵌套关系由其独立
+  // 文档快照提供，不能把其它文档上下文中的嵌套实例回写到共享源 Prefab。
   for (let documentIndex = 0; documentIndex < snapshots.length; documentIndex += 1) {
     const snapshot = snapshots[documentIndex];
     const ownerAssetUuid = snapshot.document.assetUuid;
     if (!ownerAssetUuid || !snapshot.document.documentType) continue;
+    const ownerDocument = documentsByAsset.get(ownerAssetUuid);
+    if (!ownerDocument) continue;
     for (let instanceIndex = 0; instanceIndex < (snapshot.prefabInstances?.length ?? 0); instanceIndex += 1) {
       const instance = snapshot.prefabInstances?.[instanceIndex];
       if (!instance) continue;
@@ -187,30 +190,34 @@ export function buildPrefabGraphFromSnapshots(snapshots: PrefabDocumentSnapshotI
         });
         continue;
       }
+      const instanceFileId = instance.instanceFileId ?? null;
+      if (!instanceFileId) {
+        diagnostics.push({
+          code: 'PREFAB_INSTANCE_FILE_ID_MISSING',
+          message: `${ownerAssetUuid} 的第 ${instanceIndex} 个 Prefab 记录缺少实例 FileID，未建立来源边`,
+          severity: 'warning',
+          details: {
+            ownerAssetUuid,
+            sourceAssetUuid,
+            instanceIndex,
+            hostNodePath: instance.hostNodePath ?? null
+          }
+        });
+        continue;
+      }
       const chain = instance.instanceChain ?? [];
-      let sourceIndex = -1;
+      let sourceDepth = 1;
       for (let index = chain.length - 1; index >= 0; index -= 1) {
         if (chain[index].assetUuid === sourceAssetUuid) {
-          sourceIndex = index;
+          sourceDepth = chain[index].depth;
           break;
         }
       }
-      const parentAssetUuid = sourceIndex > 0
-        ? chain[sourceIndex - 1].assetUuid
-        : ownerAssetUuid;
-      const parentDocument = documentsByAsset.get(parentAssetUuid) ?? {
-        assetUuid: parentAssetUuid,
-        path: null,
-        documentType: 'prefab' as const,
-        targets: [],
-        instances: []
-      };
-      documentsByAsset.set(parentAssetUuid, parentDocument);
       const normalizedInstance: PrefabInstanceInput = {
         sourceAssetUuid,
-        depth: sourceIndex >= 0 ? chain[sourceIndex].depth : 1,
+        depth: sourceDepth,
         instanceRootObjectUuid: instance.instanceRootObjectUuid ?? null,
-        instanceFileId: instance.instanceFileId ?? null,
+        instanceFileId,
         sourceObjectFileId: instance.sourceObjectFileId ?? null,
         hostNodePath: instance.hostNodePath ?? null,
         propertyOverrides: instance.propertyOverrides ?? [],
@@ -219,12 +226,12 @@ export function buildPrefabGraphFromSnapshots(snapshots: PrefabDocumentSnapshotI
         mountedComponents: instance.mountedComponents ?? [],
         removedComponents: instance.removedComponents ?? []
       };
-      const instances = parentDocument.instances ?? [];
+      const instances = ownerDocument.instances ?? [];
       const key = createInstanceKey(normalizedInstance);
       if (key === null || !instances.some((candidate) => createInstanceKey(candidate) === key)) {
         instances.push(normalizedInstance);
       }
-      parentDocument.instances = instances;
+      ownerDocument.instances = instances;
     }
   }
   const graph = buildPrefabGraph([...documentsByAsset.values()]);
@@ -309,7 +316,6 @@ export function buildPrefabGraph(documents: PrefabDocumentInput[]): PrefabGraph 
     const instances = readInstances(document);
     for (const instance of instances) {
       addInstanceTarget(documentMap, instance, diagnostics, document.assetUuid);
-      addInstanceTarget(targetMaps, instance, diagnostics, document.assetUuid);
     }
     targetMapsByAsset[document.assetUuid] = documentMap;
     collectEdges(
@@ -325,15 +331,20 @@ export function buildPrefabGraph(documents: PrefabDocumentInput[]): PrefabGraph 
   }
 
   detectGraphCycles(edges, diagnostics);
-
-  return {
+  const graph: PrefabGraph = {
     nodes: [...nodes.values()],
     edges,
     targetMaps,
     targetMapsByAsset,
-    blocked: diagnostics.some((diagnostic) => diagnostic.code === 'PREFAB_GRAPH_CYCLE' && diagnostic.severity === 'error'),
+    blocked: false,
     diagnostics
   };
+  collectOverrideResolutionDiagnostics(documents, graph, diagnostics);
+  graph.blocked = diagnostics.some((diagnostic) =>
+    diagnostic.code === 'PREFAB_GRAPH_CYCLE'
+    && diagnostic.severity === 'error'
+  );
+  return graph;
 }
 
 /**
@@ -401,11 +412,11 @@ export function resolveGraphTargetPath(
   let currentMap = graph.targetMapsByAsset[currentAssetUuid];
   for (let index = 0; index < input.length; index += 1) {
     const localId = input[index];
-    const target = currentMap?.targets[localId];
-    if (!target) {
-      return { target: null, localIds: input, failedSegmentIndex: index };
-    }
     if (index === input.length - 1) {
+      const target = currentMap?.targets[localId];
+      if (!target) {
+        return { target: null, localIds: input, failedSegmentIndex: index };
+      }
       return {
         target: { assetUuid: target.assetUuid, fileId: target.fileId },
         localIds: input,
@@ -413,28 +424,171 @@ export function resolveGraphTargetPath(
       };
     }
 
-    const edge = graph.edges.find((candidate) =>
-      candidate.fromAssetUuid === currentAssetUuid
-      && candidate.toAssetUuid === target.assetUuid
-      && (candidate.instanceFileId === localId || candidate.sourceObjectFileId === localId)
-    );
-    if (!edge) {
-      return { target: null, localIds: input, failedSegmentIndex: index + 1 };
+    const nextAssetUuid = resolveTransitionAssetUuid(graph, currentAssetUuid, localId);
+    if (!nextAssetUuid) {
+      return { target: null, localIds: input, failedSegmentIndex: index };
     }
-
-    const inlineChildMap = currentMap.children[localId];
-    if (inlineChildMap && Object.keys(inlineChildMap.targets).length > 0) {
-      currentMap = inlineChildMap;
-      currentAssetUuid = edge.toAssetUuid;
-      continue;
-    }
-    currentAssetUuid = edge.toAssetUuid;
+    currentAssetUuid = nextAssetUuid;
     currentMap = graph.targetMapsByAsset[currentAssetUuid];
     if (!currentMap) {
       return { target: null, localIds: input, failedSegmentIndex: index + 1 };
     }
   }
   return { target: null, localIds: input, failedSegmentIndex: input.length - 1 };
+}
+
+interface PrefabTransitionIndex {
+  byInstanceFileId: Map<string, Set<string>>;
+  bySourceObjectFileId: Map<string, Set<string>>;
+}
+
+const transitionIndexCache = new WeakMap<object, PrefabTransitionIndex>();
+
+/**
+ * 在当前资产上下文中选择唯一的下一层 Prefab 资源。
+ *
+ * Creator 3.8.8 的多段 targetInfo.localID 使用 PrefabInstance FileID 作为中间
+ * 段。旧样本中的源对象 FileID 仅作为无实例 FileID 命中时的兼容回退；任一索引
+ * 指向多个源资源时保持失败，不能按边顺序猜测。
+ *
+ * @param graph Prefab 图。
+ * @param fromAssetUuid 当前解析所在资产 UUID。
+ * @param localId 当前中间 localID 段。
+ * @returns 唯一下一层资源 UUID；缺失或歧义时返回 null。
+ */
+function resolveTransitionAssetUuid(
+  graph: Pick<PrefabGraph, 'edges' | 'targetMapsByAsset'>,
+  fromAssetUuid: string,
+  localId: string
+): string | null {
+  const index = getTransitionIndex(graph);
+  const key = createTransitionKey(fromAssetUuid, localId);
+  const byInstance = index.byInstanceFileId.get(key);
+  if (byInstance && byInstance.size > 0) {
+    return byInstance.size === 1 ? [...byInstance][0] : null;
+  }
+  const bySourceObject = index.bySourceObjectFileId.get(key);
+  return bySourceObject?.size === 1 ? [...bySourceObject][0] : null;
+}
+
+/**
+ * 为单个 Prefab 图建立可复用的实例跳转索引。
+ *
+ * @param graph 待索引的 Prefab 图。
+ * @returns 按宿主资产和 FileID 分组的目标资源集合。
+ */
+function getTransitionIndex(
+  graph: Pick<PrefabGraph, 'edges' | 'targetMapsByAsset'>
+): PrefabTransitionIndex {
+  const cached = transitionIndexCache.get(graph);
+  if (cached) return cached;
+  const index: PrefabTransitionIndex = {
+    byInstanceFileId: new Map(),
+    bySourceObjectFileId: new Map()
+  };
+  for (const edge of graph.edges) {
+    if (edge.instanceFileId) {
+      addTransitionTarget(
+        index.byInstanceFileId,
+        createTransitionKey(edge.fromAssetUuid, edge.instanceFileId),
+        edge.toAssetUuid
+      );
+    }
+    if (edge.sourceObjectFileId) {
+      addTransitionTarget(
+        index.bySourceObjectFileId,
+        createTransitionKey(edge.fromAssetUuid, edge.sourceObjectFileId),
+        edge.toAssetUuid
+      );
+    }
+  }
+  transitionIndexCache.set(graph, index);
+  return index;
+}
+
+function addTransitionTarget(
+  index: Map<string, Set<string>>,
+  key: string,
+  assetUuid: string
+): void {
+  const targets = index.get(key) ?? new Set<string>();
+  targets.add(assetUuid);
+  index.set(key, targets);
+}
+
+function createTransitionKey(assetUuid: string, fileId: string): string {
+  return `${assetUuid}\u0000${fileId}`;
+}
+
+/**
+ * 逐条验证 Property Override 的 localID，并把覆盖率和失败段写入图诊断。
+ *
+ * @param documents 已归一化的文档和实例输入。
+ * @param graph 已建立完成的 Prefab 图。
+ * @param diagnostics 图诊断收集器。
+ */
+function collectOverrideResolutionDiagnostics(
+  documents: PrefabDocumentInput[],
+  graph: PrefabGraph,
+  diagnostics: PrefabGraphDiagnostic[]
+): void {
+  let total = 0;
+  let singleSegment = 0;
+  let multiSegment = 0;
+  let resolved = 0;
+  let failed = 0;
+
+  for (const document of documents) {
+    const pending = [...readInstances(document)];
+    while (pending.length > 0) {
+      const instance = pending.shift();
+      if (!instance) continue;
+      pending.push(...readInstances(instance));
+      for (let overrideIndex = 0; overrideIndex < (instance.propertyOverrides?.length ?? 0); overrideIndex += 1) {
+        const localIds = readOverrideTargetLocalIds(instance.propertyOverrides?.[overrideIndex]);
+        total += 1;
+        if (localIds.length === 1) singleSegment += 1;
+        if (localIds.length > 1) multiSegment += 1;
+        const resolution = resolveGraphTargetPath(instance.sourceAssetUuid, localIds, graph);
+        if (resolution.target) {
+          resolved += 1;
+          continue;
+        }
+        failed += 1;
+        diagnostics.push({
+          code: 'PREFAB_TARGET_LOCAL_ID_UNRESOLVED',
+          message: `${document.assetUuid} 的 Prefab Override 无法解析 targetInfo.localID`,
+          severity: 'warning',
+          details: {
+            ownerAssetUuid: document.assetUuid,
+            sourceAssetUuid: instance.sourceAssetUuid,
+            instanceFileId: instance.instanceFileId ?? null,
+            hostNodePath: instance.hostNodePath ?? null,
+            overrideIndex,
+            localIds: resolution.localIds,
+            failedSegmentIndex: resolution.failedSegmentIndex
+          }
+        });
+      }
+    }
+  }
+
+  if (total === 0) return;
+  diagnostics.push({
+    code: 'PREFAB_TARGET_LOCAL_ID_RESOLUTION_SUMMARY',
+    message: `Prefab Override localID 已解析 ${resolved}/${total}`,
+    severity: 'info',
+    details: { total, singleSegment, multiSegment, resolved, failed }
+  });
+}
+
+function readOverrideTargetLocalIds(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return [];
+  const localIds = (value as { targetLocalIds?: unknown }).targetLocalIds;
+  if (!Array.isArray(localIds) || !localIds.every((item) => typeof item === 'string')) {
+    return [];
+  }
+  return [...localIds];
 }
 
 /**
@@ -503,6 +657,19 @@ function collectEdges(
   documentByAsset: Map<string, PrefabDocumentInput>
 ): void {
   for (const instance of instances) {
+    if (!instance.instanceFileId) {
+      diagnostics.push({
+        code: 'PREFAB_INSTANCE_FILE_ID_MISSING',
+        message: `${fromAssetUuid} 中指向 ${instance.sourceAssetUuid} 的 Prefab 记录缺少实例 FileID，未建立来源边`,
+        severity: 'warning',
+        details: {
+          ownerAssetUuid: fromAssetUuid,
+          sourceAssetUuid: instance.sourceAssetUuid,
+          hostNodePath: instance.hostNodePath ?? null
+        }
+      });
+      continue;
+    }
     const toAssetUuid = instance.sourceAssetUuid;
     if (!nodes.has(toAssetUuid)) {
       const referencedDocument = documentByAsset.get(toAssetUuid);
@@ -567,20 +734,19 @@ function addInstanceTarget(
   diagnostics: PrefabGraphDiagnostic[],
   ownerAssetUuid: string
 ): void {
-  const sourceObjectFileId = instance.sourceObjectFileId;
-  if (!sourceObjectFileId) return;
+  const instanceFileId = instance.instanceFileId;
+  if (!instanceFileId) return;
+  const sourceObjectFileId = instance.sourceObjectFileId ?? instanceFileId;
   const target: PrefabTarget = {
     assetUuid: instance.sourceAssetUuid,
     fileId: sourceObjectFileId,
     nodePath: instance.hostNodePath ?? null
   };
-  addTarget(map, sourceObjectFileId, target, diagnostics, ownerAssetUuid);
-  if (instance.instanceFileId) addTarget(map, instance.instanceFileId, target, diagnostics, ownerAssetUuid);
-  const childMap = map.children[sourceObjectFileId] ?? createTargetMap();
-  map.children[sourceObjectFileId] = childMap;
-  if (instance.instanceFileId) map.children[instance.instanceFileId] = childMap;
+  addTarget(map, instanceFileId, target, diagnostics, ownerAssetUuid);
+  const childMap = map.children[instanceFileId] ?? createTargetMap();
+  map.children[instanceFileId] = childMap;
   for (const nested of readInstances(instance)) {
-    addInstanceTarget(childMap, nested, diagnostics, ownerAssetUuid);
+    addInstanceTarget(childMap, nested, diagnostics, instance.sourceAssetUuid);
   }
 }
 

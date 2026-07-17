@@ -90,15 +90,15 @@ describe('prefab graph', () => {
     ]);
 
     expect(resolveGraphTargetPath(
-      'page-prefab',
-      ['goods-root', 'button-node'],
+      'goods-card-prefab',
+      ['button-instance', 'button-node'],
       graph
     )).toEqual({
       target: {
         assetUuid: 'button-prefab',
         fileId: 'button-node'
       },
-      localIds: ['goods-root', 'button-node'],
+      localIds: ['button-instance', 'button-node'],
       failedSegmentIndex: null
     });
   });
@@ -134,17 +134,85 @@ describe('prefab graph', () => {
     ]);
 
     expect(resolveGraphTargetPath(
-      'page-prefab',
-      ['goods-root', 'button-node'],
+      'goods-card-prefab',
+      ['button-instance', 'button-node'],
       graph
     )).toEqual({
       target: {
         assetUuid: 'button-prefab',
         fileId: 'button-node'
       },
-      localIds: ['goods-root', 'button-node'],
+      localIds: ['button-instance', 'button-node'],
       failedSegmentIndex: null
     });
+  });
+
+  it('把实例 FileID 作为嵌套跳转，不与源对象 FileID 的直接目标冲突', () => {
+    const graph = buildPrefabGraph([
+      {
+        assetUuid: 'player-info-prefab',
+        path: 'db://assets/player-info.prefab',
+        documentType: 'prefab',
+        targets: [{ fileId: 'source-root', nodePath: 'PlayerInfo/Interactive' }],
+        instances: [{
+          sourceAssetUuid: 'interactive-prefab',
+          instanceFileId: 'interactive-instance',
+          sourceObjectFileId: 'source-root',
+          hostNodePath: 'PlayerInfo/Interactive'
+        }]
+      },
+      {
+        assetUuid: 'interactive-prefab',
+        path: 'db://assets/interactive.prefab',
+        documentType: 'prefab',
+        targets: [{ fileId: 'target-node', nodePath: 'Interactive/Target' }]
+      }
+    ]);
+
+    expect(graph.diagnostics).not.toContainEqual(expect.objectContaining({
+      code: 'PREFAB_TARGET_MAP_COLLISION'
+    }));
+    expect(graph.targetMapsByAsset['player-info-prefab'].targets['source-root']).toMatchObject({
+      assetUuid: 'player-info-prefab',
+      fileId: 'source-root'
+    });
+    expect(resolveGraphTargetPath(
+      'player-info-prefab',
+      ['interactive-instance', 'target-node'],
+      graph
+    )).toEqual({
+      target: { assetUuid: 'interactive-prefab', fileId: 'target-node' },
+      localIds: ['interactive-instance', 'target-node'],
+      failedSegmentIndex: null
+    });
+  });
+
+  it('把嵌套 TargetMap 冲突归属到实际源 Prefab', () => {
+    const graph = buildPrefabGraph([{
+      assetUuid: 'page-prefab',
+      documentType: 'prefab',
+      instances: [{
+        sourceAssetUuid: 'goods-card-prefab',
+        instanceFileId: 'goods-instance',
+        nestedInstances: [
+          {
+            sourceAssetUuid: 'button-a-prefab',
+            instanceFileId: 'shared-button-instance',
+            sourceObjectFileId: 'button-a-root'
+          },
+          {
+            sourceAssetUuid: 'button-b-prefab',
+            instanceFileId: 'shared-button-instance',
+            sourceObjectFileId: 'button-b-root'
+          }
+        ]
+      }]
+    }]);
+
+    expect(graph.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'PREFAB_TARGET_MAP_COLLISION',
+      message: 'Prefab localID shared-button-instance 在 goods-card-prefab 中映射冲突'
+    }));
   });
 
   it('多段 localID 缺失时保留完整输入和失败段索引', () => {
@@ -281,45 +349,166 @@ describe('prefab graph', () => {
     });
   });
 
-  it('使用文档快照的 instanceChain 恢复嵌套实例真实父 Prefab 和深度', () => {
-    const graph = buildPrefabGraphFromSnapshots([{
-      document: {
-        assetUuid: 'page-prefab',
-        path: 'db://assets/page.prefab',
-        documentType: 'prefab'
-      },
-      nodes: [],
-      prefabInstances: [
-        {
-          sourcePrefabAssetUuid: 'goods-card-prefab',
-          instanceFileId: 'goods-instance',
-          sourceObjectFileId: 'goods-root',
-          instanceChain: [
-            { depth: 0, assetUuid: 'page-prefab', instanceNodeUuid: 'page-root' },
-            { depth: 1, assetUuid: 'goods-card-prefab', instanceNodeUuid: 'goods-node' }
-          ]
+  it('把上下文嵌套实例归属当前扫描文档，不污染共享源 Prefab', () => {
+    const graph = buildPrefabGraphFromSnapshots([
+      {
+        document: {
+          assetUuid: 'game-a-prefab',
+          path: 'db://assets/game-a.prefab',
+          documentType: 'prefab'
         },
-        {
-          sourcePrefabAssetUuid: 'button-prefab',
-          instanceFileId: 'button-instance',
-          sourceObjectFileId: 'button-root',
+        prefabInstances: [{
+          sourcePrefabAssetUuid: 'rank-a-prefab',
+          instanceFileId: 'shared-rank-instance',
+          sourceObjectFileId: 'rank-root',
+          hostNodePath: 'GameA/PlayerNode/Rank',
           instanceChain: [
-            { depth: 0, assetUuid: 'page-prefab', instanceNodeUuid: 'page-root' },
-            { depth: 1, assetUuid: 'goods-card-prefab', instanceNodeUuid: 'goods-node' },
-            { depth: 2, assetUuid: 'button-prefab', instanceNodeUuid: 'button-node' }
+            { depth: 0, assetUuid: 'game-a-prefab' },
+            { depth: 1, assetUuid: 'player-node-prefab' },
+            { depth: 2, assetUuid: 'rank-a-prefab' }
           ]
-        }
-      ]
-    }]);
+        }]
+      },
+      {
+        document: {
+          assetUuid: 'game-b-prefab',
+          path: 'db://assets/game-b.prefab',
+          documentType: 'prefab'
+        },
+        prefabInstances: [{
+          sourcePrefabAssetUuid: 'rank-b-prefab',
+          instanceFileId: 'shared-rank-instance',
+          sourceObjectFileId: 'rank-root',
+          hostNodePath: 'GameB/PlayerNode/Rank',
+          instanceChain: [
+            { depth: 0, assetUuid: 'game-b-prefab' },
+            { depth: 1, assetUuid: 'player-node-prefab' },
+            { depth: 2, assetUuid: 'rank-b-prefab' }
+          ]
+        }]
+      },
+      {
+        document: {
+          assetUuid: 'player-node-prefab',
+          path: 'db://assets/player-node.prefab',
+          documentType: 'prefab'
+        },
+        prefabInstances: []
+      }
+    ]);
 
     expect(graph.edges).toContainEqual(expect.objectContaining({
-      fromAssetUuid: 'goods-card-prefab',
-      toAssetUuid: 'button-prefab',
+      fromAssetUuid: 'game-a-prefab',
+      toAssetUuid: 'rank-a-prefab',
+      depth: 2
+    }));
+    expect(graph.edges).toContainEqual(expect.objectContaining({
+      fromAssetUuid: 'game-b-prefab',
+      toAssetUuid: 'rank-b-prefab',
       depth: 2
     }));
     expect(graph.edges).not.toContainEqual(expect.objectContaining({
-      fromAssetUuid: 'page-prefab',
-      toAssetUuid: 'button-prefab'
+      fromAssetUuid: 'player-node-prefab'
+    }));
+    expect(graph.diagnostics).not.toContainEqual(expect.objectContaining({
+      code: 'PREFAB_TARGET_MAP_COLLISION'
+    }));
+  });
+
+  it('缺少 PrefabInstance FileID 时保留诊断但不创建伪边或伪循环', () => {
+    const graph = buildPrefabGraphFromSnapshots([
+      {
+        document: {
+          assetUuid: 'player-node-prefab',
+          path: 'db://assets/player-node.prefab',
+          documentType: 'prefab'
+        },
+        prefabInstances: [{
+          sourcePrefabAssetUuid: 'player-info-prefab',
+          instanceFileId: 'player-info-instance',
+          sourceObjectFileId: 'player-info-root'
+        }]
+      },
+      {
+        document: {
+          assetUuid: 'player-info-prefab',
+          path: 'db://assets/player-info.prefab',
+          documentType: 'prefab'
+        },
+        prefabInstances: [{
+          sourcePrefabAssetUuid: 'player-node-prefab',
+          instanceFileId: null,
+          sourceObjectFileId: 'member-node',
+          hostNodePath: 'PlayerInfo/MemberNode'
+        }]
+      }
+    ]);
+
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        fromAssetUuid: 'player-node-prefab',
+        toAssetUuid: 'player-info-prefab'
+      })
+    ]);
+    expect(graph.blocked).toBe(false);
+    expect(graph.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'PREFAB_INSTANCE_FILE_ID_MISSING',
+      severity: 'warning'
+    }));
+    expect(graph.diagnostics).not.toContainEqual(expect.objectContaining({
+      code: 'PREFAB_GRAPH_CYCLE'
+    }));
+  });
+
+  it('汇总 Override localID 解析率并报告准确失败段', () => {
+    const graph = buildPrefabGraph([
+      {
+        assetUuid: 'page-prefab',
+        documentType: 'prefab',
+        instances: [{
+          sourceAssetUuid: 'player-info-prefab',
+          instanceFileId: 'player-info-instance',
+          sourceObjectFileId: 'player-info-root',
+          propertyOverrides: [
+            { targetLocalIds: ['interactive-instance', 'target-node'] },
+            { targetLocalIds: ['interactive-instance', 'missing-node'] }
+          ]
+        }]
+      },
+      {
+        assetUuid: 'player-info-prefab',
+        documentType: 'prefab',
+        instances: [{
+          sourceAssetUuid: 'interactive-prefab',
+          instanceFileId: 'interactive-instance',
+          sourceObjectFileId: 'interactive-root'
+        }]
+      },
+      {
+        assetUuid: 'interactive-prefab',
+        documentType: 'prefab',
+        targets: [{ fileId: 'target-node', nodePath: 'Interactive/Target' }]
+      }
+    ]);
+
+    expect(graph.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'PREFAB_TARGET_LOCAL_ID_RESOLUTION_SUMMARY',
+      severity: 'info',
+      details: {
+        total: 2,
+        singleSegment: 0,
+        multiSegment: 2,
+        resolved: 1,
+        failed: 1
+      }
+    }));
+    expect(graph.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'PREFAB_TARGET_LOCAL_ID_UNRESOLVED',
+      severity: 'warning',
+      details: expect.objectContaining({
+        localIds: ['interactive-instance', 'missing-node'],
+        failedSegmentIndex: 1
+      })
     }));
   });
 
@@ -351,7 +540,7 @@ describe('prefab graph', () => {
     });
   });
 
-  it('不把缺少稳定 FileID 的两个同源实例误合并为一条边', () => {
+  it('缺少稳定 FileID 的同源记录分别诊断且不进入引用图', () => {
     const graph = buildPrefabGraphFromSnapshots([{
       document: {
         assetUuid: 'page-prefab',
@@ -373,6 +562,9 @@ describe('prefab graph', () => {
     expect(graph.edges.filter((edge) =>
       edge.fromAssetUuid === 'page-prefab'
       && edge.toAssetUuid === 'goods-card-prefab'
+    )).toHaveLength(0);
+    expect(graph.diagnostics.filter((diagnostic) =>
+      diagnostic.code === 'PREFAB_INSTANCE_FILE_ID_MISSING'
     )).toHaveLength(2);
   });
 

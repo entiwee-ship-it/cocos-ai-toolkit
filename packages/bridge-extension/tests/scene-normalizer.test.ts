@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PrefabProbeSchema } from '../../protocol/src/index.js';
 import { normalizeComponentDump, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from '../src/scene-probe.js';
 
 describe('scene normalizer', () => {
@@ -60,6 +61,28 @@ describe('scene normalizer', () => {
     expect(component.raw).toEqual(raw);
   });
 
+  it('把 Spine 和 DragonBones 组件归类为 Creator 内建扩展组件', () => {
+    for (const className of ['sp.Skeleton', 'dragonBones.ArmatureDisplay']) {
+      const component = normalizeComponentDump({
+        value: {
+          uuid: { value: `${className}-component` }
+        },
+        type: className,
+        cid: `${className}-type-id`,
+        extends: ['cc.Component', 'cc.Object']
+      });
+
+      expect(component.class).toMatchObject({
+        className,
+        custom: false,
+        scriptUuid: null
+      });
+      expect(component.unresolved).not.toContainEqual(expect.objectContaining({
+        reason: 'SCRIPT_UUID_MISSING'
+      }));
+    }
+  });
+
   it('区分 Prefab 源、实例、FileID 和属性覆盖', () => {
     const raw = {
       uuid: { value: 'instance-node' },
@@ -116,6 +139,45 @@ describe('scene normalizer', () => {
       { path: 'sourceObjectFileId', reason: 'SOURCE_OBJECT_FILE_ID_MISSING' },
       { path: 'instanceFileId', reason: 'PREFAB_INSTANCE_FILE_ID_MISSING' }
     ]));
+  });
+
+  it('把 Creator Override 的 undefined 保留为可序列化明确状态', () => {
+    const prefab = normalizePrefabDump({
+      uuid: { value: 'instance-node' },
+      __prefab__: {
+        uuid: 'source-prefab',
+        fileId: 'source-node-file-id',
+        rootUuid: 'instance-node',
+        instance: { value: {
+          fileId: { value: 'instance-file-id' },
+          propertyOverrides: { value: [{ value: {
+            targetInfo: { value: { localID: { value: [{ value: 'target-file-id' }] } } },
+            propertyPath: { value: [{ value: '_spriteFrame' }] },
+            value: { value: undefined, type: 'cc.SpriteFrame' }
+          } }] },
+          targetOverrides: { value: [] },
+          mountedChildren: { value: [] },
+          mountedComponents: { value: [] },
+          removedComponents: { value: [] }
+        } }
+      }
+    }, 'document-prefab');
+
+    expect(prefab.propertyOverrides[0].overrideValue).toEqual({
+      kind: 'undefined',
+      source: 'creator-dump'
+    });
+    expect(prefab.unresolved).toContainEqual({
+      path: 'propertyOverrides.0.overrideValue',
+      reason: 'CREATOR_OVERRIDE_VALUE_UNDEFINED'
+    });
+
+    const roundTrip = JSON.parse(JSON.stringify(prefab)) as unknown;
+    expect(() => PrefabProbeSchema.parse(roundTrip)).not.toThrow();
+    expect(PrefabProbeSchema.parse(roundTrip).propertyOverrides[0].overrideValue).toEqual({
+      kind: 'undefined',
+      source: 'creator-dump'
+    });
   });
 
   it('按 FileID 和属性路径分别解析源值与实例最终值', () => {

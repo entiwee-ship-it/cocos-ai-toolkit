@@ -1,4 +1,4 @@
-import { buildComponentTypeSchema } from './component-schema';
+import { buildComponentTypeSchema, isBuiltInComponentClass } from './component-schema';
 import { normalizeProperty, readDumpValue, readObject } from './raw-reflection';
 
 /**
@@ -64,7 +64,7 @@ export function normalizeComponentDump(
     class: {
       className: schema.className,
       typeId: schema.typeId,
-      custom: Boolean(schema.className && !schema.className.startsWith('cc.')),
+      custom: Boolean(schema.className && !isBuiltInComponentClass(schema.className)),
       scriptUuid: schema.scriptUuid,
       scriptPath: schema.scriptPath,
       inheritance: schema.inheritance
@@ -129,16 +129,19 @@ export function normalizePrefabDump(
   const sourcePrefabAssetUuid = readString(rawPrefabInfo.uuid);
   const sourceObjectFileId = readString(rawPrefabInfo.fileId);
   const instanceFileId = readString(readDumpValue(instanceValues.fileId));
+  const undefinedOverrideIndexes = new Set<number>();
   const propertyOverrides = readDumpArray(instanceValues.propertyOverrides).map((entry, index) => {
     const value = readObject(readDumpValue(entry));
     const targetInfo = readObject(readDumpValue(value.targetInfo));
+    const rawOverrideValue = readDumpValue(value.value);
+    if (rawOverrideValue === undefined) undefinedOverrideIndexes.add(index);
     return {
       index,
       targetLocalIds: readStringDumpArray(readObject(targetInfo.localID).value),
       propertyPath: readStringDumpArray(readObject(value.propertyPath).value),
       declaredType: readString(readObject(value.value).type),
       sourceValue: null,
-      overrideValue: readDumpValue(value.value),
+      overrideValue: toSerializableValue(rawOverrideValue),
       effectiveValue: null,
       raw: entry
     };
@@ -163,6 +166,12 @@ export function normalizePrefabDump(
     });
   }
   for (let index = 0; index < propertyOverrides.length; index += 1) {
+    if (undefinedOverrideIndexes.has(index)) {
+      unresolved.push({
+        path: `propertyOverrides.${index}.overrideValue`,
+        reason: 'CREATOR_OVERRIDE_VALUE_UNDEFINED'
+      });
+    }
     unresolved.push({ path: `propertyOverrides.${index}.sourceValue`, reason: 'SOURCE_VALUE_REQUIRES_PREFAB_SOURCE_LOOKUP' });
     unresolved.push({ path: `propertyOverrides.${index}.effectiveValue`, reason: 'EFFECTIVE_VALUE_REQUIRES_TARGET_RESOLUTION' });
   }
@@ -338,7 +347,16 @@ function readPropertyPath(target: unknown, propertyPath: string[]): { found: boo
   return { found: true, value: current };
 }
 
+/**
+ * 把 Creator 运行态值转换为 JSON 可稳定表达的值和引用标记。
+ *
+ * @param value Creator Dump 或运行态属性值。
+ * @param depth 当前递归深度。
+ * @param visited 当前递归链中已经访问的对象。
+ * @returns 可通过 WebSocket JSON 往返的值。
+ */
 function toSerializableValue(value: unknown, depth = 0, visited = new Set<unknown>()): unknown {
+  if (value === undefined) return { kind: 'undefined', source: 'creator-dump' };
   if (value === null || typeof value !== 'object') return value;
   if (visited.has(value)) return { kind: 'circular-reference' };
   const object = value as Record<string, unknown>;
