@@ -262,7 +262,6 @@ Creator 已打开目标 Prefab、Probe Server 已连接后执行：
 每次运行使用唯一报告前缀，失败时停止后续步骤并保留已经生成的证据。`reports/*.json` 默认不提交。
 
 ## 运行统一 Phase 1 只读验证
-
 先给目标项目安装 Bridge，并用 Cocos Creator 3.8.8 打开项目。统一脚本会自动按 `projectPath` 选择 Creator 实例，从资产索引选择 Scene/Prefab 和自定义组件样本，不需要人工提供或缓存业务 UUID：
 
 ```powershell
@@ -283,6 +282,22 @@ Creator 已打开目标 Prefab、Probe Server 已连接后执行：
 - `*-server-interrupt-recovery.json`：汇总 `beforeInterruptionRequest`、`cliInterruptionError`、`editorReconnect` 和 `resumeCheckpointResult`。
 
 脚本启动前如果 Server 已在运行，验证会有意终止它，并按当前 `Port`、`ReportRoot` 和工具仓库构建产物启动替代实例；不保留原 PID 或自定义环境变量。如果端口原本没有 Server，验证结束后会清理脚本启动的进程。因此只能使用专用验证 Server 和端口，运行期间不要让其它任务共用。
+
+## 运行统一 Phase 2 写入验证
+
+先给**隔离项目**安装 Bridge，并用 Cocos Creator 3.8.8 打开隔离项目。脚本必须用 `pwsh`（7+）启动，禁止 Windows PowerShell 5.1：
+
+```powershell
+pwsh -NoProfile -File scripts/run-phase-2-write-validation.ps1 `
+  -ProjectPath 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe' `
+  -ReportRoot 'reports'
+```
+
+脚本固定执行：静态检查、Bridge 连接与写能力检查、只读基线快照、三组事务写入（T1 节点原子写、T2 组件原子写、T3 自定义脚本挂载守卫）、保存与重读验证（`committed` 必须 `verification.passed=true`）、整事务回滚（T3→T2→T1，每次要求 `rollbackEvidence.verifiedClean=true`）、回滚后层级复查干净、Probe Server 中断恢复证据，以及工具仓库和隔离项目 Git 状态前后逐字对比。
+
+中断链路在 `*-write-interrupt-recovery.json` 独立落证：`beforeInterruptionRequest`、`cliInterruptionError`、`editorReconnect`、`statusAfterReconnect`、`finalStatus` 和 `rollback`。重连后事务只可能是 `validated`（补执行再回滚）或 `outcome-unknown`（禁止续写直接回滚）两种已验证路径。
+
+每次运行使用唯一 `phase-2-<run-id>` 前缀，证据经 `FileMode.CreateNew` 创建；事务审计同时写入 `reports/write-journal/<transactionId>.jsonl`。
 
 ## 安全边界
 
