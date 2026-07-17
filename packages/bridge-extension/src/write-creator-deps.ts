@@ -228,7 +228,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       }
       const leafKey = segments[segments.length - 1];
       const currentValue = (container as Record<string | number, unknown>)[leafKey];
-      (container as Record<string | number, unknown>)[leafKey] = coerceRuntimeWriteValue(
+      (container as Record<string | number, unknown>)[leafKey] = await resolveRuntimeWriteValue(
         value,
         currentValue,
         propertyPath
@@ -472,10 +472,14 @@ function readObject(value: unknown): Record<string, unknown> {
 }
 
 /**
- * 把协议写值转换为运行时赋值：引用按 kind 解析为运行时对象；
+ * 把协议写值转换为运行时赋值：引用按 kind 解析为运行时对象（资产引用经 assetManager 加载）；
  * Color/Vec2/Vec3/Size 按当前值构造对应 cc 类实例，其余原样赋值。
  */
-function coerceRuntimeWriteValue(value: unknown, currentValue: unknown, propertyPath: string): unknown {
+async function resolveRuntimeWriteValue(
+  value: unknown,
+  currentValue: unknown,
+  propertyPath: string
+): Promise<unknown> {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const reference = value as Record<string, unknown>;
     if (typeof reference.kind === 'string') {
@@ -490,6 +494,13 @@ function coerceRuntimeWriteValue(value: unknown, currentValue: unknown, property
           : null;
         if (!target) throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
         return target.component;
+      }
+      if (reference.kind === 'asset') {
+        if (typeof reference.assetUuid !== 'string' || !reference.assetUuid) {
+          throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
+        }
+        // 资产引用经编辑器资产管线加载（支持 uuid@subId 子资产形式）。
+        return loadAssetByUuid(reference.assetUuid, propertyPath);
       }
       throw new ProbeError('REFERENCE_ASSET_NOT_SUPPORTED', { propertyPath, kind: reference.kind });
     }
@@ -508,4 +519,25 @@ function coerceRuntimeWriteValue(value: unknown, currentValue: unknown, property
     }
   }
   return value;
+}
+
+/** 经 assetManager.loadAny 加载资产对象（含子资产），供引用写入。 */
+function loadAssetByUuid(assetUuid: string, propertyPath: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    if (!ccModule.assetManager || typeof ccModule.assetManager.loadAny !== 'function') {
+      reject(new ProbeError('ASSET_PIPELINE_UNAVAILABLE', { propertyPath }));
+      return;
+    }
+    ccModule.assetManager.loadAny({ uuid: assetUuid }, (error: unknown, asset: unknown) => {
+      if (error || !asset) {
+        reject(new ProbeError('REFERENCE_TARGET_NOT_FOUND', {
+          propertyPath,
+          assetUuid,
+          reason: error ? String(error) : 'ASSET_LOAD_EMPTY'
+        }));
+        return;
+      }
+      resolve(asset);
+    });
+  });
 }
