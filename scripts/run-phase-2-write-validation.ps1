@@ -956,9 +956,21 @@ try {
     $baselineSnapshot = Read-CurrentDocumentSnapshot -ExpectedAssetUuid $sampleDocument.assetUuid -Label '只读基线快照'
     $baselinePath = Write-RawJsonReport -Name "$reportPrefix-baseline-snapshot.json" -RawJson $baselineSnapshot.raw
     $baselineNodes = Read-FirstPageNodes -Snapshot $baselineSnapshot
-    $rootNode = $baselineNodes[0]
-    $rootNodeUuid = Read-NodeUuid -Node $rootNode
-    $rootOriginalName = [string]$rootNode.name
+    # 夹具节点：快照中第一个带组件且带局部变换的节点（场景伪根没有 position dump，不能作为写入目标）
+    $fixtureNode = $null
+    $fixtureComponent = $null
+    foreach ($node in $baselineNodes) {
+        $candidateUuid = Read-NodeUuid -Node $node
+        $candidateComponent = @($baselineSnapshot.data.componentSchemas) | Where-Object { [string]$_.nodeUuid -eq $candidateUuid } | Select-Object -First 1
+        if ($null -ne $candidateComponent -and $null -ne $node.localTransform.position) {
+            $fixtureNode = $node
+            $fixtureComponent = $candidateComponent
+            break
+        }
+    }
+    Assert-Condition -Condition ($null -ne $fixtureNode) -Message '基线快照没有带组件和变换的可用节点'
+    $rootNodeUuid = Read-NodeUuid -Node $fixtureNode
+    $rootOriginalName = [string]$fixtureNode.name
     Add-PassedStep -Name '只读基线快照' -DurationMs $baselineSnapshot.command.durationMs -Evidence $baselinePath
 
     # T1：节点原子写（创建探针节点 + 重命名根节点 + 修改根节点变换）
@@ -980,22 +992,26 @@ try {
     }
     Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($createdNodeUuid)) -Message '写入后层级中找不到探针节点'
 
-    # T2：组件原子写（探针节点挂内置组件 + 根节点组件停用）
-    $rootComponent = @($baselineSnapshot.data.componentSchemas) | Where-Object { [string]$_.nodeUuid -eq $rootNodeUuid } | Select-Object -First 1
-    Assert-Condition -Condition ($null -ne $rootComponent) -Message '根节点没有可写组件'
-    $rootComponentUuid = [string]$rootComponent.componentUuid
+    # T2：组件原子写（探针节点挂内置组件 + 夹具节点组件停用）
+    $rootComponentUuid = [string]$fixtureComponent.componentUuid
     $t2 = Invoke-WriteTransaction -TransactionId "tx-components-$runId" -Label 'T2 组件原子写' -Operations @(
         [ordered]@{ type = 'component.add'; nodeUuid = $createdNodeUuid; componentType = 'cc.Sprite'; scriptUuid = $null },
         [ordered]@{ type = 'component.enable'; componentUuid = $rootComponentUuid; enabled = $false }
     )
 
-    # T3：自定义脚本挂载守卫（取基线快照中已注册的自定义组件类，保证类已注册）
+    # T3：自定义脚本挂载守卫（优先快照中已注册的自定义组件类；空项目回退到验证夹具脚本）
     $aliveScript = @($baselineSnapshot.data.componentSchemas) | Where-Object {
         -not [string]::IsNullOrWhiteSpace([string]$_.scriptUuid) -and [string]$_.className -ne 'cc.MissingScript'
     } | Select-Object -First 1
-    Assert-Condition -Condition ($null -ne $aliveScript) -Message '基线快照没有已注册的自定义脚本组件，无法验证挂载守卫'
-    $scriptUuid = [string]$aliveScript.scriptUuid
-    $scriptClassName = [string]$aliveScript.className
+    if ($null -ne $aliveScript) {
+        $scriptUuid = [string]$aliveScript.scriptUuid
+        $scriptClassName = [string]$aliveScript.className
+    } else {
+        $fixtureScript = @($assetIndex.data.scripts) | Where-Object { [string]$_.scriptPath -like '*Phase2Probe.ts' } | Select-Object -First 1
+        Assert-Condition -Condition ($null -ne $fixtureScript) -Message '没有可用自定义脚本（快照无已注册组件类，资产索引无 Phase2Probe.ts）'
+        $scriptUuid = [string]$fixtureScript.assetUuid
+        $scriptClassName = 'Phase2Probe'
+    }
     $t3 = Invoke-WriteTransaction -TransactionId "tx-script-$runId" -Label 'T3 自定义脚本挂载' -Operations @(
         [ordered]@{ type = 'component.add'; nodeUuid = $createdNodeUuid; componentType = $scriptClassName; scriptUuid = $scriptUuid }
     )
@@ -1011,14 +1027,22 @@ try {
     $null = Invoke-TransactionRollback -TransactionId "tx-components-$runId" -Label 'T2 回滚'
     $null = Invoke-TransactionRollback -TransactionId "tx-nodes-$runId" -Label 'T1 回滚'
 
-    # 回滚后再验证干净：层级中不再存在探针节点，根节点名称还原
+    # 回滚后再验证干净：层级中不再存在探针节点，夹具节点名称还原
     $rolledBackSnapshot = Read-CurrentDocumentSnapshot -ExpectedAssetUuid $sampleDocument.assetUuid -Label '回滚后层级复查'
     $rolledBackPath = Write-RawJsonReport -Name "$reportPrefix-rolled-back-snapshot.json" -RawJson $rolledBackSnapshot.raw
     $rolledBackNodes = Read-FirstPageNodes -Snapshot $rolledBackSnapshot
     foreach ($node in $rolledBackNodes) {
         Assert-Condition -Condition ([string]$node.name -ne $probeName) -Message '回滚后仍存在探针节点'
     }
-    Assert-Condition -Condition ([string]$rolledBackNodes[0].name -eq $rootOriginalName) -Message '回滚后根节点名称未还原'
+    $rolledBackFixture = $null
+    foreach ($node in $rolledBackNodes) {
+        if ((Read-NodeUuid -Node $node) -eq $rootNodeUuid) {
+            $rolledBackFixture = $node
+            break
+        }
+    }
+    Assert-Condition -Condition ($null -ne $rolledBackFixture) -Message '回滚后找不到夹具节点'
+    Assert-Condition -Condition ([string]$rolledBackFixture.name -eq $rootOriginalName) -Message '回滚后夹具节点名称未还原'
     Add-PassedStep -Name '回滚后层级复查干净' -DurationMs $rolledBackSnapshot.command.durationMs -Evidence $rolledBackPath
 
     # Server 中断恢复证据（独立 JSON）

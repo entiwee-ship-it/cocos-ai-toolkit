@@ -76,7 +76,7 @@ describe('Phase 2 统一写入验证脚本', () => {
     expect(script).toContain('transaction-rollback');
     expect(script).toContain('rollbackEvidence.verifiedClean');
     expect(script).toContain('回滚后仍存在探针节点');
-    expect(script).toContain('回滚后根节点名称未还原');
+    expect(script).toContain('回滚后夹具节点名称未还原');
   });
 
   it('Server 中断恢复链路保留独立 JSON 证据且禁止盲目续写', async () => {
@@ -131,10 +131,13 @@ describe('Phase 2 统一写入验证脚本', () => {
     expect(script).toContain('identity.objectUuid');
     // 写入目标按 documentType 固定选 prefab
     expect(script).toContain("$document.documentType -eq 'prefab'");
+    // 夹具节点必须带组件和局部变换（场景伪根没有 position dump，不能作为写入目标）
+    expect(script).toContain('$null -ne $node.localTransform.position');
     // 组件与脚本样本来自快照 componentSchemas（componentUuid / nodeUuid / scriptUuid）
     expect(script).toContain('componentSchemas');
-    expect(script).toContain("$_.nodeUuid -eq $rootNodeUuid");
     expect(script).toContain("$_.className -ne 'cc.MissingScript'");
+    // 空项目没有已注册自定义组件类时，回退到验证夹具脚本 Phase2Probe.ts
+    expect(script).toContain('Phase2Probe.ts');
   });
 
   it('为真实项目长耗时请求统一配置端到端超时', async () => {
