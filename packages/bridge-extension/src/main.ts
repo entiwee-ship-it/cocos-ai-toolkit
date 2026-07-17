@@ -22,7 +22,7 @@ import {
   type WriteTransactionRecord
 } from './transaction-manager';
 
-const BRIDGE_VERSION = '0.1.9';
+const BRIDGE_VERSION = '0.1.10';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 let client: BridgeClient | null = null;
@@ -95,6 +95,7 @@ export function load(): void {
       'probe.transactionStatus': async (payload) => writeTransactionManager.status(payload),
       'probe.transactionList': async () => writeTransactionManager.list(),
       'probe.transactionRollback': (payload) => writeTransactionManager.rollback(payload),
+      'probe.createPrefab': (payload) => forwardToScene('createPrefabFromNode', payload),
       'probe.debugPrefabLifecycle': (payload) => forwardToScene('debugPrefabLifecycle', payload),
       ...Object.fromEntries(Object.entries(sceneMethods).map(([method, sceneMethod]) => [
         method,
