@@ -315,7 +315,7 @@ async function debugPrefabLifecycle(request: unknown): Promise<unknown> {
   const nodeUuid = typeof input.nodeUuid === 'string' ? input.nodeUuid : null;
   const assetUrl = typeof input.assetUrl === 'string' && input.assetUrl
     ? input.assetUrl
-    : 'db://assets/CocosAiDebugPrefab.prefab';
+    : `db://assets/CocosAiDebugPrefab-${Date.now()}.prefab`;
   const attempts: Array<Record<string, unknown>> = [];
 
   // cce 门面自省：预制体相关候选方法

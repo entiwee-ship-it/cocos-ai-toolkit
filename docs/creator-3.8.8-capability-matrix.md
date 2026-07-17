@@ -20,6 +20,11 @@
 | Prefab 信息 | `query-node.__prefab__` + Scene 运行时 Prefab 资源/实例反射 | Creator 运行时对象和内部信息 | internal-api | 已验证所属文档、源资源、实例根、源 FileID、实例 FileID、两层实例链、26 条 Property Override、Mounted Child/Component |
 | Undo | `cce.SceneFacadeManager.undo()` | protected types + Creator 3.8.8 运行时探测 | internal-api | 已验证创建节点进入 Undo，保存后调用 Undo 可移除本事务节点 |
 | Undo 分组 | 待隔离 Creator 实测（候选：`cce.SceneFacadeManager` 分组接口） | internal-api | 待实测 | 阶段二决策：分组可用则每事务一个 Undo 组；不可用则显式逆操作 + 逐条 Undo 兜底，回滚后必须重读验证还原。事务管理器默认按兜底路径（`step-undo-with-inverse`）编排 |
+| 预制体创建（空预制体） | `asset-db/create-asset(url, null)` | message-api | 已验证（异步导入，需等待） | 空白项目实测创建 `cc.Prefab` 成功；返回前导入未完成时需等待，`delete-asset` 可清理 |
+| 预制体创建（场景节点生成） | `cce.SceneFacadeManager.createPrefab(nodeUuid, url)` | internal-api | 已验证 | 空白项目实测从场景节点生成 `cc.Prefab` 并返回资产 UUID；`scene/create-prefab` 消息不存在（挂起） |
+| 预制体序列化数据 | `cce.SceneFacadeManager.getPrefabData(nodeUuid)` | internal-api | 已验证 | 返回完整 cc.Prefab 序列化 JSON |
+| 预制体删除 | `asset-db/delete-asset(url)` | message-api | 已验证 | 空白项目实测删除 prefab 资产成功 |
+| 预制体实例语义 | `cce.SceneFacadeManager`：`applyPrefab` / `restorePrefab` / `linkPrefab` / `unlinkPrefab` | internal-api | 待阶段三实测 | 自省确认方法存在；`scene/duplicate-node` 消息不存在（挂起），节点复制当前走运行时 `cc.instantiate` |
 | 保存与字节恢复 | `scene/save-scene` + `asset-db/save-asset` | `@cocos/creator-types` `3.8.7` | message-api | 已验证 Scene 保存会重排 Prefab；Undo 后由 AssetDB 恢复 prepare 阶段备份可回到原 SHA-256 |
 
 ## 已确认事实
