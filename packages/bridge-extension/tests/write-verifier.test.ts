@@ -90,6 +90,30 @@ describe('saveAndVerifyWriteTransaction', () => {
     expect(report.items[0]).toMatchObject({ expected: 3, actual: 3, passed: true });
   });
 
+  it('set_reference 按归一化 UUID 比对 Dump 形态', async () => {
+    const dependencies = createDependencies();
+    dependencies.getComponentProperty = async () => ({ uuid: 'node-9' });
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [{
+        operation: {
+          type: 'component.set_reference',
+          componentUuid: 'comp-1',
+          propertyPath: 'clickEvents[0].target',
+          reference: { kind: 'node', objectUuid: 'node-9', fileId: null, nodePath: null, available: true }
+        },
+        componentUuid: 'comp-1',
+        before: null,
+        after: { reference: { uuid: 'node-9' } },
+        inverse: []
+      }],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({ expected: 'node-9', actual: 'node-9', passed: true });
+  });
+
   it('save 为 false 时不保存不重开，直接对编辑器现状重读验证', async () => {
     const dependencies = createDependencies();
     const report = await saveAndVerifyWriteTransaction(

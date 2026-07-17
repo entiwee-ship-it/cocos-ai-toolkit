@@ -155,7 +155,10 @@ async function verifyOperationUnsafe(
         operation.componentUuid as string,
         operation.propertyPath as string
       );
-      return build(operation.reference, actual, deepEqual(actual, operation.reference));
+      // 引用按归一化 UUID 比对：写值为 ReferenceSchema，重读为 Dump {uuid} 形态。
+      const expectedUuid = readReferenceUuid(operation.reference);
+      const actualUuid = readReferenceUuid(actual);
+      return build(expectedUuid, actualUuid, expectedUuid !== null && expectedUuid === actualUuid);
     }
     case 'component.clear_reference': {
       const actual = await dependencies.getComponentProperty(
@@ -197,6 +200,21 @@ function pickTransform(node: Record<string, unknown> | null): Record<string, unk
     rotation: node.rotation ?? null,
     scale: node.scale ?? null
   };
+}
+
+/** 归一化引用形态提取 UUID：写值（kind/assetUuid/objectUuid/serializedUuid）或 Dump（uuid/value.uuid）。 */
+function readReferenceUuid(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  for (const key of ['assetUuid', 'objectUuid', 'serializedUuid', 'uuid']) {
+    if (typeof record[key] === 'string' && record[key]) return record[key] as string;
+  }
+  const nested = record.value;
+  if (nested && typeof nested === 'object') {
+    const nestedUuid = (nested as Record<string, unknown>).uuid;
+    if (typeof nestedUuid === 'string' && nestedUuid) return nestedUuid;
+  }
+  return null;
 }
 
 function expectationSummary(operation: WriteOperation): unknown {
