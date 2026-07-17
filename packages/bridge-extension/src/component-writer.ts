@@ -29,6 +29,27 @@ export interface WriteReferenceValue {
   [field: string]: unknown;
 }
 
+/** 脚本编译/注册等待结果；diagnostics 保留完整编译诊断。 */
+export interface ScriptCompilationResult {
+  success: boolean;
+  diagnostics: string[];
+}
+
+/**
+ * 自定义脚本挂载守卫依赖。waitForScriptCompilation 必须是事件驱动
+ * （等待 Creator 导入完成、TypeScript 编译完成、类注册完成），不允许固定延时。
+ */
+export interface ScriptMountGuardDependencies {
+  /** 核对 scriptUuid 在资产索引中存在。 */
+  scriptAssetExists(scriptUuid: string): Promise<boolean>;
+  /** 核对脚本类已注册（js.getClassByName/cc.Class 可达）。 */
+  isScriptClassRegistered(componentType: string, scriptUuid: string): Promise<boolean>;
+  /** 脚本刚变更时等待编译和类注册完成；无编译 pending 时返回 null。 */
+  waitForScriptCompilation(scriptUuid: string): Promise<ScriptCompilationResult | null>;
+  /** Phase 1 组件 Schema 是否可取（属性校验和重读验证的前提）。 */
+  isComponentSchemaAvailable(componentType: string): Promise<boolean>;
+}
+
 /**
  * 组件写依赖。全部由 Scene 进程真实能力注入，本模块只做编排，
  * 不直接触碰 Editor 全局对象或磁盘文件。
@@ -44,6 +65,8 @@ export interface ComponentWriterDependencies {
   resizeComponentArray(componentUuid: string, propertyPath: string, length: number): Promise<void>;
   /** 核对引用目标在编辑器中真实可解析（节点/组件/资产存在）。 */
   resolveReference(reference: WriteReferenceValue): Promise<boolean>;
+  /** 自定义脚本挂载守卫；scriptUuid 非空时必须提供，否则拒绝挂载。 */
+  scriptGuard?: ScriptMountGuardDependencies;
 }
 
 export interface ComponentWriteOpResult {
@@ -125,6 +148,11 @@ async function addComponent(
   if (scriptUuid !== null && isBuiltInComponentClass(componentType)) {
     // 内置组件不允许携带脚本 UUID，防止调用方混淆挂载路径。
     throw new ProbeError('INVALID_WRITE_OPERATION', { type: operation.type, field: 'scriptUuid' });
+  }
+  if (scriptUuid !== null) {
+    // 自定义脚本必须先过挂载守卫：核对资产索引、编译完成、类注册完成，
+    // 任何一步失败都不执行挂载，避免产生 MissingScript。
+    await assertScriptMountable(dependencies.scriptGuard, componentType, scriptUuid);
   }
   const componentUuid = await dependencies.addComponent(nodeUuid, componentType, scriptUuid);
   if (!componentUuid) {
@@ -281,6 +309,40 @@ async function resizeComponentArray(
     after: { uuid: componentUuid, propertyPath, length: Array.isArray(resized) ? resized.length : null },
     inverse: [{ type: 'component.resize_array', componentUuid, propertyPath, length: oldLength }]
   };
+}
+
+/**
+ * 自定义脚本挂载守卫：核对脚本资产存在、类已注册（必要时事件驱动等待编译完成）、
+ * Phase 1 Schema 可取。任何一步失败都抛稳定错误码，调用方保证不产生 MissingScript。
+ */
+async function assertScriptMountable(
+  guard: ScriptMountGuardDependencies | undefined,
+  componentType: string,
+  scriptUuid: string
+): Promise<void> {
+  if (!guard) {
+    throw new ProbeError('SCRIPT_MOUNT_GUARD_UNAVAILABLE', { componentType, scriptUuid });
+  }
+  if (!await guard.scriptAssetExists(scriptUuid)) {
+    throw new ProbeError('SCRIPT_ASSET_NOT_FOUND', { componentType, scriptUuid });
+  }
+  if (!await guard.isScriptClassRegistered(componentType, scriptUuid)) {
+    // 脚本刚变更时类可能尚未注册：事件驱动等待编译完成，不用固定延时。
+    const compilation = await guard.waitForScriptCompilation(scriptUuid);
+    if (compilation && !compilation.success) {
+      throw new ProbeError('SCRIPT_COMPILATION_FAILED', {
+        componentType,
+        scriptUuid,
+        diagnostics: compilation.diagnostics
+      });
+    }
+    if (!await guard.isScriptClassRegistered(componentType, scriptUuid)) {
+      throw new ProbeError('SCRIPT_CLASS_NOT_REGISTERED', { componentType, scriptUuid });
+    }
+  }
+  if (!await guard.isComponentSchemaAvailable(componentType)) {
+    throw new ProbeError('SCRIPT_SCHEMA_UNAVAILABLE', { componentType, scriptUuid });
+  }
 }
 
 /** 按 Schema 校验顶层属性存在且可写；readonly 拒绝。 */
