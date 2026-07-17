@@ -11,7 +11,7 @@ import {
   type ReadonlyProbeClient,
   type ScanCheckpoint
 } from '@cocos-ai/core';
-import { WriteTransactionResultSchema } from '@cocos-ai/protocol';
+import { WriteTransactionResultSchema, type WriteTransactionResult } from '@cocos-ai/protocol';
 import { constants } from 'node:fs';
 import {
   access,
@@ -269,9 +269,7 @@ async function executeWriteCommand(
 
   const record = Array.isArray(validated) ? undefined : validated;
   await appendWriteJournalEntry(readJournalRoot(options.journalRoot), {
-    transactionId: command.command === 'write-prepare'
-      ? command.request.transactionId
-      : command.transactionId,
+    transactionId: readWriteCommandTransactionId(command),
     idempotencyKey: command.command === 'write-prepare' ? command.request.idempotencyKey : '',
     at: new Date().toISOString(),
     event: command.command,
@@ -284,13 +282,28 @@ async function executeWriteCommand(
 }
 
 /**
+ * 读取写命令的事务 id：prepare 取请求内 transactionId，其余取命令参数。
+ *
+ * @param command 已解析的写命令。
+ * @returns 事务 id。
+ */
+function readWriteCommandTransactionId(command: CliCommand): string {
+  if (command.command === 'write-prepare') return command.request.transactionId;
+  if ('transactionId' in command) return command.transactionId;
+  throw new Error('TRANSACTION_ID_REQUIRED');
+}
+
+/**
  * 按协议校验写命令响应，防止未验证的写结果流出。
  *
  * @param command 写命令名。
  * @param result Bridge 返回的原始载荷。
  * @returns 协议校验后的结果。
  */
-function validateWriteCommandResult(command: string, result: unknown): unknown {
+function validateWriteCommandResult(
+  command: string,
+  result: unknown
+): WriteTransactionResult | WriteTransactionResult[] {
   try {
     return command === 'transaction-list'
       ? WriteTransactionResultSchema.array().parse(result)
