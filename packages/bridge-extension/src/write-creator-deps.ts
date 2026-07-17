@@ -197,7 +197,12 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       }
     },
     setComponentEnabled: async (componentUuid, enabled) => {
-      await setComponentPropertyViaDump(componentUuid, 'enabled', enabled);
+      // enabled 直接写运行时对象：set-property(record:true) 对组件 enabled 实测不生效（0.1.4 验证）。
+      const runtime = findRuntimeComponent(componentUuid);
+      if (!runtime) {
+        throw new ProbeError('COMPONENT_NOT_FOUND', { componentUuid });
+      }
+      runtime.component.enabled = enabled;
     },
     getComponentProperty: async (componentUuid, propertyPath) => {
       const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
@@ -315,28 +320,6 @@ async function setNodePropertyViaDump(uuid: string, path: string, value: unknown
   }
   await Editor.Message.request('scene', 'set-property', {
     uuid,
-    path,
-    dump: { ...(template as Record<string, unknown>), value },
-    record: true
-  } as never);
-}
-
-/** 经 query-component Dump 模板设置组件属性（record=true 进入编辑器 Undo）。 */
-async function setComponentPropertyViaDump(
-  componentUuid: string,
-  path: string,
-  value: unknown
-): Promise<void> {
-  const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
-  if (!raw) {
-    throw new ProbeError('COMPONENT_NOT_FOUND', { componentUuid });
-  }
-  const template = readObject(readObject(raw).value)[path];
-  if (!template || typeof template !== 'object') {
-    throw new ProbeError('PROPERTY_DUMP_UNAVAILABLE', { componentUuid, path });
-  }
-  await Editor.Message.request('scene', 'set-property', {
-    uuid: componentUuid,
     path,
     dump: { ...(template as Record<string, unknown>), value },
     record: true
