@@ -2,7 +2,7 @@
   "package_version": 2,
   "name": "cocos-ai-bridge",
   "title": "Cocos AI Bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cocos Creator 3.8.x editor bridge for the Cocos AI probe server",
   "main": "./dist/main.js",
   "editor": ">=3.8.0 <3.9.0",
