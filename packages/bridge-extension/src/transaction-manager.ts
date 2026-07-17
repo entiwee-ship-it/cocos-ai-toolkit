@@ -104,6 +104,8 @@ export interface WriteTransactionRecord {
   state: WriteTransactionState;
   request: WriteTransactionRequest;
   executedOps: number;
+  /** 逐操作执行证据（含逆操作），execute 返回时写入，供回滚编排和审计。 */
+  executionEvidence?: unknown;
   verification: WriteVerificationReport | null;
   failure: WriteFailure | null;
   rollbackEvidence: WriteRollbackEvidence | null;
@@ -121,10 +123,11 @@ export interface WriteRevisionCapture {
 /**
  * 写执行器的确定性结果。操作级失败以数据形式返回（触发回滚流程）；
  * 抛出异常一律视为结局未知（outcome-unknown），不做任何乐观假设。
+ * evidence 为逐操作执行证据（含逆操作），随事务记录留存，供回滚编排和审计。
  */
 export type WriteExecutionOutcome =
-  | { kind: 'success'; executedOps: number; verification: WriteVerificationReport | null; undoGroupId?: string | null }
-  | { kind: 'operation-failed'; executedOps: number; failure: WriteFailure; undoGroupId?: string | null };
+  | { kind: 'success'; executedOps: number; verification: WriteVerificationReport | null; undoGroupId?: string | null; evidence?: unknown }
+  | { kind: 'operation-failed'; executedOps: number; failure: WriteFailure; undoGroupId?: string | null; evidence?: unknown };
 
 /**
  * 3.8.8 实测确认 `cce.SceneFacadeManager.undo()` 可用（Phase 0 证据），但编辑器 Undo 分组能力
@@ -358,7 +361,11 @@ export class WriteTransactionManager {
     }
 
     if (outcome.kind === 'operation-failed') {
-      record = this.updateRecord(record, { executedOps: outcome.executedOps, failure: outcome.failure });
+      record = this.updateRecord(record, {
+        executedOps: outcome.executedOps,
+        failure: outcome.failure,
+        executionEvidence: outcome.evidence ?? null
+      });
       record = this.transition(record, 'failed', outcome.failure.code);
       record = await this.performRollback(record);
       this.releaseDocumentLock(record);
@@ -367,7 +374,8 @@ export class WriteTransactionManager {
 
     record = this.updateRecord(record, {
       executedOps: outcome.executedOps,
-      verification: outcome.verification
+      verification: outcome.verification,
+      executionEvidence: outcome.evidence ?? null
     });
     if (record.request.save) {
       record = this.transition(record, 'saving', 'executor-success');

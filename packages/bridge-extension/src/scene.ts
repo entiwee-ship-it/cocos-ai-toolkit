@@ -8,6 +8,21 @@ import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, norm
 import { normalizeProbeProjectPath } from './probe-operation';
 import { executeProbeSceneOperation } from './probe-scene-operation';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
+import { executeNodeWriteOperation } from './node-writer';
+import { executeComponentWriteOperation } from './component-writer';
+import { saveAndVerifyWriteTransaction, type VerifiedOperation } from './write-verifier';
+import {
+  executeWriteSceneOperations,
+  rollbackWriteSceneOperations,
+  type WriteSceneChannelDependencies
+} from './write-scene-channel';
+import {
+  buildComponentWriterDependencies,
+  buildNodeWriterDependencies,
+  buildWriteVerifierDependencies,
+  captureCurrentDocumentIdentity
+} from './write-creator-deps';
+import type { WriteOperation } from './transaction-manager';
 
 const { director } = require('cc') as { director: { getScene(): unknown } };
 
@@ -243,6 +258,54 @@ function requireUuid(request: unknown): string {
   return input.uuid;
 }
 
+/** 组装 Scene 写通道：节点/组件原子写 + 保存重开 + 重读验证。 */
+function buildWriteChannelDependencies(save: boolean): WriteSceneChannelDependencies {
+  const nodeDependencies = buildNodeWriterDependencies();
+  const componentDependencies = buildComponentWriterDependencies();
+  const verifierDependencies = buildWriteVerifierDependencies();
+  return {
+    executeNodeOperation: (operation) => executeNodeWriteOperation(operation, nodeDependencies),
+    executeComponentOperation: (operation) => executeComponentWriteOperation(operation, componentDependencies),
+    saveDocument: verifierDependencies.saveDocument,
+    reloadDocument: verifierDependencies.reloadDocument,
+    verify: (executed) => saveAndVerifyWriteTransaction(
+      { save } as never,
+      executed,
+      verifierDependencies
+    )
+  };
+}
+
+/** 当前文档身份与层级指纹，供主进程 Revision 前置采集。 */
+async function writeDocumentIdentity(): Promise<unknown> {
+  return captureCurrentDocumentIdentity();
+}
+
+/** 在事务上下文内执行混合写操作，返回执行器契约结果和逐操作证据。 */
+async function writeExecute(request: unknown): Promise<unknown> {
+  const input = readObject(unwrapRequest(request));
+  const operations = Array.isArray(input.operations) ? input.operations as WriteOperation[] : [];
+  if (operations.length === 0) throw new ProbeError('INVALID_WRITE_OPERATIONS');
+  const undoGroup = typeof input.undoGroup === 'string' && input.undoGroup ? input.undoGroup : '';
+  if (!undoGroup) throw new ProbeError('UNDO_GROUP_REQUIRED');
+  const save = input.save === true;
+  return executeWriteSceneOperations(
+    { operations, save, undoGroup },
+    buildWriteChannelDependencies(save)
+  );
+}
+
+/** 按逆序应用已执行操作的逆操作（step-undo-with-inverse 回滚路径）；save=true 时回滚后再保存。 */
+async function writeRollback(request: unknown): Promise<unknown> {
+  const input = readObject(unwrapRequest(request));
+  const executed = Array.isArray(input.executed) ? input.executed as VerifiedOperation[] : [];
+  const result = await rollbackWriteSceneOperations(executed, buildWriteChannelDependencies(false));
+  if (result.succeeded && input.save === true) {
+    await buildWriteVerifierDependencies().saveDocument();
+  }
+  return result;
+}
+
 /**
  * 恢复主进程传入的脚本 UUID 路径 Map。
  *
@@ -290,5 +353,8 @@ export const methods = {
   probeComponent,
   probeDocumentSnapshot,
   probePrefab,
-  probeUndoSaveConfirm
+  probeUndoSaveConfirm,
+  writeDocumentIdentity,
+  writeExecute,
+  writeRollback
 };

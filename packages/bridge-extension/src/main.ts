@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { BridgeClient } from './bridge-client';
 import { buildBridgeHello, probeEditorState } from './editor-state';
 import { ProbeError } from './probe-errors';
@@ -12,10 +13,13 @@ import {
   type ProbeExecutionResult,
   type ProbeTransaction
 } from './probe-transaction';
-
 import {
   InMemoryWriteTransactionStore,
-  WriteTransactionManager
+  WriteTransactionManager,
+  type RevisionFingerprint,
+  type WriteRevisionCapture,
+  type WriteRollbackEvidence,
+  type WriteTransactionRecord
 } from './transaction-manager';
 
 const BRIDGE_VERSION = '0.1.0';
@@ -40,19 +44,17 @@ const transactionCoordinator = new ProbeTransactionCoordinator({
   execute: (transaction, recoveryContent) => executeTransaction(transaction, recoveryContent)
 });
 
-// 阶段二通用写事务管理器。Revision 采集、写执行和回滚的真实 Scene/AssetDB 接线
-// 属于 Task 3+，当前以稳定错误码占位，保证白名单方法结构先走通。
+// 阶段二通用写事务管理器：Revision 采集经 Scene 文档身份 + 资产文件哈希；
+// 执行和回滚经 Scene 写通道（node-writer / component-writer / write-verifier）。
 const writeTransactionManager = new WriteTransactionManager({
   store: new InMemoryWriteTransactionStore(),
-  captureRevision: async () => {
-    throw new ProbeError('WRITE_REVISION_CAPTURE_NOT_READY');
-  },
-  execute: async () => {
-    throw new ProbeError('WRITE_EXECUTOR_NOT_READY');
-  },
-  rollback: async () => {
-    throw new ProbeError('WRITE_EXECUTOR_NOT_READY');
-  }
+  captureRevision: async () => captureWriteRevision(),
+  execute: async (transaction) => forwardToScene('writeExecute', {
+    operations: transaction.request.operations,
+    save: transaction.request.save,
+    undoGroup: transaction.request.undoGroup
+  }) as never,
+  rollback: async (transaction) => rollbackWriteTransaction(transaction)
 });
 
 export function load(): void {
@@ -168,6 +170,68 @@ async function readDocumentAsset(documentAssetUuid: string): Promise<Buffer> {
     throw new ProbeError('ASSET_FILE_PATH_UNAVAILABLE');
   }
   return readFile(assetInfo.file);
+}
+
+/**
+ * 采集写事务 Revision 前置：Scene 侧文档身份 + 层级指纹，主进程补文档磁盘哈希。
+ *
+ * @returns 当前文档标识和四维指纹（assetDatabase/scriptCompilation 暂不采集）。
+ */
+async function captureWriteRevision(): Promise<WriteRevisionCapture> {
+  const identity = await forwardToScene('writeDocumentIdentity', {}) as {
+    documentId: string;
+    hierarchySha256: string;
+    dirty: boolean | null;
+  };
+  const content = await readDocumentAsset(identity.documentId);
+  const documentSha256 = createHash('sha256').update(content).digest('hex');
+  return {
+    documentId: identity.documentId,
+    fingerprint: {
+      document: `sha256:${documentSha256}`,
+      hierarchy: `sha256:${identity.hierarchySha256}`,
+      assetDatabase: null,
+      scriptCompilation: null
+    }
+  };
+}
+
+/**
+ * 回滚事务：经 Scene 写通道逆序应用逆操作，保存后重采指纹验证还原干净。
+ *
+ * @param transaction 待回滚的事务记录（携带执行证据）。
+ * @returns 回滚证据。
+ */
+async function rollbackWriteTransaction(
+  transaction: WriteTransactionRecord
+): Promise<WriteRollbackEvidence> {
+  const result = await forwardToScene('writeRollback', {
+    executed: transaction.executionEvidence ?? [],
+    save: transaction.request.save
+  }) as { succeeded: boolean; failedAt: number | null };
+  if (!result.succeeded) {
+    return { attempted: true, succeeded: false, undoGroupId: null, verifiedClean: false };
+  }
+  try {
+    const capture = await captureWriteRevision();
+    return {
+      attempted: true,
+      succeeded: true,
+      undoGroupId: null,
+      verifiedClean: fingerprintMatchesPrecondition(transaction.request.revision, capture.fingerprint)
+    };
+  } catch {
+    return { attempted: true, succeeded: true, undoGroupId: null, verifiedClean: null };
+  }
+}
+
+/** 指纹逐维比对：前置为 null 的维度不参与判定。 */
+function fingerprintMatchesPrecondition(
+  expected: RevisionFingerprint,
+  actual: RevisionFingerprint
+): boolean {
+  return (['document', 'hierarchy', 'assetDatabase', 'scriptCompilation'] as const)
+    .every((scope) => expected[scope] === null || expected[scope] === actual[scope]);
 }
 
 /**

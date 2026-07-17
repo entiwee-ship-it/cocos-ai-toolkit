@@ -89,13 +89,12 @@ export function parsePropertyPath(propertyPath: string): Array<string | number> 
   }
   const segments: Array<string | number> = [];
   for (const part of propertyPath.split('.')) {
-    const match = /^[A-Za-z_$][A-Za-z0-9_$]*(?<indexes>(?:\[\d+\])*)$/.exec(part);
+    const match = /^([A-Za-z_$][A-Za-z0-9_$]*)((?:\[\d+\])*)$/.exec(part);
     if (!match) {
       throw new ProbeError('INVALID_PROPERTY_PATH', { propertyPath });
     }
-    const name = part.slice(0, match.groups?.indexes ? part.length - match.groups.indexes.length : undefined);
-    segments.push(name);
-    for (const index of match.groups?.indexes.match(/\d+/g) ?? []) {
+    segments.push(match[1]);
+    for (const index of match[2].match(/\d+/g) ?? []) {
       segments.push(Number(index));
     }
   }
