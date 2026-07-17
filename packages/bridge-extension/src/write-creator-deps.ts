@@ -153,15 +153,24 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
         const component = node.addComponent(componentClass);
         return readRuntimeUuid(component);
       }
+      // create-component 不保证返回可用 UUID：按前后组件清单差集确认新组件身份。
+      const before = await Editor.Message.request('scene', 'query-node', nodeUuid);
+      const beforeUuids = readNodeComponentUuids(before);
       const created = await Editor.Message.request('scene', 'create-component', {
         uuid: nodeUuid,
         component: componentType
       });
-      const componentUuid = typeof created === 'string' ? created : readObject(created).uuid;
-      if (typeof componentUuid !== 'string' || !componentUuid) {
-        throw new ProbeError('COMPONENT_ADD_FAILED', { nodeUuid, componentType });
+      const directUuid = typeof created === 'string' ? created : readObject(created).uuid;
+      if (typeof directUuid === 'string' && directUuid && !beforeUuids.has(directUuid)) {
+        return directUuid;
       }
-      return componentUuid;
+      const after = await Editor.Message.request('scene', 'query-node', nodeUuid);
+      for (const [uuid, type] of readNodeComponentUuids(after)) {
+        if (!beforeUuids.has(uuid) && type === componentType) {
+          return uuid;
+        }
+      }
+      throw new ProbeError('COMPONENT_ADD_FAILED', { nodeUuid, componentType });
     },
     removeComponent: async (componentUuid) => {
       const runtime = findRuntimeComponent(componentUuid);
@@ -346,8 +355,23 @@ function requireRuntimeNode(uuid: string): RuntimeNode {
   return node;
 }
 
-function findRuntimeComponent(componentUuid: string): { node: RuntimeNode; component: RuntimeNode } | null {
-  const visit = (node: RuntimeNode | null): { node: RuntimeNode; component: RuntimeNode } | null => {
+/** 从 query-node Dump 读取组件 UUID → 类型映射（Dump 包装：__comps__.value.{type,uuid.value}）。 */
+function readNodeComponentUuids(nodeDump: unknown): Map<string, string> {
+  const components = new Map<string, string>();
+  const node = readObject(nodeDump);
+  const list = Array.isArray(node.__comps__) ? node.__comps__ : [];
+  for (const entry of list) {
+    const value = readObject(readObject(entry).value);
+    const type = typeof value.type === 'string' ? value.type : null;
+    const uuid = typeof value.uuid === 'string' ? value.uuid : readObject(value.uuid).value;
+    if (type && typeof uuid === 'string' && uuid) {
+      components.set(uuid, type);
+    }
+  }
+  return components;
+}
+
+function findRuntimeComponent(componentUuid: string): { node: RuntimeNode; component: RuntimeNode } | null {  const visit = (node: RuntimeNode | null): { node: RuntimeNode; component: RuntimeNode } | null => {
     if (!node || typeof node !== 'object') return null;
     const components = Array.isArray(node._components)
       ? node._components
