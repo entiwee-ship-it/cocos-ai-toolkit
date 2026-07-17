@@ -695,11 +695,10 @@ function Find-SampleWriteDocument {
 
     $documents = @($AssetIndex.documents)
     Assert-Condition -Condition ($documents.Count -gt 0) -Message '资产索引没有 Scene 或 Prefab'
-    # 阶段二写入目标固定 Prefab：场景保存语义不同，隔离验证只选 .prefab 文档。
+    # 阶段二写入目标固定 Prefab：场景保存语义不同，隔离验证只选 prefab 类型文档。
     $prefab = $null
     foreach ($document in $documents) {
-        $path = [string]($document.path ?? $document.url ?? '')
-        if ($path.EndsWith('.prefab', [StringComparison]::OrdinalIgnoreCase)) {
+        if ([string]$document.documentType -eq 'prefab') {
             $prefab = $document
             break
         }
@@ -715,6 +714,29 @@ function Find-SampleWriteDocument {
     }
 }
 
+function Read-CurrentDocumentSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedAssetUuid,
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    # 文档身份解析存在瞬时 CURRENT_DOCUMENT_UUID_EMPTY（Phase 1 实测）：
+    # 打开资产后按身份匹配重试，直到快照钉住目标文档。
+    $deadline = [DateTime]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
+    $attempt = 0
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $attempt += 1
+        $snapshot = Invoke-CliJson -Arguments (@('document-snapshot') + $script:selectorArguments + @('--mode', 'full', '--page-size', [string]$SnapshotPageSize)) -Label $Label
+        if ([string]$snapshot.data.document.assetUuid -eq $ExpectedAssetUuid) {
+            return $snapshot
+        }
+        Start-Sleep -Milliseconds $PollIntervalMilliseconds
+    }
+    throw "$Label 在 $attempt 次尝试后仍未钉住目标文档 $ExpectedAssetUuid"
+}
+
 function Read-FirstPageNodes {
     param(
         [Parameter(Mandatory = $true)]
@@ -724,6 +746,18 @@ function Read-FirstPageNodes {
     $nodes = @($Snapshot.data.nodes)
     Assert-Condition -Condition ($nodes.Count -gt 0) -Message '样本文档快照没有节点'
     return $nodes
+}
+
+function Read-NodeUuid {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Node
+    )
+
+    # 快照节点为规范化结构：UUID 在 identity.objectUuid。
+    $uuid = [string]($Node.identity.objectUuid ?? $Node.uuid)
+    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($uuid)) -Message '快照节点缺少 UUID'
+    return $uuid
 }
 
 function New-WriteRequest {
@@ -919,13 +953,12 @@ try {
     Add-PassedStep -Name 'Asset 索引与样本文档选择' -DurationMs $assetIndex.command.durationMs -Evidence $assetIndexPath
 
     $opened = Invoke-CliJson -Arguments (@('open-asset') + $script:selectorArguments + @('--uuid', $sampleDocument.assetUuid)) -Label 'CLI open-asset'
-    $baselineSnapshot = Invoke-CliJson -Arguments (@('document-snapshot') + $script:selectorArguments + @('--mode', 'full', '--page-size', [string]$SnapshotPageSize)) -Label '只读基线快照'
+    $baselineSnapshot = Read-CurrentDocumentSnapshot -ExpectedAssetUuid $sampleDocument.assetUuid -Label '只读基线快照'
     $baselinePath = Write-RawJsonReport -Name "$reportPrefix-baseline-snapshot.json" -RawJson $baselineSnapshot.raw
     $baselineNodes = Read-FirstPageNodes -Snapshot $baselineSnapshot
     $rootNode = $baselineNodes[0]
-    $rootNodeUuid = [string]$rootNode.uuid
+    $rootNodeUuid = Read-NodeUuid -Node $rootNode
     $rootOriginalName = [string]$rootNode.name
-    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($rootNodeUuid)) -Message '基线快照缺少根节点 UUID'
     Add-PassedStep -Name '只读基线快照' -DurationMs $baselineSnapshot.command.durationMs -Evidence $baselinePath
 
     # T1：节点原子写（创建探针节点 + 重命名根节点 + 修改根节点变换）
@@ -936,34 +969,33 @@ try {
     )
 
     # 回读层级，找到 T1 创建的探针节点 UUID
-    $afterWriteSnapshot = Invoke-CliJson -Arguments (@('document-snapshot') + $script:selectorArguments + @('--mode', 'full', '--page-size', [string]$SnapshotPageSize)) -Label '写入后层级回读'
+    $afterWriteSnapshot = Read-CurrentDocumentSnapshot -ExpectedAssetUuid $sampleDocument.assetUuid -Label '写入后层级回读'
     $afterWritePath = Write-RawJsonReport -Name "$reportPrefix-after-write-snapshot.json" -RawJson $afterWriteSnapshot.raw
     $createdNodeUuid = $null
     foreach ($node in (Read-FirstPageNodes -Snapshot $afterWriteSnapshot)) {
         if ([string]$node.name -eq $probeName) {
-            $createdNodeUuid = [string]$node.uuid
+            $createdNodeUuid = Read-NodeUuid -Node $node
             break
         }
     }
     Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($createdNodeUuid)) -Message '写入后层级中找不到探针节点'
 
     # T2：组件原子写（探针节点挂内置组件 + 根节点组件停用）
-    $rootComponents = @($rootNode.components)
-    Assert-Condition -Condition ($rootComponents.Count -gt 0) -Message '根节点没有可写组件'
-    $rootComponentUuid = [string]($rootComponents[0].uuid ?? $rootComponents[0].value)
+    $rootComponent = @($baselineSnapshot.data.componentSchemas) | Where-Object { [string]$_.nodeUuid -eq $rootNodeUuid } | Select-Object -First 1
+    Assert-Condition -Condition ($null -ne $rootComponent) -Message '根节点没有可写组件'
+    $rootComponentUuid = [string]$rootComponent.componentUuid
     $t2 = Invoke-WriteTransaction -TransactionId "tx-components-$runId" -Label 'T2 组件原子写' -Operations @(
         [ordered]@{ type = 'component.add'; nodeUuid = $createdNodeUuid; componentType = 'cc.Sprite'; scriptUuid = $null },
         [ordered]@{ type = 'component.enable'; componentUuid = $rootComponentUuid; enabled = $false }
     )
 
-    # T3：自定义脚本挂载守卫（取资产索引第一个脚本组件类）
-    $scripts = @($assetIndex.data.scripts)
-    Assert-Condition -Condition ($scripts.Count -gt 0) -Message '资产索引没有自定义脚本，无法验证挂载守卫'
-    $sampleScript = $scripts[0]
-    $scriptUuid = [string]($sampleScript.assetUuid ?? $sampleScript.uuid)
-    $scriptPath = [string]($sampleScript.scriptPath ?? $sampleScript.path ?? $sampleScript.filePath)
-    $scriptClassName = [IO.Path]::GetFileNameWithoutExtension($scriptPath)
-    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($scriptClassName)) -Message '样本脚本缺少类名'
+    # T3：自定义脚本挂载守卫（取基线快照中已注册的自定义组件类，保证类已注册）
+    $aliveScript = @($baselineSnapshot.data.componentSchemas) | Where-Object {
+        -not [string]::IsNullOrWhiteSpace([string]$_.scriptUuid) -and [string]$_.className -ne 'cc.MissingScript'
+    } | Select-Object -First 1
+    Assert-Condition -Condition ($null -ne $aliveScript) -Message '基线快照没有已注册的自定义脚本组件，无法验证挂载守卫'
+    $scriptUuid = [string]$aliveScript.scriptUuid
+    $scriptClassName = [string]$aliveScript.className
     $t3 = Invoke-WriteTransaction -TransactionId "tx-script-$runId" -Label 'T3 自定义脚本挂载' -Operations @(
         [ordered]@{ type = 'component.add'; nodeUuid = $createdNodeUuid; componentType = $scriptClassName; scriptUuid = $scriptUuid }
     )
@@ -980,7 +1012,7 @@ try {
     $null = Invoke-TransactionRollback -TransactionId "tx-nodes-$runId" -Label 'T1 回滚'
 
     # 回滚后再验证干净：层级中不再存在探针节点，根节点名称还原
-    $rolledBackSnapshot = Invoke-CliJson -Arguments (@('document-snapshot') + $script:selectorArguments + @('--mode', 'full', '--page-size', [string]$SnapshotPageSize)) -Label '回滚后层级复查'
+    $rolledBackSnapshot = Read-CurrentDocumentSnapshot -ExpectedAssetUuid $sampleDocument.assetUuid -Label '回滚后层级复查'
     $rolledBackPath = Write-RawJsonReport -Name "$reportPrefix-rolled-back-snapshot.json" -RawJson $rolledBackSnapshot.raw
     $rolledBackNodes = Read-FirstPageNodes -Snapshot $rolledBackSnapshot
     foreach ($node in $rolledBackNodes) {

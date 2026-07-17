@@ -120,6 +120,23 @@ describe('Phase 2 统一写入验证脚本', () => {
     expect(gitignore.split(/\r?\n/)).toContain('reports/*.tmp');
   });
 
+  it('按文档身份钉住快照并读取规范化节点 UUID', async () => {
+    const script = await readFile(validationScriptPath, 'utf8');
+
+    // 文档身份存在瞬时 CURRENT_DOCUMENT_UUID_EMPTY（Phase 1 实测），打开资产后按身份匹配重试
+    expect(script).toContain('Read-CurrentDocumentSnapshot');
+    expect(script).toContain('CURRENT_DOCUMENT_UUID_EMPTY');
+    expect(script).toContain('$snapshot.data.document.assetUuid -eq $ExpectedAssetUuid');
+    // 快照节点为规范化结构：UUID 在 identity.objectUuid
+    expect(script).toContain('identity.objectUuid');
+    // 写入目标按 documentType 固定选 prefab
+    expect(script).toContain("$document.documentType -eq 'prefab'");
+    // 组件与脚本样本来自快照 componentSchemas（componentUuid / nodeUuid / scriptUuid）
+    expect(script).toContain('componentSchemas');
+    expect(script).toContain("$_.nodeUuid -eq $rootNodeUuid");
+    expect(script).toContain("$_.className -ne 'cc.MissingScript'");
+  });
+
   it('为真实项目长耗时请求统一配置端到端超时', async () => {
     const script = await readFile(validationScriptPath, 'utf8');
 
