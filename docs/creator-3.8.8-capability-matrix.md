@@ -25,6 +25,7 @@
 | 预制体序列化数据 | `cce.SceneFacadeManager.getPrefabData(nodeUuid)` | internal-api | 已验证 | 返回完整 cc.Prefab 序列化 JSON |
 | 预制体删除 | `asset-db/delete-asset(url)` | message-api | 已验证 | 空白项目实测删除 prefab 资产成功 |
 | 预制体实例语义 | `cce.SceneFacadeManager`：`applyPrefab` / `restorePrefab` / `linkPrefab` / `unlinkPrefab` | internal-api | 待阶段三实测 | 自省确认方法存在；`scene/duplicate-node` 消息不存在（挂起），节点复制当前走运行时 `cc.instantiate` |
+| 资产创建冲突弹窗 | `asset-db/create-asset` 对已存在路径 | message-api | 已验证风险 | 对既有路径调用会弹出"文件已存在，是否覆盖"模态框并无限阻塞调用方；写入前必须先 `query-asset-info` 预检或保证路径唯一 |
 | 保存与字节恢复 | `scene/save-scene` + `asset-db/save-asset` | `@cocos/creator-types` `3.8.7` | message-api | 已验证 Scene 保存会重排 Prefab；Undo 后由 AssetDB 恢复 prepare 阶段备份可回到原 SHA-256 |
 
 ## 已确认事实
