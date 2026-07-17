@@ -257,7 +257,7 @@ describe('ProjectScanner', () => {
     })],
     ['协议版本', (checkpoint: ScanCheckpoint) => ({
       ...checkpoint,
-      protocolVersion: '0.3.0'
+      protocolVersion: '0.2.0'
     })],
     ['资产 UUID 清单', (checkpoint: ScanCheckpoint) => ({
       ...checkpoint,

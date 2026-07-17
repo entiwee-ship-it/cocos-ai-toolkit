@@ -8,4 +8,6 @@ export * from './prefab.js';
 export * from './reference.js';
 export * from './scan.js';
 export * from './schema.js';
+export * from './transaction.js';
 export * from './transport.js';
+export * from './write.js';

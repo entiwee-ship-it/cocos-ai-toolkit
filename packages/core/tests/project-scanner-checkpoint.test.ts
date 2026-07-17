@@ -19,7 +19,7 @@ describe('ProjectScanner checkpoint gate', () => {
       projectPath: 'E:/project',
       creatorVersion: '3.8.8',
       bridgeVersion: '0.1.0',
-      protocolVersion: '0.2.0',
+      protocolVersion: '0.3.0',
       parameters: { pageSize: 100, includeRaw: false, concurrency: 2 },
       parametersHash: 'tampered',
       assetManifestHash: 'manifest-1',

@@ -138,7 +138,7 @@ function createCheckpoint(): ScanCheckpoint {
     editorInstanceId: 'editor-1',
     creatorVersion: '3.8.8',
     bridgeVersion: '0.1.0',
-    protocolVersion: '0.2.0',
+    protocolVersion: '0.3.0',
     assetManifestHash: 'manifest-hash',
     assetUuids: ['scene-a'],
     parameters: {
