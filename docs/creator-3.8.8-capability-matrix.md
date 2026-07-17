@@ -19,6 +19,7 @@
 | 全项目只读扫描 | CLI/MCP + checkpoint + 流式报告 | Bridge 原子读取 + Core 编排 | composite | 421/421 个 Scene/Prefab 均被处理；339 个完整快照、82 个失败证据，支持同 `scanId` 断点恢复 |
 | Prefab 信息 | `query-node.__prefab__` + Scene 运行时 Prefab 资源/实例反射 | Creator 运行时对象和内部信息 | internal-api | 已验证所属文档、源资源、实例根、源 FileID、实例 FileID、两层实例链、26 条 Property Override、Mounted Child/Component |
 | Undo | `cce.SceneFacadeManager.undo()` | protected types + Creator 3.8.8 运行时探测 | internal-api | 已验证创建节点进入 Undo，保存后调用 Undo 可移除本事务节点 |
+| Undo 分组 | 待隔离 Creator 实测（候选：`cce.SceneFacadeManager` 分组接口） | internal-api | 待实测 | 阶段二决策：分组可用则每事务一个 Undo 组；不可用则显式逆操作 + 逐条 Undo 兜底，回滚后必须重读验证还原。事务管理器默认按兜底路径（`step-undo-with-inverse`）编排 |
 | 保存与字节恢复 | `scene/save-scene` + `asset-db/save-asset` | `@cocos/creator-types` `3.8.7` | message-api | 已验证 Scene 保存会重排 Prefab；Undo 后由 AssetDB 恢复 prepare 阶段备份可回到原 SHA-256 |
 
 ## 已确认事实

@@ -13,6 +13,11 @@ import {
   type ProbeTransaction
 } from './probe-transaction';
 
+import {
+  InMemoryWriteTransactionStore,
+  WriteTransactionManager
+} from './transaction-manager';
+
 const BRIDGE_VERSION = '0.1.0';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
@@ -33,6 +38,21 @@ const transactionCoordinator = new ProbeTransactionCoordinator({
   currentProjectPath: () => Editor.Project.path,
   captureRevision: (request) => captureCurrentRevision(request),
   execute: (transaction, recoveryContent) => executeTransaction(transaction, recoveryContent)
+});
+
+// 阶段二通用写事务管理器。Revision 采集、写执行和回滚的真实 Scene/AssetDB 接线
+// 属于 Task 3+，当前以稳定错误码占位，保证白名单方法结构先走通。
+const writeTransactionManager = new WriteTransactionManager({
+  store: new InMemoryWriteTransactionStore(),
+  captureRevision: async () => {
+    throw new ProbeError('WRITE_REVISION_CAPTURE_NOT_READY');
+  },
+  execute: async () => {
+    throw new ProbeError('WRITE_EXECUTOR_NOT_READY');
+  },
+  rollback: async () => {
+    throw new ProbeError('WRITE_EXECUTOR_NOT_READY');
+  }
 });
 
 export function load(): void {
@@ -68,6 +88,11 @@ export function load(): void {
       'probe.undoSavePrepare': (payload) => transactionCoordinator.prepare(payload),
       'probe.undoSaveConfirm': (payload) => transactionCoordinator.confirm(payload),
       'probe.undoSaveStatus': async (payload) => transactionCoordinator.status(payload),
+      'probe.writePrepare': (payload) => writeTransactionManager.prepare(payload),
+      'probe.writeConfirm': (payload) => writeTransactionManager.confirm(payload),
+      'probe.transactionStatus': async (payload) => writeTransactionManager.status(payload),
+      'probe.transactionList': async () => writeTransactionManager.list(),
+      'probe.transactionRollback': (payload) => writeTransactionManager.rollback(payload),
       ...Object.fromEntries(Object.entries(sceneMethods).map(([method, sceneMethod]) => [
         method,
         (payload: unknown) => forwardToScene(sceneMethod, payload)
@@ -253,5 +278,10 @@ export const methods: Record<string, (request: JsonObject) => Promise<unknown>> 
   'probe-prefab': (request) => forwardToScene('probePrefab', request),
   'probe-undo-save-prepare': (request) => transactionCoordinator.prepare(request),
   'probe-undo-save-confirm': (request) => transactionCoordinator.confirm(request),
-  'probe-undo-save-status': async (request) => transactionCoordinator.status(request)
+  'probe-undo-save-status': async (request) => transactionCoordinator.status(request),
+  'probe-write-prepare': (request) => writeTransactionManager.prepare(request),
+  'probe-write-confirm': (request) => writeTransactionManager.confirm(request),
+  'probe-transaction-status': async (request) => writeTransactionManager.status(request),
+  'probe-transaction-list': async () => writeTransactionManager.list(),
+  'probe-transaction-rollback': (request) => writeTransactionManager.rollback(request)
 };
