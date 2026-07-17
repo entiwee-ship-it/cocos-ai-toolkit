@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过受限 CLI、Probe Server 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件、Undo 和保存语义。
 
-阶段 0 已在真实游戏前端 `xy-client` 的隔离 Git Worktree 和 Cocos Creator 3.8.8 上完成验证，结论为 **GO**。阶段 1 已建立完整只读协议、CLI 和 AI 正式使用的 stdio MCP Server；真实项目全量扫描与阶段 1 最终验收仍在后续任务中，当前不能视为生产版完整工具。
+阶段 0 已在真实游戏前端 `xy-client` 的隔离 Git Worktree 和 Cocos Creator 3.8.8 上完成验证，结论为 **GO**。阶段 1 已建立完整只读协议、CLI 和 AI 正式使用的 stdio MCP Server，并已在当前真实 `xy-client`（含未提交内容）上完成无污染全量只读验收扫描：375 个 Scene/Prefab 全部处理，节点、组件、属性、Override 解码率 100%，扫描前后真实项目 Git 状态逐字一致，详见 [阶段 1 最终发现](docs/phase-1-findings.md)；最终 GO/NO-GO 以阶段 1 收口复核为准。
 
 ## 架构
 
@@ -263,7 +263,7 @@ Creator 已打开目标 Prefab、Probe Server 已连接后执行：
 - Bridge 仅连接 `127.0.0.1`。
 - 不允许执行任意 JavaScript。
 - MCP Server 只暴露八个只读工具，不登记保存、Undo、创建、删除或属性修改入口。
-- 不允许向真实项目安装 Bridge 或运行写探针。
+- 真实项目只允许通过不进入 Git 状态的方式（如被 `.gitignore` 覆盖的 `extensions/` Junction）加载只读 Bridge，且加载前后必须逐字对比 `git status`；不允许在真实项目运行写探针或调用任何写方法。
 - 外部进程不得直接写 `.prefab`、`.scene` 或 `.meta`。
 - Scene、Undo、保存和恢复全部由 Creator 执行；外部只读磁盘计算指纹。
 - `prepare` 拒绝 Dirty 文档、已有同名探针和错误项目路径。
@@ -303,5 +303,6 @@ git -C 'E:/xile-workspace/qyProject/xy-client' worktree remove 'E:/xile-workspac
 ## 详细结论
 
 - [阶段 0 最终发现](docs/phase-0-findings.md)
+- [阶段 1 最终发现](docs/phase-1-findings.md)
 - [Creator 3.8.8 能力来源矩阵](docs/creator-3.8.8-capability-matrix.md)
 - [xy-client 样本选择](docs/xy-client-sample-selection.md)

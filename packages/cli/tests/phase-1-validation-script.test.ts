@@ -109,6 +109,21 @@ describe('Phase 1 只读统一验证脚本', () => {
     expect(gitignore.split(/\r?\n/)).toContain('reports/*.json.gz');
   });
 
+  it('清理中断种子扫描遗留的原子写临时文件', async () => {
+    const script = await readFile(validationScriptPath, 'utf8');
+
+    const recoveryFunction = script.slice(
+      script.indexOf('function Invoke-ServerInterruptRecovery'),
+      script.indexOf('Assert-Condition -Condition (Test-Path -LiteralPath $project -PathType Container)')
+    );
+    expect(recoveryFunction).toContain('$reportPrefix-interrupt-seed.*.tmp');
+    expect(recoveryFunction).toContain('Remove-Item');
+    expect(recoveryFunction).toContain('finally');
+
+    const gitignore = await readFile(gitignorePath, 'utf8');
+    expect(gitignore.split(/\r?\n/)).toContain('reports/*.tmp');
+  });
+
   it('保留可重复的 Server 中断和同 checkpoint 恢复证据', async () => {
     const script = await readFile(validationScriptPath, 'utf8');
 

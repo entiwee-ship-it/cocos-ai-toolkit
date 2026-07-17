@@ -3,6 +3,7 @@ dist/
 coverage/
 reports/*.json
 reports/*.json.gz
+reports/*.tmp
 reports/*.json.documents/
 reports/*.log
 reports/*.png

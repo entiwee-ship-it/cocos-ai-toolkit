@@ -1077,6 +1077,13 @@ function Invoke-ServerInterruptRecovery {
                 Write-Warning "种子扫描清理失败，保留原始验证异常: $($_.Exception.Message)"
             }
         }
+        # 种子扫描被强制终止时，报告原子写会遗留 <seed>.<pid>.<guid>.tmp；与恢复证据无关，必须清理避免污染 Git 前后对比
+        try {
+            Get-ChildItem -LiteralPath $reportsRoot -File -Filter "$reportPrefix-interrupt-seed.*.tmp" -ErrorAction Stop |
+                Remove-Item -Force -ErrorAction Stop
+        } catch {
+            Write-Warning "种子扫描临时文件清理失败: $($_.Exception.Message)"
+        }
     }
 }
 
