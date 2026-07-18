@@ -551,7 +551,9 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
   };
 }
 
-/** 在节点树中按父节点 + 名称 + 源资产 UUID 定位重建后的实例根（createPrefab 会重建节点）。 */
+/** 在节点树中按父节点 + 名称 + 源资产 UUID 定位重建后的实例根（createPrefab 会重建节点）。
+ * query-node-tree 为精简形态（name/uuid 为裸字符串，prefab.assetUuid 键名），与单节点 Dump 不同。
+ */
 function findInstanceRootInTree(
   node: unknown,
   parentUuid: string | null,
@@ -560,10 +562,9 @@ function findInstanceRootInTree(
   currentParentUuid: string | null
 ): string | null {
   const record = readObject(node);
-  const nodeUuid = typeof readObject(record.uuid).value === 'string' ? readObject(record.uuid).value as string : null;
-  const nodeName = readObject(record.name).value;
-  const prefab = readObject(record.__prefab__);
-  if (nodeName === name && prefab.uuid === prefabAssetUuid && (parentUuid === null || currentParentUuid === parentUuid)) {
+  const nodeUuid = typeof record.uuid === 'string' ? record.uuid : null;
+  const prefab = readObject(record.prefab);
+  if (record.name === name && prefab.assetUuid === prefabAssetUuid && (parentUuid === null || currentParentUuid === parentUuid)) {
     return nodeUuid;
   }
   const children = Array.isArray(record.children) ? record.children : [];

@@ -326,12 +326,19 @@ async function createFromNode(
   }
   const assetUuid = await dependencies.createPrefabFromNode(operation.nodeUuid, operation.assetUrl);
   // createPrefab 会重建节点（实测：原会话 UUID 失效），按父节点 + 名称 + 新源资产重定位实例根。
-  const resolvedRootUuid = await dependencies.findPrefabInstanceRoot(before.parentUuid, before.name, assetUuid);
+  let resolvedRootUuid: string | null = null;
+  try {
+    resolvedRootUuid = await dependencies.findPrefabInstanceRoot(before.parentUuid, before.name, assetUuid);
+  } catch {
+    resolvedRootUuid = null;
+  }
   if (!resolvedRootUuid) {
+    // 资产已创建但实例根定位失败：尽力清理新建资产，避免失败路径留下磁盘残留。
+    await dependencies.deleteAsset(operation.assetUrl).catch(() => undefined);
     throw new ProbeError('PREFAB_INSTANCE_NOT_ESTABLISHED', {
       nodeUuid: operation.nodeUuid,
       assetUuid,
-      reason: 'createPrefab 后无法重定位实例根（原 UUID 已失效）'
+      reason: 'createPrefab 后无法重定位实例根（原 UUID 已失效），已尽力清理新建资产'
     });
   }
   const after = await dependencies.getPrefabInstanceInfo(resolvedRootUuid);
