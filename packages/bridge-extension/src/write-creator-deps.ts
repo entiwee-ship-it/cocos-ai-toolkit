@@ -397,6 +397,17 @@ async function readPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceI
   const parentValue = readObject(parentDump.value);
   const childrenDump = record.children;
   const children = Array.isArray(childrenDump) ? childrenDump : (Array.isArray(readObject(childrenDump).value) ? readObject(childrenDump).value as unknown[] : []);
+  const overrideEntries = Array.isArray(instance.propertyOverrides)
+    ? instance.propertyOverrides
+    : (Array.isArray(readObject(instance.propertyOverrides).value) ? readObject(instance.propertyOverrides).value as unknown[] : []);
+  const overridePaths = overrideEntries.map((entry) => {
+    const pathDump = readObject(readObject(entry).value).propertyPath ?? readObject(entry).propertyPath;
+    const segments = Array.isArray(pathDump) ? pathDump : (Array.isArray(readObject(pathDump).value) ? readObject(pathDump).value as unknown[] : []);
+    return segments.map((segment) => {
+      const unwrapped = readObject(segment).value ?? segment;
+      return String(unwrapped);
+    }).join('.');
+  }).filter((path) => path.length > 0);
   return {
     nodeUuid,
     name: typeof nameDump.value === 'string' ? nameDump.value : '',
@@ -408,7 +419,9 @@ async function readPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceI
     isRevertable: stateInfo.isRevertable === true,
     isUnwrappable: stateInfo.isUnwrappable === true,
     parentUuid: typeof parentValue.uuid === 'string' ? parentValue.uuid : null,
-    childCount: children.length
+    childCount: children.length,
+    overrideCount: overridePaths.length,
+    overridePaths
   };
 }
 
@@ -480,6 +493,16 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
     },
     linkPrefabInstance: async (nodeUuid, prefabAssetUuid) => {
       await callFacadePrefabMethod('linkPrefab', [nodeUuid, prefabAssetUuid], 'CREATOR_LINK_PREFAB_UNAVAILABLE');
+    },
+    resetNodeProperty: async (nodeUuid, propertyPath) => {
+      // Inspector 单属性还原同款路径：NodeManager.resetProperty → dump.resetProperty（源值重置）。
+      const cce = readObject((globalThis as Record<string, unknown>).cce);
+      const nodeManager = readObject(cce.Node);
+      if (typeof nodeManager.resetProperty !== 'function') {
+        throw new ProbeError('CREATOR_RESET_PROPERTY_UNAVAILABLE', { nodeUuid, propertyPath });
+      }
+      await (nodeManager.resetProperty as (uuid: string, path: string) => Promise<unknown>)
+        .call(nodeManager, nodeUuid, propertyPath);
     }
   };
 }

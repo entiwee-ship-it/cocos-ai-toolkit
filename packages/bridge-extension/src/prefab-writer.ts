@@ -18,6 +18,10 @@ export interface PrefabInstanceInfo {
   isUnwrappable: boolean;
   parentUuid: string | null;
   childCount: number;
+  /** 属性覆盖数量（propertyOverrides 长度）。 */
+  overrideCount: number;
+  /** 覆盖属性路径清单（点拼字符串，如 '_name'、'_lpos'）。 */
+  overridePaths: string[];
 }
 
 /** 资产预检结果（query-asset-info 的最小必要字段）。 */
@@ -43,6 +47,8 @@ export interface PrefabWriterDependencies {
   applyPrefabInstance(instanceRootUuid: string): Promise<void>;
   unlinkPrefabInstance(instanceRootUuid: string): Promise<void>;
   linkPrefabInstance(nodeUuid: string, prefabAssetUuid: string): Promise<void>;
+  /** 按属性路径重置实例节点属性为源值（Inspector 单属性还原同款路径）。 */
+  resetNodeProperty(nodeUuid: string, propertyPath: string): Promise<void>;
 }
 
 export interface PrefabWriteOpResult {
@@ -77,6 +83,8 @@ export async function executePrefabWriteOperation(
       return createFromNode(operation as PrefabCreateFromNodeOperation, dependencies);
     case 'prefab.delete_asset':
       return deleteAsset(operation as PrefabDeleteAssetOperation, dependencies);
+    case 'prefab.revert_override':
+      return revertOverride(operation as PrefabRevertOverrideOperation, dependencies);
     default:
       throw new ProbeError('INVALID_WRITE_OPERATION', { type: operation.type });
   }
@@ -85,6 +93,43 @@ export async function executePrefabWriteOperation(
 type PrefabInstantiateOperation = WriteOperation & { prefabAssetUuid: string; parentNodeUuid: string; name?: string };
 type PrefabCreateFromNodeOperation = WriteOperation & { nodeUuid: string; assetUrl: string };
 type PrefabDeleteAssetOperation = WriteOperation & { assetUrl: string };
+type PrefabRevertOverrideOperation = WriteOperation & { instanceRootUuid: string; propertyPath?: string };
+
+/** 目标不是完整预制体实例时统一拒绝。 */
+function requireInstance(info: PrefabInstanceInfo | null, instanceRootUuid: string): PrefabInstanceInfo {
+  if (!info || !info.instanceFileId || !info.prefabAssetUuid) {
+    throw new ProbeError('PREFAB_INSTANCE_REQUIRED', { instanceRootUuid });
+  }
+  return info;
+}
+
+/**
+ * 还原实例覆盖。整实例走 restorePrefab（实测整粒度可用）；
+ * 指定 propertyPath 时走 Inspector 同款 resetProperty（源值重置）。
+ * 覆盖一经还原无法由逆操作无损恢复（原覆盖值已丢），逆操作为空并保留 before 证据供审计。
+ */
+async function revertOverride(
+  operation: PrefabRevertOverrideOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const before = requireInstance(
+    await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid),
+    operation.instanceRootUuid
+  );
+  if (operation.propertyPath) {
+    await dependencies.resetNodeProperty(operation.instanceRootUuid, operation.propertyPath);
+  } else {
+    await dependencies.revertPrefabInstance(operation.instanceRootUuid);
+  }
+  const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
+  return {
+    nodeUuid: operation.instanceRootUuid,
+    assetUuid: null,
+    before,
+    after,
+    inverse: []
+  };
+}
 
 async function instantiatePrefab(
   operation: PrefabInstantiateOperation,

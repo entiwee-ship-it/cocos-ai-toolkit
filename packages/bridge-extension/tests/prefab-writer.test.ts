@@ -21,6 +21,8 @@ function createInstanceInfo(overrides: Partial<PrefabInstanceInfo> = {}): Prefab
     isUnwrappable: true,
     parentUuid: 'n-parent',
     childCount: 5,
+    overrideCount: 1,
+    overridePaths: ['_name'],
     ...overrides
   };
 }
@@ -37,6 +39,7 @@ function createDependencies(overrides: Partial<PrefabWriterDependencies> = {}): 
     applyPrefabInstance: async () => undefined,
     unlinkPrefabInstance: async () => undefined,
     linkPrefabInstance: async () => undefined,
+    resetNodeProperty: async () => undefined,
     ...overrides
   };
 }
@@ -165,9 +168,55 @@ describe('executePrefabWriteOperation', () => {
     expect(result.inverse).toEqual([]);
   });
 
-  it('未实现的 prefab 操作返回稳定错误码', async () => {
+  it('prefab.revert_override 非实例节点拒绝', async () => {
+    const dependencies = createDependencies({
+      getPrefabInstanceInfo: async () => createInstanceInfo({ instanceFileId: null, prefabAssetUuid: null })
+    });
     const error = await executePrefabWriteOperation(
       { type: 'prefab.revert_override', instanceRootUuid: 'n1' } as WriteOperation,
+      dependencies
+    ).catch((caught: unknown) => caught);
+
+    expect((error as ProbeError).code).toBe('PREFAB_INSTANCE_REQUIRED');
+  });
+
+  it('prefab.revert_override 整实例还原走 restorePrefab', async () => {
+    let reverted: string | null = null;
+    const dependencies = createDependencies({
+      revertPrefabInstance: async (uuid) => {
+        reverted = uuid;
+      },
+      getPrefabInstanceInfo: async () => createInstanceInfo({ overrideCount: 1, overridePaths: ['_name'] })
+    });
+    const result = await executePrefabWriteOperation(
+      { type: 'prefab.revert_override', instanceRootUuid: 'n1' } as WriteOperation,
+      dependencies
+    );
+
+    expect(reverted).toBe('n1');
+    expect(result.inverse).toEqual([]);
+    expect(result.before?.overrideCount).toBe(1);
+  });
+
+  it('prefab.revert_override 指定属性路径走 resetProperty 单属性还原', async () => {
+    let reset: { uuid: string; path: string } | null = null;
+    const dependencies = createDependencies({
+      resetNodeProperty: async (uuid, path) => {
+        reset = { uuid, path };
+      }
+    });
+    const result = await executePrefabWriteOperation(
+      { type: 'prefab.revert_override', instanceRootUuid: 'n1', propertyPath: 'position' } as WriteOperation,
+      dependencies
+    );
+
+    expect(reset).toEqual({ uuid: 'n1', path: 'position' });
+    expect(result.inverse).toEqual([]);
+  });
+
+  it('未实现的 prefab 操作返回稳定错误码', async () => {
+    const error = await executePrefabWriteOperation(
+      { type: 'prefab.apply_to_source', instanceRootUuid: 'n1' } as WriteOperation,
       createDependencies()
     ).catch((caught: unknown) => caught);
 

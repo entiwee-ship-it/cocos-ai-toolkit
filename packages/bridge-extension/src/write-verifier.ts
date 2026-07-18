@@ -199,6 +199,17 @@ async function verifyOperationUnsafe(
       const actual = await dependencies.queryAssetInfo(operation.assetUrl as string);
       return build('资产不存在', actual === null ? '资产不存在' : '资产仍存在', actual === null);
     }
+    case 'prefab.revert_override': {
+      const actual = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid as string);
+      if (!actual) return build('实例存在', null, false);
+      if (operation.propertyPath) {
+        const remaining = actual.overridePaths.includes(operation.propertyPath as string);
+        return build(`覆盖路径 ${String(operation.propertyPath)} 已还原`, actual.overridePaths, !remaining);
+      }
+      // 整实例还原：除根节点名（_name 与资产名绑定，实测为特例）外不应有残留覆盖。
+      const remaining = actual.overridePaths.filter((path) => path !== '_name');
+      return build('覆盖已全部还原', actual.overridePaths, remaining.length === 0);
+    }
     default:
       return build(expectationSummary(operation), 'UNKNOWN_OPERATION_TYPE', false);
   }

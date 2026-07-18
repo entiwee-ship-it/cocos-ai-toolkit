@@ -222,7 +222,9 @@ function createDependencies(options: {
       isRevertable: true,
       isUnwrappable: true,
       parentUuid: null,
-      childCount: 0
+      childCount: 0,
+      overrideCount: 0,
+      overridePaths: []
     }),
     queryAssetInfo: async () => null
   };
