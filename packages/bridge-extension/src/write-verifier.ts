@@ -191,7 +191,9 @@ async function verifyOperationUnsafe(
       return build('实例已建立且源资产一致', actual, matched);
     }
     case 'prefab.create_from_node': {
-      const actual = await dependencies.getPrefabInstanceInfo(operation.nodeUuid as string);
+      // createPrefab 会重建节点：执行器已把重建后的实例根 UUID 回填到 resultNodeUuid。
+      const nodeUuid = readResultNodeUuid(operation) ?? (operation.nodeUuid as string);
+      const actual = nodeUuid ? await dependencies.getPrefabInstanceInfo(nodeUuid) : null;
       const linked = actual !== null && actual.prefabAssetUuid !== null;
       return build('节点已关联预制体资产', actual?.prefabAssetUuid ?? null, linked);
     }

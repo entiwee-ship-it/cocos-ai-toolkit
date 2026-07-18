@@ -543,8 +543,35 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
     getCurrentDocumentAssetUuid: async () => {
       const identity = await captureCurrentDocumentIdentity().catch(() => null);
       return identity?.documentId ?? null;
+    },
+    findPrefabInstanceRoot: async (parentUuid, name, prefabAssetUuid) => {
+      const tree = await Editor.Message.request('scene', 'query-node-tree');
+      return findInstanceRootInTree(tree, parentUuid, name, prefabAssetUuid, null);
     }
   };
+}
+
+/** 在节点树中按父节点 + 名称 + 源资产 UUID 定位重建后的实例根（createPrefab 会重建节点）。 */
+function findInstanceRootInTree(
+  node: unknown,
+  parentUuid: string | null,
+  name: string,
+  prefabAssetUuid: string,
+  currentParentUuid: string | null
+): string | null {
+  const record = readObject(node);
+  const nodeUuid = typeof readObject(record.uuid).value === 'string' ? readObject(record.uuid).value as string : null;
+  const nodeName = readObject(record.name).value;
+  const prefab = readObject(record.__prefab__);
+  if (nodeName === name && prefab.uuid === prefabAssetUuid && (parentUuid === null || currentParentUuid === parentUuid)) {
+    return nodeUuid;
+  }
+  const children = Array.isArray(record.children) ? record.children : [];
+  for (const child of children) {
+    const found = findInstanceRootInTree(child, parentUuid, name, prefabAssetUuid, nodeUuid ?? currentParentUuid);
+    if (found) return found;
+  }
+  return null;
 }
 
 /** 经 query-node Dump 模板设置节点属性（record=true 进入编辑器 Undo）。 */

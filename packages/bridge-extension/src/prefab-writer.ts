@@ -51,6 +51,11 @@ export interface PrefabWriterDependencies {
   resetNodeProperty(nodeUuid: string, propertyPath: string): Promise<void>;
   /** 当前编辑文档的资产 UUID（替换源时防自嵌套循环）。 */
   getCurrentDocumentAssetUuid(): Promise<string | null>;
+  /**
+   * createPrefab 会重建节点（会话 UUID 变更）：按父节点 + 名称 + 源资产重定位新实例根。
+   * 找不到时返回 null（调用方按稳定错误码处理）。
+   */
+  findPrefabInstanceRoot(parentUuid: string | null, name: string, prefabAssetUuid: string): Promise<string | null>;
 }
 
 export interface PrefabWriteOpResult {
@@ -320,14 +325,23 @@ async function createFromNode(
     throw new ProbeError('NODE_NOT_FOUND', { nodeUuid: operation.nodeUuid });
   }
   const assetUuid = await dependencies.createPrefabFromNode(operation.nodeUuid, operation.assetUrl);
-  const after = await dependencies.getPrefabInstanceInfo(operation.nodeUuid);
+  // createPrefab 会重建节点（实测：原会话 UUID 失效），按父节点 + 名称 + 新源资产重定位实例根。
+  const resolvedRootUuid = await dependencies.findPrefabInstanceRoot(before.parentUuid, before.name, assetUuid);
+  if (!resolvedRootUuid) {
+    throw new ProbeError('PREFAB_INSTANCE_NOT_ESTABLISHED', {
+      nodeUuid: operation.nodeUuid,
+      assetUuid,
+      reason: 'createPrefab 后无法重定位实例根（原 UUID 已失效）'
+    });
+  }
+  const after = await dependencies.getPrefabInstanceInfo(resolvedRootUuid);
   return {
-    nodeUuid: operation.nodeUuid,
+    nodeUuid: resolvedRootUuid,
     assetUuid,
     before,
     after,
     inverse: [
-      { type: 'prefab.unlink_instance', instanceRootUuid: operation.nodeUuid },
+      { type: 'prefab.unlink_instance', instanceRootUuid: resolvedRootUuid },
       { type: 'prefab.delete_asset', assetUrl: operation.assetUrl }
     ]
   };

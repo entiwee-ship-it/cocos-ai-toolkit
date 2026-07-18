@@ -851,6 +851,9 @@ function New-WriteRequest {
         [string]$PrefabGraphRevision = $null
     )
 
+    # [string] 类型参数未传值时 PowerShell 会强制为空字符串而非 null；
+    # Bridge 的 readNullableFingerprint 拒绝空字符串（INVALID_REVISION_PRECONDITION），这里统一归一为 null。
+    $prefabGraphValue = if ([string]::IsNullOrEmpty($PrefabGraphRevision)) { $null } else { $PrefabGraphRevision }
     $request = [ordered]@{
         transactionId = $TransactionId
         idempotencyKey = "key-$TransactionId"
@@ -860,7 +863,7 @@ function New-WriteRequest {
             hierarchy = $null
             assetDatabase = $null
             scriptCompilation = $null
-            prefabGraph = $PrefabGraphRevision
+            prefabGraph = $prefabGraphValue
         }
         operations = $Operations
         save = $Save

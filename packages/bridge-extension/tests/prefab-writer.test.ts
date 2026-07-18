@@ -41,6 +41,7 @@ function createDependencies(overrides: Partial<PrefabWriterDependencies> = {}): 
     linkPrefabInstance: async () => undefined,
     resetNodeProperty: async () => undefined,
     getCurrentDocumentAssetUuid: async () => 'asset-doc',
+    findPrefabInstanceRoot: async () => 'n1',
     ...overrides
   };
 }
@@ -137,20 +138,41 @@ describe('executePrefabWriteOperation', () => {
     expect(createCalled).toBe(0);
   });
 
-  it('prefab.create_from_node 成功：返回资产证据与 unlink+delete_asset 逆操作', async () => {
+  it('prefab.create_from_node 成功：按父节点+名称+源资产重定位实例根', async () => {
+    let locate: { parentUuid: string | null; name: string; prefabAssetUuid: string } | null = null;
     const dependencies = createDependencies({
-      queryAssetInfo: async () => null
+      queryAssetInfo: async () => null,
+      findPrefabInstanceRoot: async (parentUuid, name, prefabAssetUuid) => {
+        locate = { parentUuid, name, prefabAssetUuid };
+        return 'n-rebuilt';
+      }
     });
     const result = await executePrefabWriteOperation(
       { type: 'prefab.create_from_node', nodeUuid: 'n1', assetUrl: 'db://assets/a.prefab' } as WriteOperation,
       dependencies
     );
 
+    // createPrefab 会重建节点（实测）：必须按重建后 UUID 出证据和逆操作
+    expect(locate).toEqual({ parentUuid: 'n-parent', name: 'healthDialog', prefabAssetUuid: 'asset-new' });
+    expect(result.nodeUuid).toBe('n-rebuilt');
     expect(result.assetUuid).toBe('asset-new');
     expect(result.inverse).toEqual([
-      { type: 'prefab.unlink_instance', instanceRootUuid: 'n1' },
+      { type: 'prefab.unlink_instance', instanceRootUuid: 'n-rebuilt' },
       { type: 'prefab.delete_asset', assetUrl: 'db://assets/a.prefab' }
     ]);
+  });
+
+  it('prefab.create_from_node 重建后无法重定位实例根时报错', async () => {
+    const dependencies = createDependencies({
+      queryAssetInfo: async () => null,
+      findPrefabInstanceRoot: async () => null
+    });
+    const error = await executePrefabWriteOperation(
+      { type: 'prefab.create_from_node', nodeUuid: 'n1', assetUrl: 'db://assets/a.prefab' } as WriteOperation,
+      dependencies
+    ).catch((caught: unknown) => caught);
+
+    expect((error as ProbeError).code).toBe('PREFAB_INSTANCE_NOT_ESTABLISHED');
   });
 
   it('prefab.delete_asset 成功执行且无逆操作', async () => {
