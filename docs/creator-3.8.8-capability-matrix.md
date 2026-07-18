@@ -27,6 +27,7 @@
 | 预制体删除 | `asset-db/delete-asset(url)` | message-api | 已验证 | 空白项目实测删除 prefab 资产成功 |
 | 预制体实例语义 | `cce.SceneFacadeManager`：`applyPrefab` / `restorePrefab` / `linkPrefab` / `unlinkPrefab` | internal-api | 待阶段三实测 | 自省确认方法存在；`scene/duplicate-node` 消息不存在（挂起），节点复制当前走运行时 `cc.instantiate` |
 | 资产创建冲突弹窗 | `asset-db/create-asset` 对已存在路径 | message-api | 已验证风险 | 对既有路径调用会弹出"文件已存在，是否覆盖"模态框并无限阻塞调用方；写入前必须先 `query-asset-info` 预检或保证路径唯一 |
+| 脚本重新编译触发 | `asset-db/refresh-asset`（仅重新导入）；`programming/execute-script`（调用被拒） | message-api | 未找到可用入口 | 3.8.8 实测：refresh-asset 重新导入成功（asset-db 日志确认）但不触发 TypeScript 编译与类重注册；脚本源码变更的编译触发仍需编辑器内完成（保存文件/焦点刷新），外部消息入口待进一步探测 |
 | 保存与字节恢复 | `scene/save-scene` + `asset-db/save-asset` | `@cocos/creator-types` `3.8.7` | message-api | 已验证 Scene 保存会重排 Prefab；Undo 后由 AssetDB 恢复 prepare 阶段备份可回到原 SHA-256 |
 
 ## 已确认事实
