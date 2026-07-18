@@ -250,13 +250,14 @@ async function setComponentReference(
     throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { componentUuid, propertyPath, reference });
   }
   const oldValue = readValueAtPath(info.properties, segments, propertyPath);
+  const schemaProperty = findSchemaProperty(info, segments);
   await dependencies.setComponentProperty(componentUuid, propertyPath, reference);
   const actual = await dependencies.getComponentProperty(componentUuid, propertyPath);
   return {
     componentUuid,
     before: { uuid: componentUuid, propertyPath, reference: oldValue },
     after: { uuid: componentUuid, propertyPath, reference: actual },
-    inverse: [{ type: 'component.set_property', componentUuid, propertyPath, value: oldValue }]
+    inverse: buildReferenceInverse(componentUuid, propertyPath, schemaProperty?.declaredType ?? null, oldValue)
   };
 }
 
@@ -270,6 +271,7 @@ async function clearComponentReference(
   const segments = parsePropertyPath(propertyPath);
   assertWritableSchema(info, segments);
   const oldValue = readValueAtPath(info.properties, segments, propertyPath);
+  const schemaProperty = findSchemaProperty(info, segments);
   await dependencies.setComponentProperty(componentUuid, propertyPath, null);
   const actual = await dependencies.getComponentProperty(componentUuid, propertyPath);
   return {
@@ -278,8 +280,84 @@ async function clearComponentReference(
     after: { uuid: componentUuid, propertyPath, reference: actual },
     inverse: oldValue === null || oldValue === undefined
       ? []
-      : [{ type: 'component.set_reference', componentUuid, propertyPath, reference: oldValue }]
+      : buildReferenceInverse(componentUuid, propertyPath, schemaProperty?.declaredType ?? null, oldValue)
   };
+}
+
+/**
+ * 构造引用写入/清空的逆操作。
+ * 旧值已是归一化引用形态（kind 字段在位）时直接复用；
+ * 旧值为 Creator Dump 形态（{uuid}）时按声明类型归一化为 set_reference——
+ * 阶段二回滚未干净的根因是 Dump 旧值直接走 set_property，运行时把 {uuid} 当普通对象
+ * 赋值而不是恢复真实引用对象，导致回滚后重读与指纹比对不通过。
+ * 旧值为空（null 或空 uuid Dump）时逆操作为 clear_reference。
+ *
+ * @param componentUuid 目标组件 UUID。
+ * @param propertyPath 引用属性路径。
+ * @param declaredType 属性声明类型（cc.Node 判节点引用，*Component 判组件引用，其余按资产引用）。
+ * @param oldValue 写入前的当前值。
+ * @returns 显式逆操作序列。
+ */
+function buildReferenceInverse(
+  componentUuid: string,
+  propertyPath: string,
+  declaredType: string | null,
+  oldValue: unknown
+): WriteOperation[] {
+  const record = readObject(oldValue);
+  if (typeof record.kind === 'string' && record.kind) {
+    return [{ type: 'component.set_reference', componentUuid, propertyPath, reference: oldValue }];
+  }
+  const oldUuid = readReferenceDumpUuid(oldValue);
+  if (!oldUuid) {
+    return [{ type: 'component.clear_reference', componentUuid, propertyPath }];
+  }
+  const fileId = typeof record.fileId === 'string' && record.fileId ? record.fileId : null;
+  if (declaredType === 'cc.Node') {
+    return [{
+      type: 'component.set_reference',
+      componentUuid,
+      propertyPath,
+      reference: { kind: 'node', objectUuid: oldUuid, fileId, nodePath: null, available: true }
+    }];
+  }
+  if (declaredType && declaredType.endsWith('Component')) {
+    return [{
+      type: 'component.set_reference',
+      componentUuid,
+      propertyPath,
+      reference: { kind: 'component', objectUuid: oldUuid, fileId, typeId: declaredType, nodePath: null, available: true }
+    }];
+  }
+  return [{
+    type: 'component.set_reference',
+    componentUuid,
+    propertyPath,
+    reference: {
+      kind: 'asset',
+      assetUuid: oldUuid,
+      subAssetUuid: typeof record.subAssetUuid === 'string' && record.subAssetUuid ? record.subAssetUuid : null,
+      assetType: declaredType,
+      path: null,
+      available: true
+    }
+  }];
+}
+
+/** 读取引用 Dump 形态（{uuid}/{assetUuid}/{objectUuid}）中的目标 UUID；空引用返回 null。 */
+function readReferenceDumpUuid(value: unknown): string | null {
+  const record = readObject(value);
+  for (const key of ['uuid', 'assetUuid', 'objectUuid']) {
+    const uuid = record[key];
+    if (typeof uuid === 'string' && uuid) return uuid;
+  }
+  return null;
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 async function resizeComponentArray(

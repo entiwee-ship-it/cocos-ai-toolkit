@@ -162,10 +162,9 @@ describe('component.set_reference / clear_reference', () => {
 
     expect(result.after).toMatchObject({ reference: { kind: 'node', objectUuid: 'node-9' } });
     expect(result.inverse).toEqual([{
-      type: 'component.set_property',
+      type: 'component.clear_reference',
       componentUuid: 'comp-1',
-      propertyPath: 'clickEvents[0].target',
-      value: null
+      propertyPath: 'clickEvents[0].target'
     }]);
   });
 
@@ -219,6 +218,61 @@ describe('component.set_reference / clear_reference', () => {
       componentUuid: 'comp-2',
       propertyPath: 'spriteFrame',
       reference: { kind: 'asset', assetUuid: 'asset-1', subAssetUuid: null, assetType: 'cc.SpriteFrame', path: null, available: true }
+    }]);
+  });
+
+  it('set_reference 逆操作按旧 Dump 引用归一化为 set_reference（阶段二回滚未干净复现修复）', async () => {
+    const dependencies = createDependencies();
+    const result = await executeComponentWriteOperation(
+      {
+        type: 'component.set_reference',
+        componentUuid: 'comp-3',
+        propertyPath: 'targetNode',
+        reference: { kind: 'node', objectUuid: 'node-new', fileId: null, nodePath: null, available: true }
+      },
+      dependencies
+    );
+
+    // 旧值为 Dump 形态 { uuid: 'node-9' }：逆操作必须是 set_reference 的归一化引用，
+    // 而不是阶段二的 set_property + 原始 Dump（运行时会把 {uuid} 当普通对象赋值，回滚后验证不通过）。
+    expect(result.inverse).toEqual([{
+      type: 'component.set_reference',
+      componentUuid: 'comp-3',
+      propertyPath: 'targetNode',
+      reference: { kind: 'node', objectUuid: 'node-9', fileId: null, nodePath: null, available: true }
+    }]);
+  });
+
+  it('set_reference 旧值为空或空引用时逆操作为 clear_reference', async () => {
+    const dependencies = createDependencies();
+    const nullCase = await executeComponentWriteOperation(
+      {
+        type: 'component.set_reference',
+        componentUuid: 'comp-1',
+        propertyPath: 'clickEvents[0].target',
+        reference: { kind: 'node', objectUuid: 'node-9', fileId: null, nodePath: null, available: true }
+      },
+      dependencies
+    );
+    expect(nullCase.inverse).toEqual([{
+      type: 'component.clear_reference',
+      componentUuid: 'comp-1',
+      propertyPath: 'clickEvents[0].target'
+    }]);
+
+    const emptyDumpCase = await executeComponentWriteOperation(
+      {
+        type: 'component.set_reference',
+        componentUuid: 'comp-3',
+        propertyPath: 'emptyRef',
+        reference: { kind: 'node', objectUuid: 'node-new', fileId: null, nodePath: null, available: true }
+      },
+      dependencies
+    );
+    expect(emptyDumpCase.inverse).toEqual([{
+      type: 'component.clear_reference',
+      componentUuid: 'comp-3',
+      propertyPath: 'emptyRef'
     }]);
   });
 });
@@ -289,6 +343,21 @@ function createDependencies(options: {
     },
     schema: [
       { propertyPath: 'spriteFrame', declaredType: 'cc.SpriteFrame', readonly: false, isArray: false }
+    ]
+  });
+  components.set('comp-3', {
+    uuid: 'comp-3',
+    type: 'Phase2Probe',
+    nodeUuid: 'node-1',
+    enabled: true,
+    properties: {
+      // 生产形态：引用旧值为 Creator Dump 形态（{uuid}），非归一化 ReferenceSchema。
+      targetNode: { uuid: 'node-9' },
+      emptyRef: { uuid: '' }
+    },
+    schema: [
+      { propertyPath: 'targetNode', declaredType: 'cc.Node', readonly: false, isArray: false },
+      { propertyPath: 'emptyRef', declaredType: 'cc.Node', readonly: false, isArray: false }
     ]
   });
 
