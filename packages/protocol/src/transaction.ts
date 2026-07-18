@@ -178,6 +178,11 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
     type: z.literal('prefab.link_instance'),
     nodeUuid: z.string().min(1),
     prefabAssetUuid: z.string().min(1)
+  }),
+  // 预制体资产删除：主要用于 create_from_node 的逆操作回滚，也可独立清理。
+  z.object({
+    type: z.literal('prefab.delete_asset'),
+    assetUrl: z.string().min(1)
   })
 ]);
 

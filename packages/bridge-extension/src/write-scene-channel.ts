@@ -1,6 +1,7 @@
 import { ProbeError } from './probe-errors';
 import type { ComponentWriteOpResult } from './component-writer';
 import type { NodeWriteOpResult } from './node-writer';
+import type { PrefabWriteOpResult } from './prefab-writer';
 import type {
   WriteExecutionOutcome,
   WriteOperation,
@@ -9,12 +10,13 @@ import type {
 import type { VerifiedOperation } from './write-verifier';
 
 /**
- * Scene 写通道依赖。节点/组件原子写分别来自 node-writer 和 component-writer，
+ * Scene 写通道依赖。节点/组件/预制体原子写分别来自 node-writer、component-writer 和 prefab-writer，
  * 保存、重开和重读验证由 scene.ts 接到 Creator 真实能力。
  */
 export interface WriteSceneChannelDependencies {
   executeNodeOperation(operation: WriteOperation): Promise<NodeWriteOpResult>;
   executeComponentOperation(operation: WriteOperation): Promise<ComponentWriteOpResult>;
+  executePrefabOperation(operation: WriteOperation): Promise<PrefabWriteOpResult>;
   saveDocument(): Promise<void>;
   reloadDocument(): Promise<void>;
   verify(executed: VerifiedOperation[]): Promise<WriteVerificationReport>;
@@ -42,7 +44,9 @@ export async function executeWriteSceneOperations(
     try {
       const result = operation.type.startsWith('node.')
         ? await dependencies.executeNodeOperation(operation)
-        : await dependencies.executeComponentOperation(operation);
+        : operation.type.startsWith('prefab.')
+          ? await dependencies.executePrefabOperation(operation)
+          : await dependencies.executeComponentOperation(operation);
       // 回填执行结果产生的目标 UUID，重读验证据此定位新建节点/组件。
       const resultNodeUuid = 'nodeUuid' in result ? result.nodeUuid : null;
       const resultComponentUuid = 'componentUuid' in result ? result.componentUuid : null;
@@ -100,6 +104,8 @@ export async function rollbackWriteSceneOperations(
       try {
         if (inverse.type.startsWith('node.')) {
           await dependencies.executeNodeOperation(inverse);
+        } else if (inverse.type.startsWith('prefab.')) {
+          await dependencies.executePrefabOperation(inverse);
         } else {
           await dependencies.executeComponentOperation(inverse);
         }

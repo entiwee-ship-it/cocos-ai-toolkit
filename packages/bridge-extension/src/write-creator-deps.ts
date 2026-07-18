@@ -9,6 +9,7 @@ import {
 import { buildComponentTypeSchema } from './component-schema';
 import { readDumpValueAtPath } from './write-scene-channel';
 import { saveAndVerifyWriteTransaction, type WriteVerifierDependencies } from './write-verifier';
+import type { PrefabInstanceInfo, PrefabWriterDependencies } from './prefab-writer';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
 
 /**
@@ -377,6 +378,108 @@ export function buildWriteVerifierDependencies(): WriteVerifierDependencies {
       const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
       if (!raw) return undefined;
       return readDumpValueAtPath(raw, parsePropertyPath(propertyPath));
+    },
+    getPrefabInstanceInfo: async (nodeUuid) => readPrefabInstanceInfo(nodeUuid),
+    queryAssetInfo: async (uuidOrUrl) => queryPrefabAssetInfo(uuidOrUrl)
+  };
+}
+
+/** 经 query-node Dump 读取节点的 __prefab__ 结构，解析为实例信息证据。 */
+async function readPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceInfo | null> {
+  const raw = await Editor.Message.request('scene', 'query-node', nodeUuid).catch(() => null);
+  if (!raw) return null;
+  const record = readObject(raw);
+  const prefab = readObject(record.__prefab__);
+  const stateInfo = readObject(prefab.prefabStateInfo);
+  const instance = readObject(readObject(prefab.instance).value);
+  const nameDump = readObject(record.name);
+  const parentDump = readObject(record.parent);
+  const parentValue = readObject(parentDump.value);
+  const childrenDump = record.children;
+  const children = Array.isArray(childrenDump) ? childrenDump : (Array.isArray(readObject(childrenDump).value) ? readObject(childrenDump).value as unknown[] : []);
+  return {
+    nodeUuid,
+    name: typeof nameDump.value === 'string' ? nameDump.value : '',
+    prefabAssetUuid: typeof prefab.uuid === 'string' ? prefab.uuid : null,
+    sourceObjectFileId: typeof prefab.fileId === 'string' ? prefab.fileId : null,
+    instanceFileId: typeof readObject(instance.fileId).value === 'string' ? readObject(instance.fileId).value as string : null,
+    state: typeof stateInfo.state === 'number' ? stateInfo.state : null,
+    isApplicable: stateInfo.isApplicable === true,
+    isRevertable: stateInfo.isRevertable === true,
+    isUnwrappable: stateInfo.isUnwrappable === true,
+    parentUuid: typeof parentValue.uuid === 'string' ? parentValue.uuid : null,
+    childCount: children.length
+  };
+}
+
+/** 资产预检：按 UUID 或 db:// URL 查询资产信息，不存在返回 null。 */
+async function queryPrefabAssetInfo(uuidOrUrl: string): Promise<{ uuid: string; type: string | null } | null> {
+  const info = await Editor.Message.request('asset-db', 'query-asset-info', uuidOrUrl).catch(() => null);
+  if (!info) return null;
+  const record = readObject(info);
+  return {
+    uuid: typeof record.uuid === 'string' ? record.uuid : uuidOrUrl,
+    type: typeof record.type === 'string' ? record.type : null
+  };
+}
+
+/** 取 cce.SceneFacadeManager 门面；不可用时返回 null。 */
+function resolveSceneFacade(): Record<string, unknown> | null {
+  const cce = readObject((globalThis as Record<string, unknown>).cce);
+  const facade = cce.SceneFacadeManager ?? cce.sceneFacadeManager ?? cce.SceneFacade ?? cce.sceneFacade;
+  return facade && (typeof facade === 'object' || typeof facade === 'function')
+    ? facade as Record<string, unknown>
+    : null;
+}
+
+/** 调用门面预制体语义方法；方法缺失时报稳定错误码。 */
+async function callFacadePrefabMethod(method: string, args: unknown[], unavailableCode: string): Promise<unknown> {
+  const facade = resolveSceneFacade();
+  if (!facade || typeof facade[method] !== 'function') {
+    throw new ProbeError(unavailableCode, { method });
+  }
+  return (facade[method] as (...callArgs: unknown[]) => Promise<unknown>).apply(facade, args);
+}
+
+/** 构造预制体写依赖（Scene 消息 API + cce.SceneFacadeManager 门面）。 */
+export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
+  return {
+    getPrefabInstanceInfo: async (nodeUuid) => readPrefabInstanceInfo(nodeUuid),
+    queryAssetInfo: async (uuidOrUrl) => queryPrefabAssetInfo(uuidOrUrl),
+    instantiatePrefab: async (parentNodeUuid, prefabAssetUuid, name) => {
+      // 实测路径：scene/create-node 消息 + type='cc.Prefab'（不带 type 会被剥掉实例信息）。
+      const created = await Editor.Message.request('scene', 'create-node', {
+        parent: parentNodeUuid,
+        assetUuid: prefabAssetUuid,
+        ...(name ? { name } : {}),
+        type: 'cc.Prefab'
+      } as never);
+      if (typeof created !== 'string' || !created) {
+        throw new ProbeError('PREFAB_INSTANCE_NOT_ESTABLISHED', { parentNodeUuid, prefabAssetUuid });
+      }
+      return created;
+    },
+    createPrefabFromNode: async (nodeUuid, assetUrl) => {
+      const assetUuid = await callFacadePrefabMethod('createPrefab', [nodeUuid, assetUrl], 'CREATOR_CREATE_PREFAB_UNAVAILABLE');
+      if (typeof assetUuid !== 'string' || !assetUuid) {
+        throw new ProbeError('CREATE_PREFAB_FAILED', { nodeUuid, assetUrl });
+      }
+      return assetUuid;
+    },
+    deleteAsset: async (assetUrl) => {
+      await Editor.Message.request('asset-db', 'delete-asset', assetUrl as never);
+    },
+    revertPrefabInstance: async (instanceRootUuid) => {
+      await callFacadePrefabMethod('restorePrefab', [instanceRootUuid], 'CREATOR_REVERT_PREFAB_UNAVAILABLE');
+    },
+    applyPrefabInstance: async (instanceRootUuid) => {
+      await callFacadePrefabMethod('applyPrefab', [instanceRootUuid], 'CREATOR_APPLY_PREFAB_UNAVAILABLE');
+    },
+    unlinkPrefabInstance: async (instanceRootUuid) => {
+      await callFacadePrefabMethod('unlinkPrefab', [instanceRootUuid], 'CREATOR_UNLINK_PREFAB_UNAVAILABLE');
+    },
+    linkPrefabInstance: async (nodeUuid, prefabAssetUuid) => {
+      await callFacadePrefabMethod('linkPrefab', [nodeUuid, prefabAssetUuid], 'CREATOR_LINK_PREFAB_UNAVAILABLE');
     }
   };
 }

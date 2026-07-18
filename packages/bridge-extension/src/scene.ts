@@ -8,6 +8,7 @@ import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, norm
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
 import { executeNodeWriteOperation } from './node-writer';
 import { executeComponentWriteOperation } from './component-writer';
+import { executePrefabWriteOperation } from './prefab-writer';
 import { saveAndVerifyWriteTransaction, type VerifiedOperation } from './write-verifier';
 import {
   executeWriteSceneOperations,
@@ -17,6 +18,7 @@ import {
 import {
   buildComponentWriterDependencies,
   buildNodeWriterDependencies,
+  buildPrefabWriterDependencies,
   buildWriteVerifierDependencies,
   captureCurrentDocumentIdentity
 } from './write-creator-deps';
@@ -177,14 +179,16 @@ function requireUuid(request: unknown): string {
   return input.uuid;
 }
 
-/** 组装 Scene 写通道：节点/组件原子写 + 保存重开 + 重读验证。 */
+/** 组装 Scene 写通道：节点/组件/预制体原子写 + 保存重开 + 重读验证。 */
 function buildWriteChannelDependencies(save: boolean): WriteSceneChannelDependencies {
   const nodeDependencies = buildNodeWriterDependencies();
   const componentDependencies = buildComponentWriterDependencies();
+  const prefabDependencies = buildPrefabWriterDependencies();
   const verifierDependencies = buildWriteVerifierDependencies();
   return {
     executeNodeOperation: (operation) => executeNodeWriteOperation(operation, nodeDependencies),
     executeComponentOperation: (operation) => executeComponentWriteOperation(operation, componentDependencies),
+    executePrefabOperation: (operation) => executePrefabWriteOperation(operation, prefabDependencies),
     saveDocument: verifierDependencies.saveDocument,
     reloadDocument: verifierDependencies.reloadDocument,
     verify: (executed) => saveAndVerifyWriteTransaction(

@@ -188,6 +188,16 @@ function createDependencies(options: { failAtType?: string } = {}): WriteSceneCh
       }
       return componentResult;
     },
+    executePrefabOperation: async (operation) => {
+      calls.push(`prefab:${operation.type}`);
+      return {
+        nodeUuid: 'n1',
+        assetUuid: null,
+        before: null,
+        after: null,
+        inverse: []
+      };
+    },
     saveDocument: async () => {
       calls.push('saveDocument');
     },

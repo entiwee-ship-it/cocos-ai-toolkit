@@ -210,6 +210,20 @@ function createDependencies(options: {
       if (propertyPath === 'items[2]') return 'c';
       if (propertyPath === 'items') return ['a', 'b', 'c'];
       return undefined;
-    }
+    },
+    getPrefabInstanceInfo: async (nodeUuid) => ({
+      nodeUuid,
+      name: 'Instance',
+      prefabAssetUuid: 'asset-1',
+      sourceObjectFileId: 'file-1',
+      instanceFileId: 'inst-1',
+      state: 2,
+      isApplicable: true,
+      isRevertable: true,
+      isUnwrappable: true,
+      parentUuid: null,
+      childCount: 0
+    }),
+    queryAssetInfo: async () => null
   };
 }

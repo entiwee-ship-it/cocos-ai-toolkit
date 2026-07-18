@@ -1,6 +1,7 @@
 import { deepEqual } from './component-writer';
 import type { ComponentWriteOpResult } from './component-writer';
 import type { NodeWriteOpResult } from './node-writer';
+import type { PrefabWriteOpResult } from './prefab-writer';
 import type {
   WriteOperation,
   WriteTransactionRequest,
@@ -8,8 +9,10 @@ import type {
   WriteVerificationReport
 } from './transaction-manager';
 
+import type { PrefabAssetInfo, PrefabInstanceInfo } from './prefab-writer';
+
 /** 已执行完成、等待重读验证的写操作（原始操作 + 执行证据）。 */
-export type VerifiedOperation = (NodeWriteOpResult | ComponentWriteOpResult) & {
+export type VerifiedOperation = (NodeWriteOpResult | ComponentWriteOpResult | PrefabWriteOpResult) & {
   operation: WriteOperation;
 };
 
@@ -23,6 +26,8 @@ export interface WriteVerifierDependencies {
   getNodeInfo(nodeUuid: string): Promise<Record<string, unknown> | null>;
   getComponentInfo(componentUuid: string): Promise<Record<string, unknown> | null>;
   getComponentProperty(componentUuid: string, propertyPath: string): Promise<unknown>;
+  getPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceInfo | null>;
+  queryAssetInfo(uuidOrUrl: string): Promise<PrefabAssetInfo | null>;
 }
 
 /**
@@ -177,6 +182,23 @@ async function verifyOperationUnsafe(
       const actualLength = Array.isArray(actual) ? actual.length : null;
       return build(operation.length, actualLength, actualLength === operation.length);
     }
+    case 'prefab.instantiate': {
+      const nodeUuid = readResultNodeUuid(operation);
+      const actual = nodeUuid ? await dependencies.getPrefabInstanceInfo(nodeUuid) : null;
+      const matched = actual !== null
+        && actual.prefabAssetUuid === operation.prefabAssetUuid
+        && actual.instanceFileId !== null;
+      return build('实例已建立且源资产一致', actual, matched);
+    }
+    case 'prefab.create_from_node': {
+      const actual = await dependencies.getPrefabInstanceInfo(operation.nodeUuid as string);
+      const linked = actual !== null && actual.prefabAssetUuid !== null;
+      return build('节点已关联预制体资产', actual?.prefabAssetUuid ?? null, linked);
+    }
+    case 'prefab.delete_asset': {
+      const actual = await dependencies.queryAssetInfo(operation.assetUrl as string);
+      return build('资产不存在', actual === null ? '资产不存在' : '资产仍存在', actual === null);
+    }
     default:
       return build(expectationSummary(operation), 'UNKNOWN_OPERATION_TYPE', false);
   }
@@ -241,6 +263,14 @@ function describeOperation(operation: WriteOperation): string {
     case 'component.set_reference': return `设置引用 ${String(operation.propertyPath)}`;
     case 'component.clear_reference': return `清空引用 ${String(operation.propertyPath)}`;
     case 'component.resize_array': return `调整数组 ${String(operation.propertyPath)} 长度为 ${String(operation.length)}`;
+    case 'prefab.instantiate': return `实例化预制体 ${String(operation.prefabAssetUuid)}`;
+    case 'prefab.create_from_node': return `从节点生成预制体 ${String(operation.assetUrl)}`;
+    case 'prefab.revert_override': return `还原预制体覆盖 ${String(operation.instanceRootUuid)}`;
+    case 'prefab.apply_to_source': return `应用覆盖到源 ${String(operation.instanceRootUuid)}`;
+    case 'prefab.replace_source': return `替换预制体源 ${String(operation.instanceRootUuid)}`;
+    case 'prefab.unlink_instance': return `解除预制体关联 ${String(operation.instanceRootUuid)}`;
+    case 'prefab.link_instance': return `重新关联预制体 ${String(operation.nodeUuid)}`;
+    case 'prefab.delete_asset': return `删除预制体资产 ${String(operation.assetUrl)}`;
     default: return String(operation.type);
   }
 }

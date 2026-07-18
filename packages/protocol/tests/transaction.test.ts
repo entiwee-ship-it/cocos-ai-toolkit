@@ -409,6 +409,13 @@ describe('阶段三写事务协议', () => {
     }
   });
 
+  it('接受 prefab.delete_asset 资产清理操作（create_from_node 逆操作用）', () => {
+    expect(WriteOperationSchema.parse({
+      type: 'prefab.delete_asset',
+      assetUrl: 'db://assets/a.prefab'
+    })).toBeTruthy();
+  });
+
   it('prefab.revert_override 支持按属性路径的细粒度还原', () => {
     expect(WriteOperationSchema.parse({
       type: 'prefab.revert_override',
