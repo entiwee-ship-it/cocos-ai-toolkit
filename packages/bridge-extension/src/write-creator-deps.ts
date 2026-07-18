@@ -525,6 +525,10 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
       }
       await (nodeManager.resetProperty as (uuid: string, path: string) => Promise<unknown>)
         .call(nodeManager, nodeUuid, propertyPath);
+    },
+    getCurrentDocumentAssetUuid: async () => {
+      const identity = await captureCurrentDocumentIdentity().catch(() => null);
+      return identity?.documentId ?? null;
     }
   };
 }

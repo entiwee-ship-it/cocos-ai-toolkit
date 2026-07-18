@@ -49,6 +49,8 @@ export interface PrefabWriterDependencies {
   linkPrefabInstance(nodeUuid: string, prefabAssetUuid: string): Promise<void>;
   /** 按属性路径重置实例节点属性为源值（Inspector 单属性还原同款路径）。 */
   resetNodeProperty(nodeUuid: string, propertyPath: string): Promise<void>;
+  /** 当前编辑文档的资产 UUID（替换源时防自嵌套循环）。 */
+  getCurrentDocumentAssetUuid(): Promise<string | null>;
 }
 
 export interface PrefabWriteOpResult {
@@ -87,6 +89,12 @@ export async function executePrefabWriteOperation(
       return revertOverride(operation as PrefabRevertOverrideOperation, dependencies);
     case 'prefab.apply_to_source':
       return applyToSource(operation as PrefabApplyToSourceOperation, dependencies);
+    case 'prefab.unlink_instance':
+      return unlinkInstance(operation as PrefabInstanceOperation, dependencies);
+    case 'prefab.link_instance':
+      return linkInstance(operation as PrefabLinkOperation, dependencies);
+    case 'prefab.replace_source':
+      return replaceSource(operation as PrefabReplaceOperation, dependencies);
     default:
       throw new ProbeError('INVALID_WRITE_OPERATION', { type: operation.type });
   }
@@ -97,6 +105,112 @@ type PrefabCreateFromNodeOperation = WriteOperation & { nodeUuid: string; assetU
 type PrefabDeleteAssetOperation = WriteOperation & { assetUrl: string };
 type PrefabRevertOverrideOperation = WriteOperation & { instanceRootUuid: string; propertyPath?: string };
 type PrefabApplyToSourceOperation = WriteOperation & { instanceRootUuid: string };
+type PrefabInstanceOperation = WriteOperation & { instanceRootUuid: string };
+type PrefabLinkOperation = WriteOperation & { nodeUuid: string; prefabAssetUuid: string };
+type PrefabReplaceOperation = WriteOperation & { instanceRootUuid: string; newPrefabAssetUuid: string };
+
+/**
+ * 解除实例关联：门面 unlinkPrefab（自带 Undo 录制，实测 undo 可恢复关联）。
+ * 子树保留；逆操作为按原源资产重新关联。
+ */
+async function unlinkInstance(
+  operation: PrefabInstanceOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const before = requireInstance(
+    await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid),
+    operation.instanceRootUuid
+  );
+  await dependencies.unlinkPrefabInstance(operation.instanceRootUuid);
+  const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
+  return {
+    nodeUuid: operation.instanceRootUuid,
+    assetUuid: null,
+    before,
+    after,
+    inverse: [{ type: 'prefab.link_instance', nodeUuid: operation.instanceRootUuid, prefabAssetUuid: before.prefabAssetUuid }]
+  };
+}
+
+/** 重新关联：把节点关联到指定预制体资产；关联后实例信息必须建立。 */
+async function linkInstance(
+  operation: PrefabLinkOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const asset = await dependencies.queryAssetInfo(operation.prefabAssetUuid);
+  if (!asset) {
+    throw new ProbeError('PREFAB_ASSET_NOT_FOUND', { prefabAssetUuid: operation.prefabAssetUuid });
+  }
+  if (asset.type !== 'cc.Prefab') {
+    throw new ProbeError('PREFAB_ASSET_TYPE_MISMATCH', { prefabAssetUuid: operation.prefabAssetUuid, actualType: asset.type });
+  }
+  const before = await dependencies.getPrefabInstanceInfo(operation.nodeUuid);
+  if (!before) {
+    throw new ProbeError('NODE_NOT_FOUND', { nodeUuid: operation.nodeUuid });
+  }
+  await dependencies.linkPrefabInstance(operation.nodeUuid, operation.prefabAssetUuid);
+  const after = await dependencies.getPrefabInstanceInfo(operation.nodeUuid);
+  if (!after || after.prefabAssetUuid !== operation.prefabAssetUuid || !after.instanceFileId) {
+    throw new ProbeError('PREFAB_LINK_NOT_ESTABLISHED', {
+      nodeUuid: operation.nodeUuid,
+      expectedAssetUuid: operation.prefabAssetUuid,
+      actualAssetUuid: after?.prefabAssetUuid ?? null,
+      instanceFileId: after?.instanceFileId ?? null
+    });
+  }
+  return {
+    nodeUuid: operation.nodeUuid,
+    assetUuid: null,
+    before,
+    after,
+    inverse: [{ type: 'prefab.unlink_instance', instanceRootUuid: operation.nodeUuid }]
+  };
+}
+
+/**
+ * 替换实例源资产：关联到新预制体资产。
+ * 安全规则：新源必须存在且为 cc.Prefab；与当前源相同视为无效操作；
+ * 新源为当前文档自身时拒绝（防自嵌套循环，设计规格 8.4）。
+ */
+async function replaceSource(
+  operation: PrefabReplaceOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const before = requireInstance(
+    await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid),
+    operation.instanceRootUuid
+  );
+  if (operation.newPrefabAssetUuid === before.prefabAssetUuid) {
+    throw new ProbeError('PREFAB_REPLACE_NOOP', { instanceRootUuid: operation.instanceRootUuid, prefabAssetUuid: operation.newPrefabAssetUuid });
+  }
+  const asset = await dependencies.queryAssetInfo(operation.newPrefabAssetUuid);
+  if (!asset) {
+    throw new ProbeError('PREFAB_ASSET_NOT_FOUND', { prefabAssetUuid: operation.newPrefabAssetUuid });
+  }
+  if (asset.type !== 'cc.Prefab') {
+    throw new ProbeError('PREFAB_ASSET_TYPE_MISMATCH', { prefabAssetUuid: operation.newPrefabAssetUuid, actualType: asset.type });
+  }
+  const documentAssetUuid = await dependencies.getCurrentDocumentAssetUuid();
+  if (documentAssetUuid && operation.newPrefabAssetUuid === documentAssetUuid) {
+    throw new ProbeError('PREFAB_CYCLE', { instanceRootUuid: operation.instanceRootUuid, newPrefabAssetUuid: operation.newPrefabAssetUuid });
+  }
+  await dependencies.linkPrefabInstance(operation.instanceRootUuid, operation.newPrefabAssetUuid);
+  const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
+  if (!after || after.prefabAssetUuid !== operation.newPrefabAssetUuid || !after.instanceFileId) {
+    throw new ProbeError('PREFAB_LINK_NOT_ESTABLISHED', {
+      instanceRootUuid: operation.instanceRootUuid,
+      expectedAssetUuid: operation.newPrefabAssetUuid,
+      actualAssetUuid: after?.prefabAssetUuid ?? null
+    });
+  }
+  return {
+    nodeUuid: operation.instanceRootUuid,
+    assetUuid: null,
+    before,
+    after,
+    inverse: [{ type: 'prefab.replace_source', instanceRootUuid: operation.instanceRootUuid, newPrefabAssetUuid: before.prefabAssetUuid }]
+  };
+}
 
 /** 目标不是完整预制体实例时统一拒绝。 */
 function requireInstance(info: PrefabInstanceInfo | null, instanceRootUuid: string): PrefabInstanceInfo {

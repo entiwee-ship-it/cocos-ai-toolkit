@@ -216,6 +216,21 @@ async function verifyOperationUnsafe(
       const intact = actual !== null && actual.prefabAssetUuid !== null && actual.instanceFileId !== null;
       return build('实例关系未损坏', actual ? { prefabAssetUuid: actual.prefabAssetUuid, instanceFileId: actual.instanceFileId } : null, intact);
     }
+    case 'prefab.unlink_instance': {
+      const actual = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid as string);
+      const unlinked = actual !== null && actual.prefabAssetUuid === null;
+      return build('关联已解除', actual?.prefabAssetUuid ?? null, unlinked);
+    }
+    case 'prefab.link_instance': {
+      const actual = await dependencies.getPrefabInstanceInfo(operation.nodeUuid as string);
+      const linked = actual !== null && actual.prefabAssetUuid === operation.prefabAssetUuid && actual.instanceFileId !== null;
+      return build(operation.prefabAssetUuid, actual?.prefabAssetUuid ?? null, linked);
+    }
+    case 'prefab.replace_source': {
+      const actual = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid as string);
+      const replaced = actual !== null && actual.prefabAssetUuid === operation.newPrefabAssetUuid && actual.instanceFileId !== null;
+      return build(operation.newPrefabAssetUuid, actual?.prefabAssetUuid ?? null, replaced);
+    }
     default:
       return build(expectationSummary(operation), 'UNKNOWN_OPERATION_TYPE', false);
   }

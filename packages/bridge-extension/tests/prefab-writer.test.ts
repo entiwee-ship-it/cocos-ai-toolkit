@@ -40,6 +40,7 @@ function createDependencies(overrides: Partial<PrefabWriterDependencies> = {}): 
     unlinkPrefabInstance: async () => undefined,
     linkPrefabInstance: async () => undefined,
     resetNodeProperty: async () => undefined,
+    getCurrentDocumentAssetUuid: async () => 'asset-doc',
     ...overrides
   };
 }
@@ -243,12 +244,88 @@ describe('executePrefabWriteOperation', () => {
     expect(result.before?.prefabAssetUuid).toBe('asset-1');
   });
 
-  it('未实现的 prefab 操作返回稳定错误码', async () => {
+  it('prefab.unlink_instance 成功：解除关联且逆操作为重新关联', async () => {
+    let unlinked: string | null = null;
+    const dependencies = createDependencies({
+      unlinkPrefabInstance: async (uuid) => {
+        unlinked = uuid;
+      }
+    });
+    const result = await executePrefabWriteOperation(
+      { type: 'prefab.unlink_instance', instanceRootUuid: 'n1' } as WriteOperation,
+      dependencies
+    );
+
+    expect(unlinked).toBe('n1');
+    expect(result.inverse).toEqual([{ type: 'prefab.link_instance', nodeUuid: 'n1', prefabAssetUuid: 'asset-1' }]);
+  });
+
+  it('prefab.link_instance 成功：关联后实例信息指向目标资产', async () => {
+    const dependencies = createDependencies({
+      getPrefabInstanceInfo: async () => createInstanceInfo({ prefabAssetUuid: 'asset-1', instanceFileId: 'inst-1' })
+    });
+    const result = await executePrefabWriteOperation(
+      { type: 'prefab.link_instance', nodeUuid: 'n1', prefabAssetUuid: 'asset-1' } as WriteOperation,
+      dependencies
+    );
+
+    expect(result.inverse).toEqual([{ type: 'prefab.unlink_instance', instanceRootUuid: 'n1' }]);
+    expect(result.after?.prefabAssetUuid).toBe('asset-1');
+  });
+
+  it('prefab.link_instance 关联后实例信息未建立时报错', async () => {
+    const dependencies = createDependencies({
+      getPrefabInstanceInfo: async () => createInstanceInfo({ prefabAssetUuid: null, instanceFileId: null })
+    });
     const error = await executePrefabWriteOperation(
-      { type: 'prefab.replace_source', instanceRootUuid: 'n1', newPrefabAssetUuid: 'a2' } as WriteOperation,
-      createDependencies()
+      { type: 'prefab.link_instance', nodeUuid: 'n1', prefabAssetUuid: 'asset-1' } as WriteOperation,
+      dependencies
     ).catch((caught: unknown) => caught);
 
-    expect((error as ProbeError).code).toBe('INVALID_WRITE_OPERATION');
+    expect((error as ProbeError).code).toBe('PREFAB_LINK_NOT_ESTABLISHED');
+  });
+
+  it('prefab.replace_source 新源与当前源相同视为无效操作并拒绝', async () => {
+    const dependencies = createDependencies();
+    const error = await executePrefabWriteOperation(
+      { type: 'prefab.replace_source', instanceRootUuid: 'n1', newPrefabAssetUuid: 'asset-1' } as WriteOperation,
+      dependencies
+    ).catch((caught: unknown) => caught);
+
+    expect((error as ProbeError).code).toBe('PREFAB_REPLACE_NOOP');
+  });
+
+  it('prefab.replace_source 新源为当前文档自身时拒绝（防自嵌套循环）', async () => {
+    const dependencies = createDependencies({
+      getCurrentDocumentAssetUuid: async () => 'asset-doc'
+    });
+    const error = await executePrefabWriteOperation(
+      { type: 'prefab.replace_source', instanceRootUuid: 'n1', newPrefabAssetUuid: 'asset-doc' } as WriteOperation,
+      dependencies
+    ).catch((caught: unknown) => caught);
+
+    expect((error as ProbeError).code).toBe('PREFAB_CYCLE');
+  });
+
+  it('prefab.replace_source 成功：重新关联新源且逆操作为关联旧源', async () => {
+    let infoCalls = 0;
+    const dependencies = createDependencies({
+      getCurrentDocumentAssetUuid: async () => 'asset-doc',
+      queryAssetInfo: async () => ({ uuid: 'asset-2', type: 'cc.Prefab' }),
+      getPrefabInstanceInfo: async () => {
+        infoCalls += 1;
+        // 首次为替换前（旧源 asset-1），之后为替换后（新源 asset-2）
+        return createInstanceInfo(infoCalls === 1
+          ? { prefabAssetUuid: 'asset-1', instanceFileId: 'inst-old' }
+          : { prefabAssetUuid: 'asset-2', instanceFileId: 'inst-new' });
+      }
+    });
+    const result = await executePrefabWriteOperation(
+      { type: 'prefab.replace_source', instanceRootUuid: 'n1', newPrefabAssetUuid: 'asset-2' } as WriteOperation,
+      dependencies
+    );
+
+    expect(result.inverse).toEqual([{ type: 'prefab.replace_source', instanceRootUuid: 'n1', newPrefabAssetUuid: 'asset-1' }]);
+    expect(result.after?.prefabAssetUuid).toBe('asset-2');
   });
 });
