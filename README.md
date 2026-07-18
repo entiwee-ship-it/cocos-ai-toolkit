@@ -209,32 +209,6 @@ node packages/cli/dist/index.js transaction-rollback --project-id <project-id> -
 MCP 写工具（`cocos_write_prepare` 等五个）默认不注册，仅当 MCP Server 以显式 `--enable-writes`
 启动时开放；环境变量无法开启写能力。写工具响应同样按协议 Schema 校验并写入审计。
 
-## 两阶段 Undo 写探针
-
-写探针只用于隔离 Worktree，节点名必须以 `CocosAiProbe_` 开头：
-
-```powershell
-$prepare = node packages/cli/dist/index.js probe-undo-save-prepare `
-  --project-id <project-id> `
-  --editor-instance-id <editor-id> `
-  --project-path 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe' `
-  --document-uuid <prefab-asset-uuid> `
-  --probe-name CocosAiProbe_<unique-id> | ConvertFrom-Json
-
-node packages/cli/dist/index.js probe-undo-save-confirm `
-  --project-id <project-id> `
-  --editor-instance-id <editor-id> `
-  --transaction-id $prepare.transactionId `
-  --expected-revision $prepare.revision
-
-node packages/cli/dist/index.js probe-undo-save-status `
-  --project-id <project-id> `
-  --editor-instance-id <editor-id> `
-  --transaction-id $prepare.transactionId
-```
-
-`confirm` 必须匹配 prepare 返回的 Revision。重复 confirm 返回同一事务，不会重复创建节点；最终成功状态必须是 `rolled-back`，不能只依据请求是否返回来判断成功。
-
 ## 运行统一 Phase 0 验证
 
 Creator 已打开目标 Prefab、Probe Server 已连接后执行：

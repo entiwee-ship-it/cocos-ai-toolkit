@@ -10,3 +10,4 @@ reports/*.png
 .env
 *.tsbuildinfo
 reports/write-journal/
+reports/*.txt

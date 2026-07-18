@@ -45,9 +45,6 @@ const HELP = `用法:
   cocos-ai-probe prefab-graph --project-id <id> [--editor-instance-id <id>]
   cocos-ai-probe scan-project --project-id <id> --report-root <directory> --report <relative-json> [--resume <relative-json>] [--page-size <n>] [--include-raw true|false] [--concurrency <n>] [--editor-instance-id <id>]
   cocos-ai-probe save-report --project-id <id> --sample <name> [--editor-instance-id <id>]
-  cocos-ai-probe probe-undo-save-prepare --project-id <id> --project-path <path> --document-uuid <uuid> --probe-name <name>
-  cocos-ai-probe probe-undo-save-confirm --project-id <id> --transaction-id <id> --expected-revision <sha256>
-  cocos-ai-probe probe-undo-save-status --project-id <id> --transaction-id <id>
   cocos-ai-probe write-prepare --project-id <id> --request <json> [--editor-instance-id <id>]
   cocos-ai-probe write-confirm --project-id <id> --transaction-id <id> [--editor-instance-id <id>]
   cocos-ai-probe transaction-status --project-id <id> --transaction-id <id> [--editor-instance-id <id>]
@@ -414,28 +411,6 @@ export function toRequest(command: CliCommand): [string, unknown] {
       return ['probe.prefab', { selector, params: { nodeUuid: command.nodeUuid } }];
     case 'save-report':
       return ['probe.saveReport', { selector, params: { sample: command.sample } }];
-    case 'probe-undo-save-prepare':
-      return ['probe.undoSavePrepare', {
-        selector,
-        params: {
-          projectPath: command.projectPath,
-          documentAssetUuid: command.documentUuid,
-          probeName: command.probeName
-        }
-      }];
-    case 'probe-undo-save-confirm':
-      return ['probe.undoSaveConfirm', {
-        selector,
-        params: {
-          transactionId: command.transactionId,
-          expectedRevision: command.expectedRevision
-        }
-      }];
-    case 'probe-undo-save-status':
-      return ['probe.undoSaveStatus', {
-        selector,
-        params: { transactionId: command.transactionId }
-      }];
     case 'write-prepare':
       return ['probe.writePrepare', { selector, params: command.request }];
     case 'write-confirm':

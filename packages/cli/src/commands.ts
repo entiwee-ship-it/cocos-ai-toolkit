@@ -28,9 +28,6 @@ export type CliCommand =
       concurrency?: number;
     }
   | { command: 'save-report'; projectId: string; editorInstanceId?: string; sample: string }
-  | { command: 'probe-undo-save-prepare'; projectId: string; editorInstanceId?: string; projectPath: string; documentUuid: string; probeName: string }
-  | { command: 'probe-undo-save-confirm'; projectId: string; editorInstanceId?: string; transactionId: string; expectedRevision: string }
-  | { command: 'probe-undo-save-status'; projectId: string; editorInstanceId?: string; transactionId: string }
   | { command: 'write-prepare'; projectId: string; editorInstanceId?: string; request: WriteTransactionRequest }
   | { command: 'write-confirm'; projectId: string; editorInstanceId?: string; transactionId: string }
   | { command: 'transaction-status'; projectId: string; editorInstanceId?: string; transactionId: string }
@@ -68,18 +65,6 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
     'concurrency'
   ],
   'save-report': [...PROJECT_SELECTOR_FLAGS, 'sample'],
-  'probe-undo-save-prepare': [
-    ...PROJECT_SELECTOR_FLAGS,
-    'project-path',
-    'document-uuid',
-    'probe-name'
-  ],
-  'probe-undo-save-confirm': [
-    ...PROJECT_SELECTOR_FLAGS,
-    'transaction-id',
-    'expected-revision'
-  ],
-  'probe-undo-save-status': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
   'write-prepare': [...PROJECT_SELECTOR_FLAGS, 'request'],
   'write-confirm': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
   'transaction-status': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
@@ -189,27 +174,6 @@ export function parseCommand(argv: string[]): CliCommand {
         command,
         ...selector,
         sample: requireFlag(flags, 'sample', 'SAMPLE_REQUIRED')
-      };
-    case 'probe-undo-save-prepare':
-      return {
-        command,
-        ...selector,
-        projectPath: requireFlag(flags, 'project-path', 'PROJECT_PATH_REQUIRED'),
-        documentUuid: requireFlag(flags, 'document-uuid', 'DOCUMENT_UUID_REQUIRED'),
-        probeName: requireFlag(flags, 'probe-name', 'PROBE_NAME_REQUIRED')
-      };
-    case 'probe-undo-save-confirm':
-      return {
-        command,
-        ...selector,
-        transactionId: requireFlag(flags, 'transaction-id', 'TRANSACTION_ID_REQUIRED'),
-        expectedRevision: requireFlag(flags, 'expected-revision', 'EXPECTED_REVISION_REQUIRED')
-      };
-    case 'probe-undo-save-status':
-      return {
-        command,
-        ...selector,
-        transactionId: requireFlag(flags, 'transaction-id', 'TRANSACTION_ID_REQUIRED')
       };
     case 'write-prepare':
       return {

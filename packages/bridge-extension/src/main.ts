@@ -5,14 +5,6 @@ import { buildBridgeHello, probeEditorState } from './editor-state';
 import { ProbeError } from './probe-errors';
 import { probeAssets } from './asset-probe';
 import { probeAssetIndex } from './asset-index';
-import { captureProbeRevision, restoreProbeAsset } from './probe-runtime';
-import type { ProbePrepareRequest } from './probe-operation';
-import {
-  InMemoryProbeTransactionStore,
-  ProbeTransactionCoordinator,
-  type ProbeExecutionResult,
-  type ProbeTransaction
-} from './probe-transaction';
 import {
   InMemoryWriteTransactionStore,
   WriteTransactionManager,
@@ -22,7 +14,7 @@ import {
   type WriteTransactionRecord
 } from './transaction-manager';
 
-const BRIDGE_VERSION = '0.1.22';
+const BRIDGE_VERSION = '0.1.23';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 let client: BridgeClient | null = null;
@@ -35,14 +27,6 @@ const sceneMethods = {
   'probe.node': 'probeNode',
   'probe.prefab': 'probePrefab'
 } as const;
-
-const transactionStore = new InMemoryProbeTransactionStore();
-const transactionCoordinator = new ProbeTransactionCoordinator({
-  store: transactionStore,
-  currentProjectPath: () => Editor.Project.path,
-  captureRevision: (request) => captureCurrentRevision(request),
-  execute: (transaction, recoveryContent) => executeTransaction(transaction, recoveryContent)
-});
 
 // 阶段二通用写事务管理器：Revision 采集经 Scene 文档身份 + 资产文件哈希；
 // 执行和回滚经 Scene 写通道（node-writer / component-writer / write-verifier）。
@@ -97,9 +81,6 @@ export function load(): void {
         await Editor.Message.request('asset-db', 'open-asset', request.uuid);
         return { opened: true, uuid: request.uuid };
       },
-      'probe.undoSavePrepare': (payload) => transactionCoordinator.prepare(payload),
-      'probe.undoSaveConfirm': (payload) => transactionCoordinator.confirm(payload),
-      'probe.undoSaveStatus': async (payload) => transactionCoordinator.status(payload),
       'probe.writePrepare': (payload) => writeTransactionManager.prepare(payload),
       'probe.writeConfirm': (payload) => writeTransactionManager.confirm(payload),
       'probe.transactionStatus': async (payload) => writeTransactionManager.status(payload),
@@ -123,59 +104,6 @@ export function unload(): void {
   client?.dispose();
   client = null;
   cachedScriptPathsByUuid = null;
-}
-
-async function captureCurrentRevision(request: ProbePrepareRequest) {
-  return captureProbeRevision(request, {
-    queryAssetInfo: (documentAssetUuid) => Editor.Message.request('asset-db', 'query-asset-info', documentAssetUuid),
-    readFile,
-    queryDirty: () => Editor.Message.request('scene', 'query-dirty'),
-    queryNodeTree: () => Editor.Message.request('scene', 'query-node-tree')
-  });
-}
-
-async function executeTransaction(
-  transaction: ProbeTransaction,
-  recoveryContent?: string
-): Promise<ProbeExecutionResult> {
-  const sceneResult = await forwardToScene('probeUndoSaveConfirm', transaction) as ProbeExecutionResult;
-  if (recoveryContent === undefined) {
-    throw new ProbeError('RECOVERY_CONTENT_UNAVAILABLE');
-  }
-  const recovery = await restoreProbeAsset({
-    documentAssetUuid: transaction.documentAssetUuid,
-    baselineSha256: transaction.baseline.assetSha256,
-    recoveryContent
-  }, {
-    readCurrentContent: () => readDocumentAsset(transaction.documentAssetUuid),
-    saveAsset: (documentAssetUuid, content) => Editor.Message.request(
-      'asset-db',
-      'save-asset',
-      documentAssetUuid,
-      content
-    )
-  });
-  const finalSnapshot = await captureCurrentRevision(transaction);
-  const diskHashRestored = recovery.diskHashRestored
-    && finalSnapshot.assetSha256 === transaction.baseline.assetSha256;
-  const editorStateRestored = finalSnapshot.hierarchySha256 === transaction.baseline.hierarchySha256
-    && finalSnapshot.dirty === transaction.baseline.dirty
-    && finalSnapshot.parentNodeUuid === transaction.baseline.parentNodeUuid
-    && finalSnapshot.existingProbeNodeUuid === null;
-
-  return {
-    ...sceneResult,
-    diskHashRestored,
-    recoveryMethod: recovery.recoveryMethod,
-    status: diskHashRestored && editorStateRestored ? 'rolled-back' : 'manual-recovery-required',
-    rolledBack: {
-      ...sceneResult.rolledBack,
-      diskHashRestored,
-      editorStateRestored,
-      finalAssetSha256: recovery.finalAssetSha256,
-      finalHierarchySha256: finalSnapshot.hierarchySha256
-    }
-  };
 }
 
 async function readDocumentAsset(documentAssetUuid: string): Promise<Buffer> {
@@ -355,9 +283,6 @@ export const methods: Record<string, (request: JsonObject) => Promise<unknown>> 
   'probe-node': (request) => forwardToScene('probeNode', request),
   'probe-component': (request) => probeComponent(request),
   'probe-prefab': (request) => forwardToScene('probePrefab', request),
-  'probe-undo-save-prepare': (request) => transactionCoordinator.prepare(request),
-  'probe-undo-save-confirm': (request) => transactionCoordinator.confirm(request),
-  'probe-undo-save-status': async (request) => transactionCoordinator.status(request),
   'probe-write-prepare': (request) => writeTransactionManager.prepare(request),
   'probe-write-confirm': (request) => writeTransactionManager.confirm(request),
   'probe-transaction-status': async (request) => writeTransactionManager.status(request),

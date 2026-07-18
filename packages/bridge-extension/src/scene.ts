@@ -5,8 +5,6 @@ import {
 } from './document-scan';
 import { ProbeError } from './probe-errors';
 import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from './scene-probe';
-import { normalizeProbeProjectPath } from './probe-operation';
-import { executeProbeSceneOperation } from './probe-scene-operation';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
 import { executeNodeWriteOperation } from './node-writer';
 import { executeComponentWriteOperation } from './component-writer';
@@ -169,85 +167,6 @@ function findNodePath(node: Record<string, unknown>, targetUuid: string, path: R
   }
   path.pop();
   return false;
-}
-
-async function probeUndoSaveConfirm(request: unknown): Promise<unknown> {
-  const transaction = readProbeTransaction(unwrapRequest(request));
-  if (normalizeProbeProjectPath(Editor.Project.path) !== normalizeProbeProjectPath(transaction.projectPath)) {
-    throw new ProbeError('PROJECT_PATH_MISMATCH');
-  }
-  const undoController = resolveCreatorUndo();
-  return executeProbeSceneOperation(transaction, {
-    createNode: (options) => Editor.Message.request('scene', 'create-node', options),
-    createComponent: (options) => Editor.Message.request('scene', 'create-component', options),
-    setProperty: (options) => Editor.Message.request('scene', 'set-property', options as never),
-    queryNode: (uuid) => Editor.Message.request('scene', 'query-node', uuid),
-    saveScene: () => Editor.Message.request('scene', 'save-scene'),
-    delay: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-    undoSource: undoController.source,
-    undo: undoController.undo,
-    removeNode: (options) => Editor.Message.request('scene', 'remove-node', options)
-  });
-}
-
-function readProbeTransaction(value: unknown): {
-  transactionId: string;
-  projectPath: string;
-  parentNodeUuid: string;
-  probeName: string;
-  operation: {
-    type: 'create-save-rollback-probe';
-    position: { x: 17; y: 23; z: 0 };
-    component: 'cc.UITransform';
-    verificationPauseMs: 2000;
-  };
-} {
-  const transaction = readObject(value);
-  const operation = readObject(transaction.operation);
-  const position = readObject(operation.position);
-  if (
-    typeof transaction.transactionId !== 'string'
-    || typeof transaction.projectPath !== 'string'
-    || typeof transaction.parentNodeUuid !== 'string'
-    || typeof transaction.probeName !== 'string'
-    || !transaction.probeName.startsWith('CocosAiProbe_')
-    || operation.type !== 'create-save-rollback-probe'
-    || operation.component !== 'cc.UITransform'
-    || operation.verificationPauseMs !== 2000
-    || position.x !== 17
-    || position.y !== 23
-    || position.z !== 0
-  ) {
-    throw new ProbeError('INVALID_PROBE_TRANSACTION');
-  }
-  return transaction as unknown as ReturnType<typeof readProbeTransaction>;
-}
-
-function resolveCreatorUndo(): { source: string; undo: () => Promise<void> } {
-  const scope = globalThis as typeof globalThis & { cce?: Record<string, unknown> };
-  const cce = readObject(scope.cce);
-  const candidates: Array<[string, unknown]> = [
-    ['cce.SceneFacadeManager', cce.SceneFacadeManager],
-    ['cce.sceneFacadeManager', cce.sceneFacadeManager],
-    ['cce.SceneFacade', cce.SceneFacade],
-    ['cce.sceneFacade', cce.sceneFacade],
-    ['cce.History', cce.History],
-    ['cce.history', cce.history]
-  ];
-  for (const [source, candidate] of candidates) {
-    if ((typeof candidate === 'object' && candidate !== null) || typeof candidate === 'function') {
-      const owner = candidate as { undo?: () => Promise<void> | void };
-      if (typeof owner.undo === 'function') {
-        return {
-          source,
-          undo: async () => {
-            await owner.undo?.call(owner);
-          }
-        };
-      }
-    }
-  }
-  throw new ProbeError('CREATOR_UNDO_API_UNAVAILABLE', { cceKeys: Object.keys(cce).sort() });
 }
 
 function requireUuid(request: unknown): string {
@@ -581,7 +500,6 @@ export const methods = {
   probeComponent,
   probeDocumentSnapshot,
   probePrefab,
-  probeUndoSaveConfirm,
   writeDocumentIdentity,
   writeExecute,
   writeRollback,
