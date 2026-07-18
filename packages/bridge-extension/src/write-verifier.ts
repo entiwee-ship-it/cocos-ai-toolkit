@@ -208,9 +208,9 @@ async function verifyOperationUnsafe(
         const remaining = actual.overridePaths.includes(operation.propertyPath as string);
         return build(`覆盖路径 ${String(operation.propertyPath)} 已还原`, actual.overridePaths, !remaining);
       }
-      // 整实例还原：除根节点名（_name 与资产名绑定，实测为特例）外不应有残留覆盖。
-      const remaining = actual.overridePaths.filter((path) => path !== '_name');
-      return build('覆盖已全部还原', actual.overridePaths, remaining.length === 0);
+      // 3.8.8 实测语义：整实例还原只清实例内部覆盖；根挂载点覆盖（targetFileId 等于根源 FileID）按设计保留。
+      const nonRootRemaining = actual.overrideTargets.filter((target) => target.targetFileId !== actual.sourceObjectFileId);
+      return build('实例内部覆盖已全部还原（根挂载点覆盖按设计保留）', actual.overrideTargets, nonRootRemaining.length === 0);
     }
     case 'prefab.apply_to_source': {
       // 设计规格 8.4：应用到源后必须验证实例关系未损坏（仍为同一源资产的完整实例）。

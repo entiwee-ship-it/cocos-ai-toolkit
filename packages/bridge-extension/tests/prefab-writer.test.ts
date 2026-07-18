@@ -23,6 +23,7 @@ function createInstanceInfo(overrides: Partial<PrefabInstanceInfo> = {}): Prefab
     childCount: 5,
     overrideCount: 1,
     overridePaths: ['_name'],
+    overrideTargets: [{ path: '_name', targetFileId: 'file-1' }],
     ...overrides
   };
 }

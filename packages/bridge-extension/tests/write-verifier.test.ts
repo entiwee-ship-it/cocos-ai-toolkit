@@ -224,7 +224,8 @@ function createDependencies(options: {
       parentUuid: null,
       childCount: 0,
       overrideCount: 0,
-      overridePaths: []
+      overridePaths: [],
+      overrideTargets: []
     }),
     queryAssetInfo: async () => null
   };

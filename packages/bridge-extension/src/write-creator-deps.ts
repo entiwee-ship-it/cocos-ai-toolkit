@@ -436,14 +436,20 @@ async function readPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceI
   const overrideEntries = Array.isArray(instance.propertyOverrides)
     ? instance.propertyOverrides
     : (Array.isArray(readObject(instance.propertyOverrides).value) ? readObject(instance.propertyOverrides).value as unknown[] : []);
-  const overridePaths = overrideEntries.map((entry) => {
-    const pathDump = readObject(readObject(entry).value).propertyPath ?? readObject(entry).propertyPath;
+  const overrideTargets = overrideEntries.map((entry) => {
+    const entryValue = readObject(readObject(entry).value);
+    const pathDump = entryValue.propertyPath ?? readObject(entry).propertyPath;
     const segments = Array.isArray(pathDump) ? pathDump : (Array.isArray(readObject(pathDump).value) ? readObject(pathDump).value as unknown[] : []);
-    return segments.map((segment) => {
+    const path = segments.map((segment) => {
       const unwrapped = readObject(segment).value ?? segment;
       return String(unwrapped);
     }).join('.');
-  }).filter((path) => path.length > 0);
+    const targetInfo = readObject(entryValue.targetInfo ?? readObject(entry).targetInfo);
+    const localIds = Array.isArray(readObject(targetInfo.localID).value) ? readObject(targetInfo.localID).value as unknown[] : (Array.isArray(targetInfo.localID) ? targetInfo.localID : []);
+    const firstLocalId = localIds.length > 0 ? (readObject(localIds[0]).value ?? localIds[0]) : null;
+    return { path, targetFileId: typeof firstLocalId === 'string' && firstLocalId ? firstLocalId : null };
+  }).filter((target) => target.path.length > 0);
+  const overridePaths = overrideTargets.map((target) => target.path);
   return {
     nodeUuid,
     name: typeof nameDump.value === 'string' ? nameDump.value : '',
@@ -457,7 +463,8 @@ async function readPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceI
     parentUuid: typeof parentValue.uuid === 'string' ? parentValue.uuid : null,
     childCount: children.length,
     overrideCount: overridePaths.length,
-    overridePaths
+    overridePaths,
+    overrideTargets
   };
 }
 

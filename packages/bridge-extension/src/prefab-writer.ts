@@ -22,6 +22,8 @@ export interface PrefabInstanceInfo {
   overrideCount: number;
   /** 覆盖属性路径清单（点拼字符串，如 '_name'、'_lpos'）。 */
   overridePaths: string[];
+  /** 覆盖目标清单：path 与 targetFileId（targetInfo.localID 首段），根挂载点覆盖的 targetFileId 等于 sourceObjectFileId。 */
+  overrideTargets: Array<{ path: string; targetFileId: string | null }>;
 }
 
 /** 资产预检结果（query-asset-info 的最小必要字段）。 */

@@ -673,6 +673,25 @@ function Find-NodeUuidByName {
     throw $NotFoundMessage
 }
 
+# 按路径后缀定位节点（同名嵌套节点并存时区分归属，如 PageInst/CardInst）。
+function Find-NodeUuidByPathSuffix {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Snapshot,
+        [Parameter(Mandatory = $true)]
+        [string]$PathSuffix,
+        [Parameter(Mandatory = $true)]
+        [string]$NotFoundMessage
+    )
+
+    foreach ($node in (Read-FirstPageNodes -Snapshot $Snapshot)) {
+        if ([string]$node.path -like "*/$PathSuffix") {
+            return Read-NodeUuid -Node $node
+        }
+    }
+    throw $NotFoundMessage
+}
+
 function Read-NodePrefabEvidence {
     param(
         [Parameter(Mandatory = $true)]
@@ -1109,6 +1128,9 @@ try {
         [ordered]@{ type = 'prefab.create_from_node'; nodeUuid = $cardRootUuid; assetUrl = $cardPrefabAssetUrl }
     )
     $cardPrefab = Wait-AssetDocumentByUrl -AssetUrl $cardPrefabAssetUrl -Label 'Card 预制体资产登记'
+    # create_from_node 会重建节点（实测：会话 UUID 变更、根名改为预制体资产名），必须按资产名重新定位实例根。
+    $cardRootRebuiltSnapshot = Read-CurrentDocumentSnapshot -ExpectedAssetUuid $sampleDocument.assetUuid -Label 'Card 预制体生成后回读'
+    $cardRootUuid = Find-NodeUuidByName -Snapshot $cardRootRebuiltSnapshot -Name ([IO.Path]::GetFileNameWithoutExtension($cardPrefabAssetUrl)) -NotFoundMessage 'create_from_node 后找不到 Card 实例根'
     $cardRootInstanceEvidence = Read-NodePrefabEvidence -NodeUuid $cardRootUuid -Label 'Card 根节点实例关联证据'
     Assert-Condition -Condition ($cardRootInstanceEvidence.prefabAssetUuid -eq $cardPrefab.assetUuid) -Message 'create_from_node 后 Card 根节点未关联新预制体'
 
@@ -1133,6 +1155,9 @@ try {
         [ordered]@{ type = 'prefab.create_from_node'; nodeUuid = $pageRootUuid; assetUrl = $pagePrefabAssetUrl }
     )
     $pagePrefab = Wait-AssetDocumentByUrl -AssetUrl $pagePrefabAssetUrl -Label 'Page 预制体资产登记'
+    # 同 Card：create_from_node 重建节点后按资产名重新定位实例根。
+    $pageRootRebuiltSnapshot = Read-CurrentDocumentSnapshot -ExpectedAssetUuid $sampleDocument.assetUuid -Label 'Page 预制体生成后回读'
+    $pageRootUuid = Find-NodeUuidByName -Snapshot $pageRootRebuiltSnapshot -Name ([IO.Path]::GetFileNameWithoutExtension($pagePrefabAssetUrl)) -NotFoundMessage 'create_from_node 后找不到 Page 实例根'
     $pageRootInstanceEvidence = Read-NodePrefabEvidence -NodeUuid $pageRootUuid -Label 'Page 根节点实例关联证据'
     Assert-Condition -Condition ($pageRootInstanceEvidence.prefabAssetUuid -eq $pagePrefab.assetUuid) -Message 'create_from_node 后 Page 根节点未关联新预制体'
 
@@ -1155,28 +1180,35 @@ try {
     $instanceEvidencePath = Write-JsonReport -Name "$reportPrefix-instantiate-evidence.json" -Value $instanceEvidence
     Add-PassedStep -Name '实例化验证' -DurationMs $instanceEvidence.command.durationMs -Evidence $instanceEvidencePath
 
-    # 覆盖事务：对场景实例根写一笔变换，验证 Override 产生
+    # 覆盖事务：对场景实例的内嵌实例根写一笔变换，验证 Override 产生。
+    # 实测语义：restorePrefab 只还原实例内部（非根挂载点）覆盖，根自身覆盖按设计保留；
+    # 因此覆盖目标必须选内嵌实例根（Phase3PageInst/Phase3CardInst），而不是场景实例根自身。
+    $nestedChildSnapshot = Read-CurrentDocumentSnapshot -ExpectedAssetUuid $sampleDocument.assetUuid -Label '覆盖目标内嵌节点定位'
+    $nestedChildUuid = Find-NodeUuidByPathSuffix -Snapshot $nestedChildSnapshot -PathSuffix "$pageInstanceName/$cardInstanceName" -NotFoundMessage '场景实例内找不到内嵌实例根'
     $overrideTxId = "tx-override-$runId"
     $null = Invoke-WriteTransaction -TransactionId $overrideTxId -Label '覆盖事务' -Operations @(
-        [ordered]@{ type = 'node.set_transform'; nodeUuid = $sceneInstanceUuid; localTransform = [ordered]@{ position = [ordered]@{ x = 33; y = 44; z = 0 } } }
+        [ordered]@{ type = 'node.set_transform'; nodeUuid = $nestedChildUuid; localTransform = [ordered]@{ position = [ordered]@{ x = 33; y = 44; z = 0 } } }
     )
     $overrideEvidence = Read-PrefabOverrideEvidence -NodeUuid $sceneInstanceUuid -Label '覆盖后 probe.prefab 覆盖证据'
     Assert-Condition -Condition ($overrideEvidence.count -gt 0) -Message '覆盖写后实例没有产生 Override'
     $overrideEvidencePath = Write-JsonReport -Name "$reportPrefix-override-evidence.json" -Value $overrideEvidence
     Add-PassedStep -Name '覆盖验证' -DurationMs $overrideEvidence.command.durationMs -Evidence $overrideEvidencePath
 
-    # 还原事务：整实例还原 Override，验证覆盖清除
+    # 还原事务：整实例还原 Override，验证实例内部覆盖清除（根挂载点 _name 覆盖按 3.8.8 实测语义保留）
     $revertTxId = "tx-revert-$runId"
     $null = Invoke-WriteTransaction -TransactionId $revertTxId -Label '还原事务' -Operations @(
         [ordered]@{ type = 'prefab.revert_override'; instanceRootUuid = $sceneInstanceUuid }
     )
     $revertEvidence = Read-PrefabOverrideEvidence -NodeUuid $sceneInstanceUuid -Label '还原后 probe.prefab 覆盖证据'
-    Assert-Condition -Condition ($revertEvidence.count -eq 0) -Message '整实例还原后仍残留 Override'
+    $revertRemainingPaths = @($revertEvidence.propertyOverrides | ForEach-Object { @($_.propertyPath)[0] })
+    $revertNonRootRemaining = @($revertRemainingPaths | Where-Object { $_ -ne '_name' })
+    Assert-Condition -Condition ($revertNonRootRemaining.Count -eq 0) -Message "整实例还原后实例内部仍残留 Override: $($revertRemainingPaths -join ',')"
     $revertEvidencePath = Write-JsonReport -Name "$reportPrefix-revert-evidence.json" -Value $revertEvidence
     Add-PassedStep -Name '还原验证' -DurationMs $revertEvidence.command.durationMs -Evidence $revertEvidencePath
 
-    # 应用到源：先造一笔 Override 再应用到源；scope=apply-to-source 必须携带内联影响分析与
+    # 应用到源：先对内嵌实例根造一笔 Override 再应用到源；scope=apply-to-source 必须携带内联影响分析与
     # revision.prefabGraph 前置指纹（协议与 Bridge 双重门禁），指纹由只读层级即时推导。
+    # 实测语义：应用后实例侧覆盖记录不会自动清空（与还原不同），真实判据是源文件已写入新值。
     $prefabGraphRevision = Get-PrefabGraphFingerprint -Label '应用到源前 prefabGraph 指纹采集'
     $impactAnalysis = [ordered]@{
         sourceAssetUuid = $pagePrefab.assetUuid
@@ -1195,13 +1227,15 @@ try {
     }
     $applyTxId = "tx-apply-$runId"
     $null = Invoke-WriteTransaction -TransactionId $applyTxId -Label '应用到源事务' -Scope 'apply-to-source' -ImpactAnalysis $impactAnalysis -PrefabGraphRevision $prefabGraphRevision -Operations @(
-        [ordered]@{ type = 'node.set_transform'; nodeUuid = $sceneInstanceUuid; localTransform = [ordered]@{ position = [ordered]@{ x = 55; y = 66; z = 0 } } },
+        [ordered]@{ type = 'node.set_transform'; nodeUuid = $nestedChildUuid; localTransform = [ordered]@{ position = [ordered]@{ x = 55; y = 66; z = 0 } } },
         [ordered]@{ type = 'prefab.apply_to_source'; instanceRootUuid = $sceneInstanceUuid }
     )
     $applyEvidence = Read-PrefabOverrideEvidence -NodeUuid $sceneInstanceUuid -Label '应用到源后 probe.prefab 覆盖证据'
-    Assert-Condition -Condition ($applyEvidence.count -eq 0) -Message '应用到源后实例仍残留 Override'
     $applyInstanceEvidence = Read-NodePrefabEvidence -NodeUuid $sceneInstanceUuid -Label '应用到源后实例关联复查'
     Assert-Condition -Condition ($applyInstanceEvidence.prefabAssetUuid -eq $pagePrefab.assetUuid) -Message '应用到源后实例源资产关联变化'
+    # 真实判据：源预制体文件已写入应用后的坐标值（覆盖记录是否清空按实测不作强制）。
+    $sourceContent = Get-Content -LiteralPath (Join-Path $project (ConvertTo-ProjectRelativePath -AssetUrl $pagePrefabAssetUrl)) -Raw
+    Assert-Condition -Condition ($sourceContent.Contains('"x": 55') -and $sourceContent.Contains('"y": 66')) -Message '应用到源后源预制体文件未写入新坐标'
     # 应用到源已改写源预制体磁盘文件：已跟踪文件 git checkout 还原；
     # 本轮新建夹具资产未被 Git 跟踪，记录证据由清理步骤的 prefab.delete_asset 删除兜底。
     $applyRestore = Restore-ProjectFileFromGit -RelativePath (ConvertTo-ProjectRelativePath -AssetUrl $pagePrefabAssetUrl) -Label '源预制体文件还原'
