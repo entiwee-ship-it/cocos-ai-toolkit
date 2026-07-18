@@ -362,9 +362,23 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       isScriptClassRegistered: async (componentType) => {
         return Boolean(js.getClassByName(componentType));
       },
-      // 编译事件驱动等待依赖 asset-db 编译事件实测（见能力矩阵）；阶段二挂载的脚本
-      // 均为已编译脚本，此处无 pending 编译可等，返回 null 让注册复核直接判定。
-      waitForScriptCompilation: async () => null,
+      // Task 3 实测：asset-db/refresh-asset 触发重新导入 + 异步编译 + 类重注册；
+      // 广播事件不可用，类注册完成用有界轮询观察（不用固定延时盲等）。
+      waitForScriptCompilation: async (scriptUuid, componentType) => {
+        await Editor.Message.request('asset-db', 'refresh-asset', scriptUuid);
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          if (js.getClassByName(componentType)) {
+            return { success: true, diagnostics: [] };
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        }
+        // 编译错误文本无法经消息/广播通道取得（Task 3 已固化），超时就返回超时诊断。
+        return {
+          success: false,
+          diagnostics: [`等待脚本 ${componentType}(${scriptUuid}) 编译与类注册超时（10s）：脚本可能存在编译错误，请检查 Creator 控制台`]
+        };
+      },
       isComponentSchemaAvailable: async (componentType) => {
         return Boolean(js.getClassByName(componentType));
       }

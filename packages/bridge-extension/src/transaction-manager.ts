@@ -133,9 +133,11 @@ export type WriteExecutionOutcome =
   | { kind: 'operation-failed'; executedOps: number; failure: WriteFailure; undoGroupId?: string | null; evidence?: unknown };
 
 /**
- * 3.8.8 实测确认 `cce.SceneFacadeManager.undo()` 可用（Phase 0 证据），但编辑器 Undo 分组能力
- * 尚未实测（见 docs/creator-3.8.8-capability-matrix.md）。实测通过前默认走
- * step-undo-with-inverse（显式逆操作 + 逐条 Undo 兜底 + 重读验证还原）。
+ * 阶段三实测结论（docs/creator-3.8.8-capability-matrix.md「Undo 分组」行）：
+ * 编辑器 Undo 分组（SceneUndoManager begin/endRecording）只对**属性级**修改有效，
+ * 对新建/删除节点的结构变更 dump-diff 不覆盖（undo 后节点仍在）。
+ * 因此事务回滚维持 step-undo-with-inverse（显式逆操作 + 重读验证还原），
+ * 编辑器 Undo 分组仅作属性级辅助，不切换为默认路径。
  */
 export type WriteUndoCapability = 'editor-undo-group' | 'step-undo-with-inverse';
 

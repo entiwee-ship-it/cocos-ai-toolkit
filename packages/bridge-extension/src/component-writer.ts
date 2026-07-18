@@ -36,16 +36,17 @@ export interface ScriptCompilationResult {
 }
 
 /**
- * 自定义脚本挂载守卫依赖。waitForScriptCompilation 必须是事件驱动
- * （等待 Creator 导入完成、TypeScript 编译完成、类注册完成），不允许固定延时。
+ * 自定义脚本挂载守卫依赖。编译等待链路按 Task 3 实测结论实现：
+ * refresh-asset 触发重新导入与异步编译，类重注册用有界轮询观察（广播事件不可用），
+ * 不允许固定延时盲等。
  */
 export interface ScriptMountGuardDependencies {
   /** 核对 scriptUuid 在资产索引中存在。 */
   scriptAssetExists(scriptUuid: string): Promise<boolean>;
   /** 核对脚本类已注册（js.getClassByName/cc.Class 可达）。 */
   isScriptClassRegistered(componentType: string, scriptUuid: string): Promise<boolean>;
-  /** 脚本刚变更时等待编译和类注册完成；无编译 pending 时返回 null。 */
-  waitForScriptCompilation(scriptUuid: string): Promise<ScriptCompilationResult | null>;
+  /** 脚本刚变更时触发重编译并等待类注册完成；无编译 pending 时返回 null。 */
+  waitForScriptCompilation(scriptUuid: string, componentType: string): Promise<ScriptCompilationResult | null>;
   /** Phase 1 组件 Schema 是否可取（属性校验和重读验证的前提）。 */
   isComponentSchemaAvailable(componentType: string): Promise<boolean>;
 }
@@ -404,8 +405,8 @@ async function assertScriptMountable(
     throw new ProbeError('SCRIPT_ASSET_NOT_FOUND', { componentType, scriptUuid });
   }
   if (!await guard.isScriptClassRegistered(componentType, scriptUuid)) {
-    // 脚本刚变更时类可能尚未注册：事件驱动等待编译完成，不用固定延时。
-    const compilation = await guard.waitForScriptCompilation(scriptUuid);
+    // 脚本刚变更时类可能尚未注册：触发重编译并有界轮询等待类注册，不用固定延时。
+    const compilation = await guard.waitForScriptCompilation(scriptUuid, componentType);
     if (compilation && !compilation.success) {
       throw new ProbeError('SCRIPT_COMPILATION_FAILED', {
         componentType,
