@@ -78,11 +78,13 @@ function describeComponent(component: RuntimeNode, fallbackUuid: string): string
 export interface CurrentDocumentIdentity {
   documentId: string;
   hierarchySha256: string;
+  /** 预制体图指纹：当前文档实例映射（实例根 → 源资产/实例 FileID）的排序哈希。 */
+  prefabGraphSha256: string | null;
   dirty: boolean | null;
 }
 
 /**
- * 解析当前文档资产 UUID、层级内容指纹和 Dirty 状态。
+ * 解析当前文档资产 UUID、层级内容指纹、预制体图指纹和 Dirty 状态。
  *
  * @returns 文档身份；文档 UUID 不可解析时抛稳定错误码。
  */
@@ -93,13 +95,33 @@ export async function captureCurrentDocumentIdentity(): Promise<CurrentDocumentI
   }
   const tree = await Editor.Message.request('scene', 'query-node-tree');
   const hierarchySha256 = createHash('sha256').update(JSON.stringify(tree ?? null)).digest('hex');
+  const prefabMarks: string[] = [];
+  collectPrefabInstanceMarks(tree, prefabMarks);
+  const prefabGraphSha256 = createHash('sha256').update(prefabMarks.sort().join(';')).digest('hex');
   let dirty: boolean | null = null;
   try {
     dirty = Boolean(await Editor.Message.request('scene', 'query-dirty'));
   } catch {
     dirty = null;
   }
-  return { documentId: identity.assetUuid, hierarchySha256, dirty };
+  return { documentId: identity.assetUuid, hierarchySha256, prefabGraphSha256, dirty };
+}
+
+/** 递归收集节点树中的预制体实例标记（根 UUID|源资产|源 FileID|实例 FileID）。 */
+function collectPrefabInstanceMarks(node: unknown, marks: string[]): void {
+  const record = readObject(node);
+  const prefab = readObject(record.__prefab__);
+  if (Object.keys(prefab).length > 0 && typeof prefab.uuid === 'string' && prefab.uuid) {
+    const nodeUuid = typeof readObject(record.uuid).value === 'string' ? readObject(record.uuid).value as string : '';
+    const instanceFileId = typeof readObject(readObject(readObject(prefab.instance).value).fileId).value === 'string'
+      ? readObject(readObject(readObject(prefab.instance).value).fileId).value as string
+      : '';
+    marks.push(`${nodeUuid}|${prefab.uuid}|${typeof prefab.fileId === 'string' ? prefab.fileId : ''}|${instanceFileId}`);
+  }
+  const children = Array.isArray(record.children) ? record.children : [];
+  for (const child of children) {
+    collectPrefabInstanceMarks(child, marks);
+  }
 }
 
 /** 构造节点原子写依赖（Scene 消息 + 运行时对象）。 */

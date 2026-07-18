@@ -214,9 +214,38 @@ describe('executePrefabWriteOperation', () => {
     expect(result.inverse).toEqual([]);
   });
 
-  it('未实现的 prefab 操作返回稳定错误码', async () => {
+  it('prefab.apply_to_source 非实例节点拒绝', async () => {
+    const dependencies = createDependencies({
+      getPrefabInstanceInfo: async () => createInstanceInfo({ instanceFileId: null, prefabAssetUuid: null })
+    });
     const error = await executePrefabWriteOperation(
       { type: 'prefab.apply_to_source', instanceRootUuid: 'n1' } as WriteOperation,
+      dependencies
+    ).catch((caught: unknown) => caught);
+
+    expect((error as ProbeError).code).toBe('PREFAB_INSTANCE_REQUIRED');
+  });
+
+  it('prefab.apply_to_source 成功：走门面 applyPrefab 且逆操作为空', async () => {
+    let applied: string | null = null;
+    const dependencies = createDependencies({
+      applyPrefabInstance: async (uuid) => {
+        applied = uuid;
+      }
+    });
+    const result = await executePrefabWriteOperation(
+      { type: 'prefab.apply_to_source', instanceRootUuid: 'n1' } as WriteOperation,
+      dependencies
+    );
+
+    expect(applied).toBe('n1');
+    expect(result.inverse).toEqual([]);
+    expect(result.before?.prefabAssetUuid).toBe('asset-1');
+  });
+
+  it('未实现的 prefab 操作返回稳定错误码', async () => {
+    const error = await executePrefabWriteOperation(
+      { type: 'prefab.replace_source', instanceRootUuid: 'n1', newPrefabAssetUuid: 'a2' } as WriteOperation,
       createDependencies()
     ).catch((caught: unknown) => caught);
 

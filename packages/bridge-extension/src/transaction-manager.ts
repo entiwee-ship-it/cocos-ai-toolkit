@@ -686,7 +686,7 @@ export function validateTransactionIdRequest(value: unknown): { transactionId: s
 function checkRevisionPrecondition(expected: RevisionFingerprint, actual: RevisionFingerprint): void {  const conflicts: WriteConflict[] = [];
   for (const scope of REVISION_SCOPES) {
     const expectedValue = expected[scope];
-    if (expectedValue === null) continue;
+    if (expectedValue === null || expectedValue === undefined) continue;
     if (expectedValue !== actual[scope]) {
       conflicts.push({ scope, expected: expectedValue, actual: actual[scope] });
     }
@@ -710,7 +710,7 @@ function toResult(record: WriteTransactionRecord, duplicateOf?: string): WriteTr
 
 /** 指纹逐维比对：前置为 null 的维度不参与判定，全部参与维度一致才视为仍处基线。 */
 function fingerprintMatchesPrecondition(expected: RevisionFingerprint, actual: RevisionFingerprint): boolean {
-  return REVISION_SCOPES.every((scope) => expected[scope] === null || expected[scope] === actual[scope]);
+  return REVISION_SCOPES.every((scope) => expected[scope] === null || expected[scope] === undefined || expected[scope] === actual[scope]);
 }
 
 function toRecoveredTransaction(

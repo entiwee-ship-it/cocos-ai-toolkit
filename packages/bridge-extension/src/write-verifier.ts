@@ -210,6 +210,12 @@ async function verifyOperationUnsafe(
       const remaining = actual.overridePaths.filter((path) => path !== '_name');
       return build('覆盖已全部还原', actual.overridePaths, remaining.length === 0);
     }
+    case 'prefab.apply_to_source': {
+      // 设计规格 8.4：应用到源后必须验证实例关系未损坏（仍为同一源资产的完整实例）。
+      const actual = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid as string);
+      const intact = actual !== null && actual.prefabAssetUuid !== null && actual.instanceFileId !== null;
+      return build('实例关系未损坏', actual ? { prefabAssetUuid: actual.prefabAssetUuid, instanceFileId: actual.instanceFileId } : null, intact);
+    }
     default:
       return build(expectationSummary(operation), 'UNKNOWN_OPERATION_TYPE', false);
   }

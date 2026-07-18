@@ -85,6 +85,8 @@ export async function executePrefabWriteOperation(
       return deleteAsset(operation as PrefabDeleteAssetOperation, dependencies);
     case 'prefab.revert_override':
       return revertOverride(operation as PrefabRevertOverrideOperation, dependencies);
+    case 'prefab.apply_to_source':
+      return applyToSource(operation as PrefabApplyToSourceOperation, dependencies);
     default:
       throw new ProbeError('INVALID_WRITE_OPERATION', { type: operation.type });
   }
@@ -94,6 +96,7 @@ type PrefabInstantiateOperation = WriteOperation & { prefabAssetUuid: string; pa
 type PrefabCreateFromNodeOperation = WriteOperation & { nodeUuid: string; assetUrl: string };
 type PrefabDeleteAssetOperation = WriteOperation & { assetUrl: string };
 type PrefabRevertOverrideOperation = WriteOperation & { instanceRootUuid: string; propertyPath?: string };
+type PrefabApplyToSourceOperation = WriteOperation & { instanceRootUuid: string };
 
 /** 目标不是完整预制体实例时统一拒绝。 */
 function requireInstance(info: PrefabInstanceInfo | null, instanceRootUuid: string): PrefabInstanceInfo {
@@ -121,6 +124,29 @@ async function revertOverride(
   } else {
     await dependencies.revertPrefabInstance(operation.instanceRootUuid);
   }
+  const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
+  return {
+    nodeUuid: operation.instanceRootUuid,
+    assetUuid: null,
+    before,
+    after,
+    inverse: []
+  };
+}
+
+/**
+ * 把实例覆盖应用到源预制体（门面 applyPrefab，直写源资产盘）。
+ * 源资产已被改写，逆操作无法恢复旧源内容；逆操作为空并保留 before 证据供审计与人工恢复。
+ */
+async function applyToSource(
+  operation: PrefabApplyToSourceOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const before = requireInstance(
+    await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid),
+    operation.instanceRootUuid
+  );
+  await dependencies.applyPrefabInstance(operation.instanceRootUuid);
   const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
   return {
     nodeUuid: operation.instanceRootUuid,

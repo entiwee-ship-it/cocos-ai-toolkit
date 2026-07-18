@@ -119,12 +119,13 @@ async function readDocumentAsset(documentAssetUuid: string): Promise<Buffer> {
 /**
  * 采集写事务 Revision 前置：Scene 侧文档身份 + 层级指纹，主进程补文档磁盘哈希。
  *
- * @returns 当前文档标识和四维指纹（assetDatabase/scriptCompilation 暂不采集）。
+ * @returns 当前文档标识和五维指纹（assetDatabase/scriptCompilation 暂不采集）。
  */
 async function captureWriteRevision(): Promise<WriteRevisionCapture> {
   const identity = await forwardToScene('writeDocumentIdentity', {}) as {
     documentId: string;
     hierarchySha256: string;
+    prefabGraphSha256: string | null;
     dirty: boolean | null;
   };
   const content = await readDocumentAsset(identity.documentId);
@@ -135,7 +136,8 @@ async function captureWriteRevision(): Promise<WriteRevisionCapture> {
       document: `sha256:${documentSha256}`,
       hierarchy: `sha256:${identity.hierarchySha256}`,
       assetDatabase: null,
-      scriptCompilation: null
+      scriptCompilation: null,
+      prefabGraph: identity.prefabGraphSha256 ? `sha256:${identity.prefabGraphSha256}` : null
     }
   };
 }
@@ -174,8 +176,8 @@ function fingerprintMatchesPrecondition(
   expected: RevisionFingerprint,
   actual: RevisionFingerprint
 ): boolean {
-  return (['document', 'hierarchy', 'assetDatabase', 'scriptCompilation'] as const)
-    .every((scope) => expected[scope] === null || expected[scope] === actual[scope]);
+  return (['document', 'hierarchy', 'assetDatabase', 'scriptCompilation', 'prefabGraph'] as const)
+    .every((scope) => expected[scope] === null || expected[scope] === undefined || expected[scope] === actual[scope]);
 }
 
 /**
