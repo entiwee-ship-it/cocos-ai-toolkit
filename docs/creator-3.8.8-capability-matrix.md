@@ -18,14 +18,14 @@
 | Prefab 跨文档图 | CLI/MCP + `core/prefab-graph` | 运行时 Prefab 信息、FileID、Override | internal-api | 真实项目生成 16,116,497 字节图；保留实例来源、多段 localID、Override、循环和未解析证据 |
 | 全项目只读扫描 | CLI/MCP + checkpoint + 流式报告 | Bridge 原子读取 + Core 编排 | composite | 421/421 个 Scene/Prefab 均被处理；339 个完整快照、82 个失败证据，支持同 `scanId` 断点恢复 |
 | Prefab 信息 | `query-node.__prefab__` + Scene 运行时 Prefab 资源/实例反射 | Creator 运行时对象和内部信息 | internal-api | 已验证所属文档、源资源、实例根、源 FileID、实例 FileID、两层实例链、26 条 Property Override、Mounted Child/Component |
-| Undo | `cce.SceneFacadeManager.undo()` | protected types + Creator 3.8.8 运行时探测 | internal-api | 已验证创建节点进入 Undo，保存后调用 Undo 可移除本事务节点 |
-| Undo 分组 | 待隔离 Creator 实测（候选：`cce.SceneFacadeManager` 分组接口） | internal-api | 待实测 | 阶段二决策：分组可用则每事务一个 Undo 组；不可用则显式逆操作 + 逐条 Undo 兜底，回滚后必须重读验证还原。事务管理器默认按兜底路径（`step-undo-with-inverse`）编排 |
+| Undo | `cce.SceneFacadeManager.undo()` | protected types + Creator 3.8.8 运行时探测 | internal-api | 阶段三复测修正：undo 对**属性级**修改（含 `_prefab` 关联变化）有效；对新建/删除子节点的结构变更，dump-diff 恢复不覆盖（undo 后节点仍在），Phase 0 的"创建节点进入 Undo"结论以显式删除兜底为准 |
+| Undo 分组 | `SceneFacadeManager._facadeFSM.currentState._undoMgr`（SceneUndoManager：`beginRecording(uuids,{auto})` / `endRecording(id)` / `cancelRecording(id)` / `record(uuid)`） | internal-api | 已实测（阶段三） | 手动 begin/endRecording + undo/redo 对属性修改确实生效（实测改名整组回退）；结构变更（create-node 快照、消息 `record:true`）不产生有效撤销条目。阶段三决策：事务回滚**维持 `step-undo-with-inverse`**（显式逆操作 + 重读验证），编辑器 Undo 分组仅作属性级辅助，不作切换 |
 | 预制体创建（空预制体） | `asset-db/create-asset(url, null)` | message-api | 已验证（异步导入，需等待） | 空白项目实测创建 `cc.Prefab` 成功；返回前导入未完成时需等待，`delete-asset` 可清理 |
 | 空预制体模板创建 | `asset-db/create-asset(url, content)`，content 为内置模板 | message-api | 已验证 | `create-asset(url, null)` 只会得到 directory 类型空目录；必须传内置 Node Prefab 模板内容（`default_file_content/prefab/default.prefab`），创建后 `open-asset` 可直接进入写入 |
 | 预制体创建（场景节点生成） | `cce.SceneFacadeManager.createPrefab(nodeUuid, url)` | internal-api | 已验证 | 空白项目实测从场景节点生成 `cc.Prefab` 并返回资产 UUID；`scene/create-prefab` 消息不存在（挂起） |
 | 预制体序列化数据 | `cce.SceneFacadeManager.getPrefabData(nodeUuid)` | internal-api | 已验证 | 返回完整 cc.Prefab 序列化 JSON |
 | 预制体删除 | `asset-db/delete-asset(url)` | message-api | 已验证 | 空白项目实测删除 prefab 资产成功 |
-| 预制体实例语义 | `cce.SceneFacadeManager`：`applyPrefab` / `restorePrefab` / `linkPrefab` / `unlinkPrefab` | internal-api | 待阶段三实测 | 自省确认方法存在；`scene/duplicate-node` 消息不存在（挂起），节点复制当前走运行时 `cc.instantiate` |
+| 预制体实例语义 | `cce.SceneFacadeManager`：`applyPrefab` / `restorePrefab` / `linkPrefab` / `unlinkPrefab`（均委托 `_facadeFSM.currentState` → PrefabManager/nodeOperation） | internal-api | 已实测（阶段三，空白项目） | 全部可用，详见文末"阶段三预制体语义实测"；`scene/duplicate-node` 消息不存在（挂起），节点复制当前走运行时 `cc.instantiate` |
 | 资产创建冲突弹窗 | `asset-db/create-asset` 对已存在路径 | message-api | 已验证风险 | 对既有路径调用会弹出"文件已存在，是否覆盖"模态框并无限阻塞调用方；写入前必须先 `query-asset-info` 预检或保证路径唯一 |
 | 脚本重新编译触发 | `asset-db/refresh-asset`（仅重新导入）；`programming/execute-script`（调用被拒） | message-api | 未找到可用入口 | 3.8.8 实测：refresh-asset 重新导入成功（asset-db 日志确认）但不触发 TypeScript 编译与类重注册；脚本源码变更的编译触发仍需编辑器内完成（保存文件/焦点刷新），外部消息入口待进一步探测 |
 | 保存与字节恢复 | `scene/save-scene` + `asset-db/save-asset` | `@cocos/creator-types` `3.8.7` | message-api | 已验证 Scene 保存会重排 Prefab；Undo 后由 AssetDB 恢复 prepare 阶段备份可回到原 SHA-256 |
@@ -76,3 +76,50 @@
 | `effectiveValue` | 当前打开文档运行时实例，按 FileID 和属性路径读取 | 26/26 已解析 |
 
 源值、Override 值和最终生效值不能互相替代。实测 `_contentSize` 的源值为 `{width:128.4099578857422,height:61.5}`，Override 为 `{width:128.4099578857422,height:50}`，运行时最终值为 `{width:128.4099578857422,height:48.9}`；这证明组件运行时更新可能使最终值不同于序列化 Override。
+
+## 阶段三预制体语义实测（空白项目，Bridge 0.1.24）
+
+探测入口：Bridge 临时探针 `probe.debugPrefabFacade`（enumerate/call/instantiate/link/scene-message），驱动脚本 `codex-work/tools/debug-prefab-facade.mts`、`debug-write-tx.mts`；证据 JSON 留档 `codex-work/work/tmp/facade-*.json`、`probe-*.json`。
+
+### 门面结构
+
+- `cce.SceneFacadeManager` 是代理层（262 个方法），真正实现全部委托 `this._facadeFSM.currentState`（普通场景模式为 `GeneralSceneFacade`，258 个方法）；预制体语义再由 `GeneralSceneFacade` 委托 `cce.Prefab`（PrefabManager）→ 模块内 `nodeOperation`。
+- Undo 实现为 `SceneUndoManager`（`currentState._undoMgr`）：命令栈 `_commandArray` + 手动/自动录制（`beginRecording(uuids,{auto})` → 命令 id；自动命令帧末自动关闭）；Dirty = 命令指针与最后保存命令不一致（`isDirty()`）。
+- `cce.Prefab`（PrefabManager，48 个方法）含实例化与关联原语；守卫方法 `filterPartOfPrefabAssetWhen*` 会阻止对实例内部节点的直接删改。
+
+### 实例化（预制体资产 → 场景实例）
+
+| 路径 | 结论 |
+| --- | --- |
+| `scene/create-node` 消息 `{parent, assetUuid, name, type:'cc.Prefab'}` | **推荐**。产出完整实例（state=2、applicable/revertable/unwrappable=true、独立 instance fileId）；**不带 `type` 会被 `removePrefabInfoFromNode` 剥成普通节点** |
+| `cce.Node.createNodeFromAsset(parentUuid, assetUuid, {name, type:'cc.Prefab'})` | 编辑器拖拽同款路径（发 before-add/add/change 事件、自动选中、checkCanvasRequired 可能自动创建 Canvas）；参数形态为（父，资产 UUID，选项）；**错误被内部 try/catch 吞掉只打控制台** |
+| `cce.Prefab.createNodeFromPrefabAsset(asset)` + 运行时挂父 | 可用但绕过编辑器事件；需先 `assetManager.loadAny` 取得资产对象 |
+| 三条路径共同点 | **都不进编辑器 Undo、不置 Dirty**；实例化写入的序列化结果正确（PrefabInfo + PrefabInstance + 覆盖记录 + 嵌套追踪） |
+
+### 应用到源 / 还原 / 解除与重新关联
+
+| 操作 | 结论 |
+| --- | --- |
+| `applyPrefab(instanceRootUuid)` | 把实例覆盖应用到源资产并**直接写盘**（git 可见 diff）；实测子节点位置覆盖成功写入源文件；**返回值不可信（成功也返回 false）**，必须靠重读/git 验证；根节点名属特例不应用；应用后实例侧覆盖记录不清空 |
+| `restorePrefab(instanceRootUuid)` | 整实例粒度还原（propertyOverrides 全部回源），成功返回 true；根名覆盖特例保留 |
+| `unlinkPrefab(instanceRootUuid)` | 解除关联、`__prefab__` 清空、子树保留；门面自带 begin/endRecording，**undo 可恢复关联**（证明关联变化属属性级可撤销） |
+| `linkPrefab(nodeUuid, assetUuid)` / `PrefabManager.linkNodeWithPrefabAsset` | 字符串 uuid 与运行时对象两种参数形态均调通，重新关联后 `_prefab.asset` 与 `instance` 恢复 |
+
+### 嵌套与 Override
+
+- 实例属性修改（含子节点 `_lpos`、根节点 `_name`）自动落为 `propertyOverrides` 差异记录，场景文件序列化为 `CCPropertyOverrideInfo`（targetInfo.localID + propertyPath + value）。
+- `createPrefab` 从**含实例的节点**生成预制体时**保留嵌套实例**（新预制体内出现指向源资产的 PrefabInfo + PrefabInstance 记录 + 根 PrefabInfo 的 `nestedPrefabInstanceRoots` 追踪），不拍平。
+
+### Undo 分组（Task 2 实测结论）
+
+- 手动 `beginRecording([节点],{auto:false})` → 属性修改 → `endRecording(id)` → `undo()`：整组回退**生效**（实测改名回退）。
+- 新建节点：`scene/create-node` 传 `snapshot:true` 或手动录制父节点，均只产生非 custom 的 dump-diff 命令，undo **不能**移除新建子节点（子节点列表不被 dump 恢复覆盖）。
+- 消息 `record:true`（set-property）在本进程内调用不产生撤销条目。
+- **阶段三决策：事务回滚维持 `step-undo-with-inverse`（显式逆操作 + 重读验证）**，编辑器 Undo 分组只作属性级辅助，不切换。
+
+### 会话与状态注意
+
+- 节点 UUID 是**会话级**的：重开文档后全部变化，序列化身份以 fileId 为准。
+- 运行时直接挂父（`node.parent=`）不置 Dirty；`save-scene` 对无 Dirty 文档不写盘。
+- `facade.createNode(e)`（JS 层）与 NodeManager 直调一样不录制 Undo；录制由调用方负责。
+- 探测遗留验证：所有探针节点已清理，空白项目 git 逐字干净。

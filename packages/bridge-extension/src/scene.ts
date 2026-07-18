@@ -454,6 +454,341 @@ async function debugPrefabLifecycle(request: unknown): Promise<unknown> {
 }
 
 /**
+ * 描述门面单个属性的类型信息；函数附形参个数和源码签名头部。
+ *
+ * @param value 待描述属性值。
+ * @returns 类型描述对象。
+ */
+function describeFacadeValue(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'function') return { kind: typeof value };
+  const fn = value as (...args: unknown[]) => unknown;
+  let signature = '';
+  try {
+    signature = Function.prototype.toString.call(fn).replace(/\s+/g, ' ').slice(0, 3000);
+  } catch {
+    signature = '';
+  }
+  return { kind: 'function', arity: fn.length, signature };
+}
+
+/**
+ * 生成未知返回值的 JSON 安全预览：对象默认只展开两层，循环引用截断，防止巨型 Dump。
+ *
+ * @param value 待预览值。
+ * @param depth 当前展开深度。
+ * @param seen 循环检测集合。
+ * @param maxDepth 最大展开深度。
+ * @returns 可 JSON 序列化的预览结构。
+ */
+function previewFacadeValue(value: unknown, depth: number, seen?: WeakSet<object>, maxDepth = 2): unknown {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'undefined') return null;
+  if (typeof value === 'function') return '[function]';
+  if (depth >= maxDepth) return '[truncated]';
+  const seenSet = seen ?? new WeakSet<object>();
+  if (typeof value === 'object') {
+    if (seenSet.has(value)) return '[circular]';
+    seenSet.add(value);
+  }
+  if (Array.isArray(value)) {
+    return { __type: 'array', length: value.length, items: value.slice(0, 3).map((item) => previewFacadeValue(item, depth + 1, seenSet, maxDepth)) };
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const ctor = typeof record.constructor === 'function'
+      ? (record.constructor as { name?: string }).name ?? 'Object'
+      : 'Object';
+    const preview: Record<string, unknown> = { __type: ctor };
+    for (const key of Object.keys(record).slice(0, 20)) {
+      try {
+        preview[key] = previewFacadeValue(record[key], depth + 1, seenSet, maxDepth);
+      } catch {
+        preview[key] = '[unreadable]';
+      }
+    }
+    return preview;
+  }
+  return String(value);
+}
+
+/** 门面调用独立限时：内部 API 不可用时不报错而挂起，超时按失败留证。 */
+function withFacadeTimeout<T>(pending: Promise<T>): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  return Promise.race([
+    pending,
+    new Promise<never>((_resolve, reject) => {
+      timeoutHandle = setTimeout(() => reject(new Error('ATTEMPT_TIMEOUT')), 5000);
+    })
+  ]).finally(() => {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  });
+}
+
+/** 经 assetManager.loadAny 加载资产对象（探测用，含预制体资产）。 */
+function loadCcAssetForProbe(assetUuid: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const { assetManager } = require('cc') as {
+      assetManager?: { loadAny?: (request: { uuid: string }, callback: (error: unknown, asset: unknown) => void) => void }
+    };
+    if (!assetManager || typeof assetManager.loadAny !== 'function') {
+      reject(new ProbeError('ASSET_PIPELINE_UNAVAILABLE'));
+      return;
+    }
+    assetManager.loadAny({ uuid: assetUuid }, (error, asset) => {
+      if (error || !asset) {
+        reject(new ProbeError('ASSET_LOAD_FAILED', { assetUuid, reason: error ? String(error) : 'ASSET_LOAD_EMPTY' }));
+        return;
+      }
+      resolve(asset);
+    });
+  });
+}
+
+/** 读取运行时节点关键信息：uuid、名称、父级和 _prefab 结构预览（循环安全）。 */
+function readRuntimeNodeInfo(node: unknown): Record<string, unknown> {
+  const record = readObject(node);
+  const parent = readObject(record.parent);
+  return {
+    uuid: typeof record.uuid === 'string' ? record.uuid : null,
+    name: typeof record.name === 'string' ? record.name : null,
+    parentName: typeof parent.name === 'string' ? parent.name : null,
+    active: typeof record.active === 'boolean' ? record.active : null,
+    prefab: previewFacadeValue(record._prefab, 0, undefined, 4)
+  };
+}
+
+/**
+ * 探测预制体实例化策略：加载资产 → cce.Prefab.createNodeFromPrefabAsset 生成实例 → 按策略挂载。
+ * strategy=runtime-attach 运行时直接挂父；paste 走 NodeManager.pasteNode；from-asset 走 NodeManager.createNodeFromAsset（资产拖拽路径）。
+ */
+async function debugInstantiateProbe(input: Record<string, unknown>): Promise<unknown> {
+  const assetUuid = typeof input.assetUuid === 'string' && input.assetUuid ? input.assetUuid : null;
+  const parentUuid = typeof input.parentUuid === 'string' && input.parentUuid ? input.parentUuid : null;
+  const strategy = typeof input.strategy === 'string' && input.strategy ? input.strategy : 'runtime-attach';
+  if (!assetUuid) throw new ProbeError('ASSET_UUID_REQUIRED');
+  const cce = readObject((globalThis as Record<string, unknown>).cce);
+  const prefabManager = readObject(cce.Prefab);
+  const nodeManager = readObject(cce.Node);
+  const asset = await loadCcAssetForProbe(assetUuid);
+  const result: Record<string, unknown> = {
+    strategy,
+    assetType: (asset as { constructor?: { name?: string } } | null)?.constructor?.name ?? null
+  };
+
+  if (strategy === 'from-asset') {
+    if (typeof nodeManager.createNodeFromAsset !== 'function') {
+      throw new ProbeError('FACADE_METHOD_NOT_FOUND', { target: 'Node', method: 'createNodeFromAsset' });
+    }
+    // 源码确认签名 createNodeFromAsset(parentUuid, assetUuid, {name,type})：type='cc.Prefab' 且不带 unlinkPrefab 时保留实例信息。
+    // 函数内部吞错只打控制台，改为多组参数形态批量尝试并分别留证。
+    const variants: Array<Record<string, unknown>> = [
+      { label: 'full', parent: parentUuid, options: { name: readObject(asset).name ?? 'ProbeInstance', type: 'cc.Prefab' } },
+      { label: 'no-canvas-adapt', parent: parentUuid, options: { name: readObject(asset).name ?? 'ProbeInstance', type: 'cc.Prefab', canvasRequired: false, autoAdaptToCreate: false } },
+      { label: 'root-parent', parent: null, options: { name: readObject(asset).name ?? 'ProbeInstance', type: 'cc.Prefab' } }
+    ];
+    const attempts: Array<Record<string, unknown>> = [];
+    for (const variant of variants) {
+      try {
+        const createdUuid = await withFacadeTimeout(
+          Promise.resolve((nodeManager.createNodeFromAsset as (...args: unknown[]) => unknown)
+            .call(nodeManager, variant.parent, assetUuid, variant.options))
+        );
+        const created = typeof createdUuid === 'string' && typeof nodeManager.query === 'function'
+          ? (nodeManager.query as (uuid: string) => unknown).call(nodeManager, createdUuid)
+          : null;
+        attempts.push({ label: variant.label, createdUuid: typeof createdUuid === 'string' ? createdUuid : null, node: readRuntimeNodeInfo(created) });
+        if (typeof createdUuid === 'string') break;
+      } catch (error) {
+        attempts.push({ label: variant.label, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    result.attempts = attempts;
+    return result;
+  }
+
+  if (typeof prefabManager.createNodeFromPrefabAsset !== 'function') {
+    throw new ProbeError('FACADE_METHOD_NOT_FOUND', { target: 'Prefab', method: 'createNodeFromPrefabAsset' });
+  }
+  const node = (prefabManager.createNodeFromPrefabAsset as (asset: unknown) => unknown).call(prefabManager, asset);
+  result.instantiated = readRuntimeNodeInfo(node);
+  if (strategy === 'runtime-attach') {
+    const parent = parentUuid
+      ? (nodeManager.query as (uuid: string) => unknown).call(nodeManager, parentUuid)
+      : director.getScene();
+    if (!parent) throw new ProbeError('PARENT_NODE_NOT_FOUND', { parentUuid });
+    (node as Record<string, unknown>).parent = parent;
+    result.attached = readRuntimeNodeInfo(node);
+    return result;
+  }
+  if (strategy === 'paste') {
+    const pasted = await withFacadeTimeout(
+      Promise.resolve((nodeManager.pasteNode as (...args: unknown[]) => unknown).call(nodeManager, parentUuid, [node]))
+    );
+    result.pasted = previewFacadeValue(pasted, 0);
+    result.attached = readRuntimeNodeInfo(node);
+    return result;
+  }
+  throw new ProbeError('INSTANTIATE_STRATEGY_UNKNOWN', { strategy });
+}
+
+/**
+ * 探测实例关联：候选入口逐一尝试（字符串 uuid 与运行时对象两种参数形态），成功/失败均留证。
+ */
+async function debugLinkProbe(input: Record<string, unknown>): Promise<unknown> {
+  const nodeUuid = typeof input.nodeUuid === 'string' && input.nodeUuid ? input.nodeUuid : null;
+  const assetUuid = typeof input.assetUuid === 'string' && input.assetUuid ? input.assetUuid : null;
+  if (!nodeUuid || !assetUuid) throw new ProbeError('NODE_AND_ASSET_UUID_REQUIRED');
+  const cce = readObject((globalThis as Record<string, unknown>).cce);
+  const facade = readObject(cce.SceneFacadeManager ?? cce.sceneFacadeManager);
+  const prefabManager = readObject(cce.Prefab);
+  const nodeManager = readObject(cce.Node);
+  const attempts: Array<Record<string, unknown>> = [];
+  const tryAttempt = async (name: string, run: () => Promise<unknown>) => {
+    try {
+      const result = await withFacadeTimeout(run());
+      attempts.push({ name, ok: true, result: previewFacadeValue(result, 0) });
+    } catch (error) {
+      attempts.push({ name, ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+  if (typeof facade.linkPrefab === 'function') {
+    await tryAttempt('facade.linkPrefab(nodeUuid,assetUuid)', async () =>
+      (facade.linkPrefab as (...args: unknown[]) => unknown).call(facade, nodeUuid, assetUuid));
+  }
+  if (typeof prefabManager.linkNodeWithPrefabAsset === 'function') {
+    await tryAttempt('prefab.linkNodeWithPrefabAsset(nodeUuid,assetUuid)', async () =>
+      (prefabManager.linkNodeWithPrefabAsset as (...args: unknown[]) => unknown).call(prefabManager, nodeUuid, assetUuid));
+    const node = typeof nodeManager.query === 'function'
+      ? (nodeManager.query as (uuid: string) => unknown).call(nodeManager, nodeUuid)
+      : null;
+    if (node) {
+      const asset = await loadCcAssetForProbe(assetUuid);
+      await tryAttempt('prefab.linkNodeWithPrefabAsset(node,asset)', async () =>
+        (prefabManager.linkNodeWithPrefabAsset as (...args: unknown[]) => unknown).call(prefabManager, node, asset));
+    }
+  }
+  return { attempts, nodeAfter: readRuntimeNodeInfo(
+    typeof nodeManager.query === 'function'
+      ? (nodeManager.query as (uuid: string) => unknown).call(nodeManager, nodeUuid)
+      : null
+  ) };
+}
+
+/**
+ * 探测场景消息层：白名单消息经 Editor.Message.request('scene', name, ...args) 调用。
+ * 消息层与门面 JS 方法的差异（撤销录制/Dirty 标记）是阶段三实现路径的关键证据。
+ */
+async function debugSceneMessageProbe(input: Record<string, unknown>): Promise<unknown> {
+  const name = typeof input.name === 'string' ? input.name : null;
+  const args = Array.isArray(input.args) ? input.args : [];
+  const whitelist = new Set(['create-node', 'remove-node', 'set-property', 'query-dirty', 'save-scene']);
+  if (!name || !whitelist.has(name)) {
+    throw new ProbeError('SCENE_MESSAGE_NOT_ALLOWED', { name, allowed: [...whitelist] });
+  }
+  const result = await withFacadeTimeout(Editor.Message.request('scene', name as never, ...args as []));
+  return { ok: true, result: previewFacadeValue(result, 0) };
+}
+
+/**
+ * 临时能力探测：cce.SceneFacadeManager 门面全量自省与受控方法调用。
+ * op=enumerate 返回 cce 顶层键与目标对象全部方法（含原型链、形参签名）；
+ * op=call 只允许调用目标对象自身方法，独立限时，成功/失败均留证。阶段三探测用，随阶段收口摘除或转正式能力。
+ * op=instantiate 探测实例化策略（runtime-attach / paste / from-asset）；op=link 探测实例关联候选入口。
+ * target 省略时为 SceneFacadeManager，否则限 cce 顶层直接属性（如 Prefab / Node / Operation）。
+ */
+async function debugPrefabFacade(request: unknown): Promise<unknown> {
+  const input = readObject(unwrapRequest(request));
+  const op = typeof input.op === 'string' ? input.op : 'enumerate';
+  const target = typeof input.target === 'string' && input.target ? input.target : null;
+  const cce = readObject((globalThis as Record<string, unknown>).cce);
+  const facade = cce.SceneFacadeManager ?? cce.sceneFacadeManager ?? cce.SceneFacade ?? cce.sceneFacade;
+  // target 支持点路径（如 SceneFacadeManager._facadeFSM.currentState），逐段取自有属性，不允许调用。
+  const resolveTarget = (): Record<string, unknown> | null => {
+    if (!target) {
+      return facade && (typeof facade === 'object' || typeof facade === 'function') ? facade as Record<string, unknown> : null;
+    }
+    let current: unknown = cce;
+    for (const segment of target.split('.')) {
+      if (!segment) return null;
+      if (!current || (typeof current !== 'object' && typeof current !== 'function')) return null;
+      current = (current as Record<string, unknown>)[segment];
+    }
+    return current && (typeof current === 'object' || typeof current === 'function') ? current as Record<string, unknown> : null;
+  };
+  const probeOwner = resolveTarget();
+
+  if (op === 'enumerate') {
+    const methods: Array<Record<string, unknown>> = [];
+    const seen = new Set<string>();
+    let current: unknown = probeOwner;
+    let level = 0;
+    while (current && (typeof current === 'object' || typeof current === 'function') && level < 4) {
+      for (const key of Object.getOwnPropertyNames(current)) {
+        if (seen.has(key) || key === 'constructor') continue;
+        seen.add(key);
+        let value: unknown;
+        try {
+          value = (current as Record<string, unknown>)[key];
+        } catch {
+          value = '[unreadable]';
+        }
+        const described = describeFacadeValue(value);
+        // 非函数属性附浅层预览，便于读取 creatableAssetTypes 等配置内容。
+        if (described.kind !== 'function') described.preview = previewFacadeValue(value, 0);
+        methods.push({ name: key, level, ...described });
+      }
+      current = Object.getPrototypeOf(current);
+      level += 1;
+    }
+    const ownerCtor = probeOwner
+      ? (probeOwner as { constructor?: { name?: string } }).constructor?.name ?? null
+      : null;
+    return { target: target ?? 'SceneFacadeManager', ownerCtor, cceKeys: Object.keys(cce).sort(), methods };
+  }
+
+  if (op === 'instantiate') {
+    return debugInstantiateProbe(input);
+  }
+
+  if (op === 'link') {
+    return debugLinkProbe(input);
+  }
+
+  if (op === 'scene-message') {
+    return debugSceneMessageProbe(input);
+  }
+
+  if (op === 'call') {
+    const method = typeof input.method === 'string' && input.method ? input.method : null;
+    if (!method) throw new ProbeError('FACADE_METHOD_REQUIRED');
+    const args = Array.isArray(input.args) ? input.args : [];
+    if (!probeOwner || typeof probeOwner[method] !== 'function') {
+      throw new ProbeError('FACADE_METHOD_NOT_FOUND', { target: target ?? 'SceneFacadeManager', method });
+    }
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const result = await Promise.race([
+        Promise.resolve((probeOwner[method] as (...callArgs: unknown[]) => unknown).apply(probeOwner, args)),
+        new Promise<never>((_resolve, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error('ATTEMPT_TIMEOUT')), 5000);
+        })
+      ]);
+      return { ok: true, result: previewFacadeValue(result, 0) };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error && error.stack ? error.stack.split('\n').slice(0, 5).join('\n') : null
+      };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+  }
+
+  throw new ProbeError('FACADE_PROBE_OP_UNKNOWN', { op });
+}
+
+/**
  * 恢复主进程传入的脚本 UUID 路径 Map。
  *
  * @param value UUID、路径元组数组。
@@ -504,6 +839,7 @@ export const methods = {
   writeExecute,
   writeRollback,
   debugPrefabLifecycle,
+  debugPrefabFacade,
   createPrefabFromNode,
   createAssetEmpty,
   deleteAsset,
