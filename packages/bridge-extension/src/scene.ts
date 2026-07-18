@@ -307,6 +307,27 @@ async function writeRollback(request: unknown): Promise<unknown> {
 }
 
 /**
+ * 在资产库创建空资产（当前支持 Node Prefab 模板）。
+ * 对既有路径先拒绝，避免触发 Creator"文件已存在"模态框无限阻塞。
+ */
+async function createAssetEmpty(request: unknown): Promise<unknown> {
+  const input = readObject(unwrapRequest(request));
+  const assetUrl = typeof input.assetUrl === 'string' && input.assetUrl ? input.assetUrl : null;
+  if (!assetUrl) throw new ProbeError('ASSET_URL_REQUIRED');
+  const existing = await Editor.Message.request('asset-db', 'query-asset-info', assetUrl);
+  if (existing) {
+    throw new ProbeError('ASSET_ALREADY_EXISTS', { assetUrl });
+  }
+  const created = await Editor.Message.request('asset-db', 'create-asset', assetUrl, null);
+  const info = readObject(created);
+  return {
+    assetUuid: typeof info.uuid === 'string' ? info.uuid : null,
+    assetUrl,
+    type: info.type ?? null
+  };
+}
+
+/**
  * 从场景节点生成预制体资产（cce.SceneFacadeManager.createPrefab）。
  * 对既有路径先拒绝，避免触发 Creator"文件已存在"模态框无限阻塞。
  */
@@ -489,5 +510,6 @@ export const methods = {
   writeExecute,
   writeRollback,
   debugPrefabLifecycle,
-  createPrefabFromNode
+  createPrefabFromNode,
+  createAssetEmpty
 };
