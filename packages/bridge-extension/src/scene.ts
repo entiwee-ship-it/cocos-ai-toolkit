@@ -674,6 +674,87 @@ async function debugLinkProbe(input: Record<string, unknown>): Promise<unknown> 
   ) };
 }
 
+/** 编译事件观察状态：跨调用保留广播监听与事件缓冲（阶段三探测用）。 */
+const compileWatchState: {
+  armedChannels: string[];
+  events: Array<Record<string, unknown>>;
+  listeners: Array<{ channel: string; listener: (...args: unknown[]) => void }>;
+  classMarkerBefore: string | null;
+} = { armedChannels: [], events: [], listeners: [], classMarkerBefore: null };
+
+/** 读取脚本类注册标记：构造器源码长度与哈希，类重注册后变化。 */
+function readScriptClassMarker(className: string): string | null {
+  try {
+    const { js } = require('cc') as { js: { getClassByName(name: string): unknown } };
+    const cls = js.getClassByName(className);
+    if (typeof cls !== 'function') return null;
+    const source = Function.prototype.toString.call(cls as (...args: unknown[]) => unknown);
+    let hash = 0;
+    for (let index = 0; index < source.length; index += 1) {
+      hash = (hash * 31 + source.charCodeAt(index)) | 0;
+    }
+    return `len=${source.length},hash=${hash}`;
+  } catch (error) {
+    return `error:${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/** 广播监听武装：对候选频道逐个注册，成功/失败留证，缓冲清空。 */
+function debugWatchArm(input: Record<string, unknown>): unknown {
+  const channels = Array.isArray(input.channels) ? input.channels.filter((item): item is string => typeof item === 'string') : [];
+  const className = typeof input.className === 'string' ? input.className : null;
+  debugWatchCollect();
+  compileWatchState.events = [];
+  compileWatchState.armedChannels = [];
+  compileWatchState.classMarkerBefore = className ? readScriptClassMarker(className) : null;
+  const message = Editor.Message as unknown as Record<string, unknown>;
+  const failures: Array<Record<string, unknown>> = [];
+  for (const channel of channels) {
+    try {
+      const listener = (...args: unknown[]) => {
+        compileWatchState.events.push({
+          channel,
+          at: new Date().toISOString(),
+          args: previewFacadeValue(args, 0)
+        });
+      };
+      (message.addBroadcastListener as (channel: string, listener: (...args: unknown[]) => void) => void)(channel, listener);
+      compileWatchState.listeners.push({ channel, listener });
+      compileWatchState.armedChannels.push(channel);
+    } catch (error) {
+      failures.push({ channel, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { armed: compileWatchState.armedChannels, failures, classMarkerBefore: compileWatchState.classMarkerBefore };
+}
+
+/** 广播监听收集：卸监听、返回事件缓冲与类注册标记对比。 */
+function debugWatchCollect(input?: Record<string, unknown>): unknown {
+  const message = typeof Editor !== 'undefined' ? Editor.Message as unknown as Record<string, unknown> : null;
+  for (const { channel, listener } of compileWatchState.listeners) {
+    try {
+      if (message && typeof message.removeBroadcastListener === 'function') {
+        (message.removeBroadcastListener as (channel: string, listener: (...args: unknown[]) => void) => void)(channel, listener);
+      }
+    } catch {
+      // 卸监听失败不影响收集
+    }
+  }
+  compileWatchState.listeners = [];
+  const className = input && typeof input.className === 'string' ? input.className : null;
+  const classMarkerAfter = className ? readScriptClassMarker(className) : null;
+  const events = compileWatchState.events;
+  compileWatchState.events = [];
+  return {
+    events,
+    classMarkerBefore: compileWatchState.classMarkerBefore,
+    classMarkerAfter,
+    classChanged: compileWatchState.classMarkerBefore !== null && classMarkerAfter !== null
+      ? compileWatchState.classMarkerBefore !== classMarkerAfter
+      : null
+  };
+}
+
 /**
  * 探测场景消息层：白名单消息经 Editor.Message.request('scene', name, ...args) 调用。
  * 消息层与门面 JS 方法的差异（撤销录制/Dirty 标记）是阶段三实现路径的关键证据。
@@ -702,10 +783,16 @@ async function debugPrefabFacade(request: unknown): Promise<unknown> {
   const target = typeof input.target === 'string' && input.target ? input.target : null;
   const cce = readObject((globalThis as Record<string, unknown>).cce);
   const facade = cce.SceneFacadeManager ?? cce.sceneFacadeManager ?? cce.SceneFacade ?? cce.sceneFacade;
-  // target 支持点路径（如 SceneFacadeManager._facadeFSM.currentState），逐段取自有属性，不允许调用。
+  // target 支持点路径（如 SceneFacadeManager._facadeFSM.currentState 或 Editor.Message），逐段取自有属性，不允许调用。
   const resolveTarget = (): Record<string, unknown> | null => {
     if (!target) {
       return facade && (typeof facade === 'object' || typeof facade === 'function') ? facade as Record<string, unknown> : null;
+    }
+    // Editor 在场景脚本模块作用域内可用但不在 globalThis 上，单独特判。
+    if (target === 'Editor.Message') {
+      return Editor.Message && (typeof Editor.Message === 'object' || typeof (Editor.Message as unknown) === 'function')
+        ? Editor.Message as unknown as Record<string, unknown>
+        : null;
     }
     let current: unknown = cce;
     for (const segment of target.split('.')) {
@@ -718,6 +805,15 @@ async function debugPrefabFacade(request: unknown): Promise<unknown> {
   const probeOwner = resolveTarget();
 
   if (op === 'enumerate') {
+    if (target === 'Editor.Message') {
+      // 诊断：确认 Editor 全局在场景进程的真实形态
+      return {
+        target,
+        typeofEditor: typeof Editor,
+        typeofMessage: typeof Editor.Message,
+        messageKeys: Editor.Message && typeof Editor.Message === 'object' ? Object.keys(Editor.Message as unknown as object).sort() : null
+      };
+    }
     const methods: Array<Record<string, unknown>> = [];
     const seen = new Set<string>();
     let current: unknown = probeOwner;
@@ -756,6 +852,14 @@ async function debugPrefabFacade(request: unknown): Promise<unknown> {
 
   if (op === 'scene-message') {
     return debugSceneMessageProbe(input);
+  }
+
+  if (op === 'watch-arm') {
+    return debugWatchArm(input);
+  }
+
+  if (op === 'watch-collect') {
+    return debugWatchCollect(input);
   }
 
   if (op === 'call') {

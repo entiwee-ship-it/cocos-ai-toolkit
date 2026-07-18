@@ -27,7 +27,7 @@
 | 预制体删除 | `asset-db/delete-asset(url)` | message-api | 已验证 | 空白项目实测删除 prefab 资产成功 |
 | 预制体实例语义 | `cce.SceneFacadeManager`：`applyPrefab` / `restorePrefab` / `linkPrefab` / `unlinkPrefab`（均委托 `_facadeFSM.currentState` → PrefabManager/nodeOperation） | internal-api | 已实测（阶段三，空白项目） | 全部可用，详见文末"阶段三预制体语义实测"；`scene/duplicate-node` 消息不存在（挂起），节点复制当前走运行时 `cc.instantiate` |
 | 资产创建冲突弹窗 | `asset-db/create-asset` 对已存在路径 | message-api | 已验证风险 | 对既有路径调用会弹出"文件已存在，是否覆盖"模态框并无限阻塞调用方；写入前必须先 `query-asset-info` 预检或保证路径唯一 |
-| 脚本重新编译触发 | `asset-db/refresh-asset`（仅重新导入）；`programming/execute-script`（调用被拒） | message-api | 未找到可用入口 | 3.8.8 实测：refresh-asset 重新导入成功（asset-db 日志确认）但不触发 TypeScript 编译与类重注册；脚本源码变更的编译触发仍需编辑器内完成（保存文件/焦点刷新），外部消息入口待进一步探测 |
+| 脚本重新编译触发 | `asset-db/refresh-asset` → 重新导入 + **异步 TypeScript 编译 + 类重注册**（阶段三复测修正）；`programming/execute-script`（调用被拒） | message-api | 已验证（阶段三） | 3.8.8 实测：refresh-asset 后脚本类标记变化（构造器 len 269→348→还原 269 双向确认），阶段二"仅重新导入不触发编译"结论作废（此前观测早于异步编译完成）。编译完成不可经广播事件感知（场景进程监听 8 个候选频道全空），**等待链路用类注册标记有界轮询**；自然文件监听在后台无焦点 30 秒未触发，显式 refresh-asset 是可靠触发 |
 | 保存与字节恢复 | `scene/save-scene` + `asset-db/save-asset` | `@cocos/creator-types` `3.8.7` | message-api | 已验证 Scene 保存会重排 Prefab；Undo 后由 AssetDB 恢复 prepare 阶段备份可回到原 SHA-256 |
 
 ## 已确认事实
@@ -123,3 +123,11 @@
 - 运行时直接挂父（`node.parent=`）不置 Dirty；`save-scene` 对无 Dirty 文档不写盘。
 - `facade.createNode(e)`（JS 层）与 NodeManager 直调一样不录制 Undo；录制由调用方负责。
 - 探测遗留验证：所有探针节点已清理，空白项目 git 逐字干净。
+
+### 脚本编译链路（Task 3 实测结论）
+
+- `Editor.Message` 场景进程侧接口：`request / send / broadcast / addBroadcastListener / removeBroadcastListener`（另有 `__register__` 等内部键）。
+- 广播监听在场景进程注册 8 个候选频道（asset-db:asset-*、programming:* 等）均**收不到事件**：文件改动、显式 refresh、重编译完成全程事件缓冲为空。事件驱动等待链路不可用。
+- **`asset-db/refresh-asset` 实测触发完整链路**：重新导入 → 异步 TS 编译 → 类重注册。证据：Phase2Probe 增删属性后 refresh，构造器标记双向变化（len 269→348→269）。
+- 编译完成感知方式：`js.getClassByName(className)` 构造器源码标记（长度+哈希）**有界轮询**，不用固定延时；挂载守卫可按"refresh → 轮询类标记/Schema 出现预期字段 → 允许挂载"落地（设计规格第 15 章）。
+- 自然文件监听在后台无焦点状态下 30 秒未触发；用户点击 Creator（焦点恢复）是手动触发路径，自动化一律用显式 refresh-asset。
