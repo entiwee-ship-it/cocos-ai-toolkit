@@ -50,14 +50,14 @@ describe('executeWriteSceneOperations', () => {
     const evidence = outcome.evidence as Array<{ operation: Record<string, unknown> }>;
     expect(evidence[0].operation.resultNodeUuid).toBe('n1');
     expect(evidence[1].operation.resultComponentUuid).toBe('c1');
-    // 已有目标 UUID 的操作不重复回填
+    // 结果 UUID 一律回填并覆盖原操作值（create_from_node 重建节点后 UUID 变更的场景依赖覆盖语义）
     const outcomeExisting = await executeWriteSceneOperations({
       operations: [{ type: 'node.rename', nodeUuid: 'keep-me', name: 'X' }],
       save: false,
       undoGroup: 'no-backfill'
     }, dependencies);
     const evidenceExisting = outcomeExisting.evidence as Array<{ operation: Record<string, unknown> }>;
-    expect(evidenceExisting[0].operation.resultNodeUuid).toBeUndefined();
+    expect(evidenceExisting[0].operation.resultNodeUuid).toBe('n1');
   });
 
   it('第三个操作失败时返回 operation-failed 并保留前两个证据', async () => {    const dependencies = createDependencies({ failAtType: 'component.enable' });
