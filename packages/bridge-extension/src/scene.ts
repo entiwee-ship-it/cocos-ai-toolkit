@@ -307,6 +307,22 @@ async function writeRollback(request: unknown): Promise<unknown> {
 }
 
 /**
+ * 删除资产库中的资产（asset-db/delete-asset）。
+ * 目标不存在时直接拒绝，不静默成功。
+ */
+async function deleteAsset(request: unknown): Promise<unknown> {
+  const input = readObject(unwrapRequest(request));
+  const assetUrl = typeof input.assetUrl === 'string' && input.assetUrl ? input.assetUrl : null;
+  if (!assetUrl) throw new ProbeError('ASSET_URL_REQUIRED');
+  const existing = await Editor.Message.request('asset-db', 'query-asset-info', assetUrl);
+  if (!existing) {
+    throw new ProbeError('ASSET_NOT_FOUND', { assetUrl });
+  }
+  const deleted = await Editor.Message.request('asset-db', 'delete-asset', assetUrl as never);
+  return { deleted: Boolean(deleted), assetUrl };
+}
+
+/**
  * 在资产库创建空 Node Prefab（内容与 Creator 3.8.8 内置模板 default_file_content/prefab/default.prefab 一致）。
  * 对既有路径先拒绝，避免触发 Creator"文件已存在"模态框无限阻塞。
  */
@@ -552,5 +568,6 @@ export const methods = {
   writeRollback,
   debugPrefabLifecycle,
   createPrefabFromNode,
-  createAssetEmpty
+  createAssetEmpty,
+  deleteAsset
 };

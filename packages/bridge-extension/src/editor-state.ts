@@ -17,7 +17,8 @@ export const BRIDGE_CAPABILITIES = [
   'probe.transactionList',
   'probe.transactionRollback',
   'probe.createPrefab',
-  'probe.createAsset'
+  'probe.createAsset',
+  'probe.deleteAsset'
 ] as const;
 
 export interface BridgeEditorState {
