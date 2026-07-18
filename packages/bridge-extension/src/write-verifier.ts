@@ -165,7 +165,9 @@ async function verifyOperationUnsafe(
         operation.componentUuid as string,
         operation.propertyPath as string
       );
-      return build(null, actual ?? null, actual === null || actual === undefined);
+      // Dump 形态的空引用为 {uuid:''}：按归一化 UUID 为空判定已清空。
+      const cleared = actual === null || actual === undefined || readReferenceUuid(actual) === null;
+      return build(null, actual ?? null, cleared);
     }
     case 'component.resize_array': {
       const actual = await dependencies.getComponentProperty(

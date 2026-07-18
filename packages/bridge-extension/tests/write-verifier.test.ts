@@ -90,6 +90,25 @@ describe('saveAndVerifyWriteTransaction', () => {
     expect(report.items[0]).toMatchObject({ expected: 3, actual: 3, passed: true });
   });
 
+  it('clear_reference 按 Dump 空 UUID 判定已清空', async () => {
+    const dependencies = createDependencies();
+    dependencies.getComponentProperty = async () => ({ uuid: '' });
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [{
+        operation: { type: 'component.clear_reference', componentUuid: 'comp-1', propertyPath: 'target' },
+        componentUuid: 'comp-1',
+        before: { reference: { uuid: 'node-9' } },
+        after: { reference: { uuid: '' } },
+        inverse: []
+      }],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0].passed).toBe(true);
+  });
+
   it('set_reference 按归一化 UUID 比对 Dump 形态', async () => {
     const dependencies = createDependencies();
     dependencies.getComponentProperty = async () => ({ uuid: 'node-9' });
