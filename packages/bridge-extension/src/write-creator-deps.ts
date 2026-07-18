@@ -29,6 +29,33 @@ const ccModule = require('cc') as Record<string, any>;
 
 type RuntimeNode = Record<string, any>;
 
+/**
+ * 操作可见性：选中目标节点并在 Creator 控制台打印操作日志。
+ * 尽力而为，任何一步失败都不影响写入主链路。
+ */
+function focusAndLog(nodeUuid: string | null, message: string): void {
+  if (nodeUuid) {
+    try {
+      const selection = (Editor as unknown as Record<string, unknown>).Selection as {
+        select?: (type: string, uuid: string, clear?: boolean) => void;
+      } | undefined;
+      selection?.select?.('node', nodeUuid, true);
+    } catch {
+      // 选中失败不影响写入
+    }
+  }
+  try {
+    const editorGlobal = Editor as unknown as Record<string, unknown>;
+    if (typeof editorGlobal.log === 'function') {
+      (editorGlobal.log as (text: string) => void)(`[CocosAI] ${message}`);
+    } else {
+      console.log(`[CocosAI] ${message}`);
+    }
+  } catch {
+    // 日志失败不影响写入
+  }
+}
+
 /** 当前文档身份与层级指纹，供事务管理器 Revision 前置采集。 */
 export interface CurrentDocumentIdentity {
   documentId: string;
@@ -83,24 +110,30 @@ export function buildNodeWriterDependencies(): NodeWriterDependencies {
       if (typeof uuid !== 'string' || !uuid) {
         throw new ProbeError('NODE_CREATE_FAILED', { parentUuid, name });
       }
+      focusAndLog(uuid, `创建节点 ${name}（父节点 ${parentUuid}）`);
       return uuid;
     },
     removeNode: async (uuid) => {
       await Editor.Message.request('scene', 'remove-node', { uuid });
+      focusAndLog(null, `删除节点 ${uuid}`);
     },
     renameNode: async (uuid, name) => {
       await setNodePropertyViaDump(uuid, 'name', name);
+      focusAndLog(uuid, `重命名节点为 ${name}`);
     },
     setNodeActive: async (uuid, active) => {
       await setNodePropertyViaDump(uuid, 'active', active);
+      focusAndLog(uuid, `设置节点激活为 ${active}`);
     },
     setNodeLayer: async (uuid, layer) => {
       await setNodePropertyViaDump(uuid, 'layer', layer);
+      focusAndLog(uuid, `设置节点层级为 ${layer}`);
     },
     setNodeTransform: async (uuid, transform) => {
       if (transform.position) await setNodePropertyViaDump(uuid, 'position', transform.position);
       if (transform.rotation) await setNodePropertyViaDump(uuid, 'rotation', transform.rotation);
       if (transform.scale) await setNodePropertyViaDump(uuid, 'scale', transform.scale);
+      focusAndLog(uuid, `设置节点局部变换 ${JSON.stringify(transform)}`);
     },
     reparentNode: async (uuid, newParentUuid, siblingIndex) => {
       const node = requireRuntimeNode(uuid);
@@ -112,13 +145,16 @@ export function buildNodeWriterDependencies(): NodeWriterDependencies {
       if (typeof siblingIndex === 'number' && typeof node.setSiblingIndex === 'function') {
         node.setSiblingIndex(siblingIndex);
       }
+      focusAndLog(uuid, `移动节点 ${uuid} 到父节点 ${newParentUuid}`);
     },
     duplicateNode: async (uuid) => {
       const node = findRuntimeNode(uuid);
       if (!node) return null;
       const duplicated = instantiate(node) as RuntimeNode;
       if (node.parent) duplicated.parent = node.parent;
-      return readRuntimeUuid(duplicated);
+      const duplicatedUuid = readRuntimeUuid(duplicated);
+      focusAndLog(duplicatedUuid, `复制节点 ${uuid} 得到 ${duplicatedUuid}`);
+      return duplicatedUuid;
     }
   };
 }
@@ -180,6 +216,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       const afterUuids = readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid));
       for (const [uuid, type] of afterUuids) {
         if (!beforeUuids.has(uuid) && type === componentType) {
+          focusAndLog(nodeUuid, `节点 ${nodeUuid} 挂载组件 ${componentType}`);
           return uuid;
         }
       }
@@ -190,6 +227,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       if (!runtime) {
         throw new ProbeError('COMPONENT_NOT_FOUND', { componentUuid });
       }
+      const ownerUuid = readRuntimeUuid(runtime.node);
       if (typeof runtime.node.removeComponent === 'function') {
         runtime.node.removeComponent(runtime.component);
       } else if (typeof runtime.component.destroy === 'function') {
@@ -197,6 +235,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       } else {
         throw new ProbeError('COMPONENT_REMOVE_FAILED', { componentUuid });
       }
+      focusAndLog(ownerUuid, `节点 ${ownerUuid} 移除组件 ${componentUuid}`);
     },
     setComponentEnabled: async (componentUuid, enabled) => {
       // enabled 直接写运行时对象：set-property(record:true) 对组件 enabled 实测不生效（0.1.4 验证）。
@@ -205,6 +244,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
         throw new ProbeError('COMPONENT_NOT_FOUND', { componentUuid });
       }
       runtime.component.enabled = enabled;
+      focusAndLog(readRuntimeUuid(runtime.node), `组件 ${componentUuid} 启用状态设为 ${enabled}`);
     },
     getComponentProperty: async (componentUuid, propertyPath) => {
       const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
@@ -233,6 +273,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
         currentValue,
         propertyPath
       );
+      focusAndLog(readRuntimeUuid(runtime.node), `组件 ${componentUuid} 属性 ${propertyPath} 写入完成`);
     },
     resizeComponentArray: async (componentUuid, propertyPath, length) => {
       const runtime = findRuntimeComponent(componentUuid);
