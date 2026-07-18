@@ -129,8 +129,8 @@ describe('Phase 2 统一写入验证脚本', () => {
     expect(script).toContain('$snapshot.data.document.assetUuid -eq $ExpectedAssetUuid');
     // 快照节点为规范化结构：UUID 在 identity.objectUuid
     expect(script).toContain('identity.objectUuid');
-    // 写入目标按 documentType 固定选 prefab
-    expect(script).toContain("$document.documentType -eq 'prefab'");
+    // 写入草稿文档优先选场景：Prefab 编辑模式会把写入打到 should_hide_in_hierarchy 编辑容器上
+    expect(script).toContain("$document.documentType -eq 'scene'");
     // 夹具节点必须带组件和局部变换（场景伪根没有 position dump，不能作为写入目标）
     expect(script).toContain('$null -ne $node.localTransform.position');
     // 组件与脚本样本来自快照 componentSchemas（componentUuid / nodeUuid / scriptUuid）

@@ -711,22 +711,32 @@ function Find-SampleWriteDocument {
 
     $documents = @($AssetIndex.documents)
     Assert-Condition -Condition ($documents.Count -gt 0) -Message '资产索引没有 Scene 或 Prefab'
-    # 阶段二写入目标固定 Prefab：场景保存语义不同，隔离验证只选 prefab 类型文档。
-    $prefab = $null
+    # 写入验证的草稿文档优先选场景：Prefab 编辑模式会把写入打到 should_hide_in_hierarchy
+    # 编辑容器上（层级面板报 isPrefabRoot 错误），场景才是自然的写入目标。
+    $scene = $null
     foreach ($document in $documents) {
-        if ([string]$document.documentType -eq 'prefab') {
-            $prefab = $document
+        if ([string]$document.documentType -eq 'scene') {
+            $scene = $document
             break
         }
     }
-    if ($null -eq $prefab) {
-        $prefab = $documents[0]
+    $target = $scene
+    if ($null -eq $target) {
+        foreach ($document in $documents) {
+            if ([string]$document.documentType -eq 'prefab') {
+                $target = $document
+                break
+            }
+        }
     }
-    $assetUuid = [string]($prefab.assetUuid ?? $prefab.uuid)
+    if ($null -eq $target) {
+        $target = $documents[0]
+    }
+    $assetUuid = [string]($target.assetUuid ?? $target.uuid)
     Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($assetUuid)) -Message '样本文档缺少资产 UUID'
     return [PSCustomObject]@{
         assetUuid = $assetUuid
-        path = [string]($prefab.path ?? $prefab.url ?? '')
+        path = [string]($target.path ?? $target.url ?? '')
     }
 }
 
