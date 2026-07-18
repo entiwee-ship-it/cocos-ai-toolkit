@@ -56,6 +56,8 @@ export interface PrefabWriterDependencies {
    * 找不到时返回 null（调用方按稳定错误码处理）。
    */
   findPrefabInstanceRoot(parentUuid: string | null, name: string, prefabAssetUuid: string): Promise<string | null>;
+  /** 实例根重定位的轮询预算毫秒数；缺省 5000（节点树刷新晚于资产创建返回）。 */
+  relocatePollBudgetMs?: number;
 }
 
 export interface PrefabWriteOpResult {
@@ -325,20 +327,23 @@ async function createFromNode(
     throw new ProbeError('NODE_NOT_FOUND', { nodeUuid: operation.nodeUuid });
   }
   const assetUuid = await dependencies.createPrefabFromNode(operation.nodeUuid, operation.assetUrl);
-  // createPrefab 会重建节点（实测：原会话 UUID 失效），按父节点 + 名称 + 新源资产重定位实例根。
+  // createPrefab 会重建节点（实测：原会话 UUID 失效，且节点树刷新晚于资产创建返回），
+  // 按父节点 + 名称 + 新源资产有界轮询重定位实例根（预算可注入，默认 5 秒）。
   let resolvedRootUuid: string | null = null;
-  try {
-    resolvedRootUuid = await dependencies.findPrefabInstanceRoot(before.parentUuid, before.name, assetUuid);
-  } catch {
-    resolvedRootUuid = null;
-  }
+  const deadline = Date.now() + (dependencies.relocatePollBudgetMs ?? 5_000);
+  do {
+    resolvedRootUuid = await dependencies.findPrefabInstanceRoot(before.parentUuid, before.name, assetUuid).catch(() => null);
+    if (!resolvedRootUuid && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    }
+  } while (!resolvedRootUuid && Date.now() < deadline);
   if (!resolvedRootUuid) {
     // 资产已创建但实例根定位失败：尽力清理新建资产，避免失败路径留下磁盘残留。
     await dependencies.deleteAsset(operation.assetUrl).catch(() => undefined);
     throw new ProbeError('PREFAB_INSTANCE_NOT_ESTABLISHED', {
       nodeUuid: operation.nodeUuid,
       assetUuid,
-      reason: 'createPrefab 后无法重定位实例根（原 UUID 已失效），已尽力清理新建资产'
+      reason: 'createPrefab 后 5 秒内无法重定位实例根（原 UUID 已失效），已尽力清理新建资产'
     });
   }
   const after = await dependencies.getPrefabInstanceInfo(resolvedRootUuid);

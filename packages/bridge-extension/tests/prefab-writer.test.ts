@@ -165,7 +165,8 @@ describe('executePrefabWriteOperation', () => {
   it('prefab.create_from_node 重建后无法重定位实例根时报错', async () => {
     const dependencies = createDependencies({
       queryAssetInfo: async () => null,
-      findPrefabInstanceRoot: async () => null
+      findPrefabInstanceRoot: async () => null,
+      relocatePollBudgetMs: 1
     });
     const error = await executePrefabWriteOperation(
       { type: 'prefab.create_from_node', nodeUuid: 'n1', assetUrl: 'db://assets/a.prefab' } as WriteOperation,
