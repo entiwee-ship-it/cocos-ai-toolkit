@@ -307,6 +307,18 @@ async function writeRollback(request: unknown): Promise<unknown> {
 }
 
 /**
+ * 触发 asset-db 重新导入指定资产（脚本变更后的刷新入口）。
+ * 用于替代手动编译：写入脚本文件后调用，再经挂载守卫核对类注册。
+ */
+async function refreshAsset(request: unknown): Promise<unknown> {
+  const input = readObject(unwrapRequest(request));
+  const assetUrl = typeof input.assetUrl === 'string' && input.assetUrl ? input.assetUrl : null;
+  if (!assetUrl) throw new ProbeError('ASSET_URL_REQUIRED');
+  await Editor.Message.request('asset-db', 'refresh-asset', assetUrl);
+  return { refreshed: true, assetUrl };
+}
+
+/**
  * 删除资产库中的资产（asset-db/delete-asset）。
  * 目标不存在时直接拒绝，不静默成功。
  */
@@ -569,5 +581,6 @@ export const methods = {
   debugPrefabLifecycle,
   createPrefabFromNode,
   createAssetEmpty,
-  deleteAsset
+  deleteAsset,
+  refreshAsset
 };
