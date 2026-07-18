@@ -209,14 +209,14 @@ describe('WriteTransactionRequestSchema', () => {
     expect(() => WriteTransactionRequestSchema.parse(request)).toThrow();
   });
 
-  it('拒绝阶段三的 source-prefab 作用域', () => {
+  it('source-prefab 缺少影响分析时按门禁拒绝', () => {
     const request = createValidRequest();
     (request as { scope: string }).scope = 'source-prefab';
 
     expect(() => WriteTransactionRequestSchema.parse(request)).toThrow();
   });
 
-  it('拒绝阶段三的 apply-to-source 作用域', () => {
+  it('apply-to-source 缺少影响分析时按门禁拒绝', () => {
     const request = createValidRequest();
     (request as { scope: string }).scope = 'apply-to-source';
 
