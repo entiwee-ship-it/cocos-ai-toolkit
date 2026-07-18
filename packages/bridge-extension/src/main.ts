@@ -22,7 +22,7 @@ import {
   type WriteTransactionRecord
 } from './transaction-manager';
 
-const BRIDGE_VERSION = '0.1.14';
+const BRIDGE_VERSION = '0.1.15';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 let client: BridgeClient | null = null;
