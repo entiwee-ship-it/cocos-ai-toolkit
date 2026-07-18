@@ -59,6 +59,8 @@ export interface PrefabWriteOpResult {
 /**
  * 执行单个预制体原子写操作，返回 before/after 证据和显式逆操作。
  * 只允许在事务上下文内由写执行器调用；非法输入抛稳定错误码，不留下半成品。
+ * 桥内 WriteOperation 为松散结构（必填字段已由 validateWriteTransactionRequest 校验），
+ * 本模块按操作类型收窄读取。
  *
  * @param operation 预制体写操作（prefab.*）。
  * @param dependencies Scene 侧真实能力。
@@ -70,18 +72,22 @@ export async function executePrefabWriteOperation(
 ): Promise<PrefabWriteOpResult> {
   switch (operation.type) {
     case 'prefab.instantiate':
-      return instantiatePrefab(operation, dependencies);
+      return instantiatePrefab(operation as PrefabInstantiateOperation, dependencies);
     case 'prefab.create_from_node':
-      return createFromNode(operation, dependencies);
+      return createFromNode(operation as PrefabCreateFromNodeOperation, dependencies);
     case 'prefab.delete_asset':
-      return deleteAsset(operation, dependencies);
+      return deleteAsset(operation as PrefabDeleteAssetOperation, dependencies);
     default:
       throw new ProbeError('INVALID_WRITE_OPERATION', { type: operation.type });
   }
 }
 
+type PrefabInstantiateOperation = WriteOperation & { prefabAssetUuid: string; parentNodeUuid: string; name?: string };
+type PrefabCreateFromNodeOperation = WriteOperation & { nodeUuid: string; assetUrl: string };
+type PrefabDeleteAssetOperation = WriteOperation & { assetUrl: string };
+
 async function instantiatePrefab(
-  operation: Extract<WriteOperation, { type: 'prefab.instantiate' }>,
+  operation: PrefabInstantiateOperation,
   dependencies: PrefabWriterDependencies
 ): Promise<PrefabWriteOpResult> {
   const asset = await dependencies.queryAssetInfo(operation.prefabAssetUuid);
@@ -116,7 +122,7 @@ async function instantiatePrefab(
 }
 
 async function createFromNode(
-  operation: Extract<WriteOperation, { type: 'prefab.create_from_node' }>,
+  operation: PrefabCreateFromNodeOperation,
   dependencies: PrefabWriterDependencies
 ): Promise<PrefabWriteOpResult> {
   // 路径预检：asset-db/create-asset 对既有路径会弹模态框无限阻塞（能力矩阵已记录）。
@@ -143,7 +149,7 @@ async function createFromNode(
 }
 
 async function deleteAsset(
-  operation: Extract<WriteOperation, { type: 'prefab.delete_asset' }>,
+  operation: PrefabDeleteAssetOperation,
   dependencies: PrefabWriterDependencies
 ): Promise<PrefabWriteOpResult> {
   await dependencies.deleteAsset(operation.assetUrl);

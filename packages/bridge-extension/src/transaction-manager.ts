@@ -12,14 +12,15 @@ export type WriteTransactionState =
   | 'connection-lost' | 'outcome-unknown' | 'recovering' | 'manual-recovery-required';
 
 /**
- * 写事务执行前的修订前置。四个维度分别对应文档内容、层级结构、资产数据库和脚本编译状态的指纹；
- * 为 null 表示该维度不参与前置校验。
+ * 写事务执行前的修订前置。五个维度分别对应文档内容、层级结构、资产数据库、脚本编译状态和预制体图的指纹；
+ * 为 null 或省略表示该维度不参与前置校验；prefabGraph 由含应用到源操作的事务强制要求。
  */
 export interface RevisionFingerprint {
   document: string | null;
   hierarchy: string | null;
   assetDatabase: string | null;
   scriptCompilation: string | null;
+  prefabGraph?: string | null;
 }
 
 /**
@@ -34,8 +35,10 @@ export interface WriteOperation {
 export interface WriteTransactionRequest {
   transactionId: string;
   idempotencyKey: string;
-  scope: 'current-document';
+  scope: 'current-document' | 'source-prefab' | 'apply-to-source';
   revision: RevisionFingerprint;
+  /** source-prefab / apply-to-source 必须携带的影响分析（协议层已门禁，桥内双保险复核存在性）。 */
+  impactAnalysis?: unknown;
   operations: WriteOperation[];
   save: boolean;
   undoGroup: string;
@@ -98,7 +101,7 @@ export interface WriteTransactionRecord {
   idempotencyKey: string;
   /** 归一化请求的 sha256，用于识别同幂等键不同负载的误用。 */
   requestHash: string;
-  scope: 'current-document';
+  scope: 'current-document' | 'source-prefab' | 'apply-to-source';
   /** captureRevision 返回的当前文档标识，是文档级锁的键。 */
   documentId: string;
   state: WriteTransactionState;
@@ -253,7 +256,7 @@ const LOCK_RELEASE_STATES: WriteTransactionState[] = [
   'committed', 'failed', 'rolled-back', 'outcome-unknown', 'manual-recovery-required'
 ];
 
-const REVISION_SCOPES = ['document', 'hierarchy', 'assetDatabase', 'scriptCompilation'] as const;
+const REVISION_SCOPES = ['document', 'hierarchy', 'assetDatabase', 'scriptCompilation', 'prefabGraph'] as const;
 
 /**
  * 阶段二通用事务管理器。编辑器无关：Revision 采集、写执行和回滚全部依赖注入，
@@ -645,16 +648,34 @@ export function validateWriteTransactionRequest(value: unknown): WriteTransactio
   const request = readObject(value);
   const transactionId = readRequiredString(request.transactionId, 'TRANSACTION_ID_REQUIRED');
   const idempotencyKey = readRequiredString(request.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED');
-  if (request.scope !== 'current-document') {
-    throw new ProbeError('WRITE_SCOPE_UNSUPPORTED', { scope: request.scope ?? null });
+  const scope = request.scope;
+  if (scope !== 'current-document' && scope !== 'source-prefab' && scope !== 'apply-to-source') {
+    throw new ProbeError('WRITE_SCOPE_UNSUPPORTED', { scope: scope ?? null });
+  }
+  // 桥内双保险：source-prefab / apply-to-source 必须携带影响分析（协议层已门禁）。
+  if (scope !== 'current-document' && (request.impactAnalysis === null || request.impactAnalysis === undefined)) {
+    throw new ProbeError('PREFAB_IMPACT_ANALYSIS_REQUIRED', { scope });
   }
   const revision = readRevisionPrecondition(request.revision);
   const operations = readWriteOperations(request.operations);
+  // 含应用到源操作时 revision.prefabGraph 必填（与协议门禁一致）。
+  if (operations.some((operation) => operation.type === 'prefab.apply_to_source') && !revision.prefabGraph) {
+    throw new ProbeError('PREFAB_GRAPH_REVISION_REQUIRED');
+  }
   if (typeof request.save !== 'boolean') {
     throw new ProbeError('INVALID_WRITE_REQUEST', { field: 'save' });
   }
   const undoGroup = readRequiredString(request.undoGroup, 'UNDO_GROUP_REQUIRED');
-  return { transactionId, idempotencyKey, scope: 'current-document', revision, operations, save: request.save, undoGroup };
+  return {
+    transactionId,
+    idempotencyKey,
+    scope,
+    revision,
+    ...(request.impactAnalysis !== undefined ? { impactAnalysis: request.impactAnalysis } : {}),
+    operations,
+    save: request.save,
+    undoGroup
+  };
 }
 
 export function validateTransactionIdRequest(value: unknown): { transactionId: string } {
@@ -744,7 +765,15 @@ const WRITE_OPERATION_STRING_FIELDS: Record<string, string[]> = {
   'component.set_property': ['componentUuid', 'propertyPath'],
   'component.set_reference': ['componentUuid', 'propertyPath'],
   'component.clear_reference': ['componentUuid', 'propertyPath'],
-  'component.resize_array': ['componentUuid', 'propertyPath']
+  'component.resize_array': ['componentUuid', 'propertyPath'],
+  'prefab.instantiate': ['prefabAssetUuid', 'parentNodeUuid'],
+  'prefab.create_from_node': ['nodeUuid', 'assetUrl'],
+  'prefab.revert_override': ['instanceRootUuid'],
+  'prefab.apply_to_source': ['instanceRootUuid'],
+  'prefab.replace_source': ['instanceRootUuid', 'newPrefabAssetUuid'],
+  'prefab.unlink_instance': ['instanceRootUuid'],
+  'prefab.link_instance': ['nodeUuid', 'prefabAssetUuid'],
+  'prefab.delete_asset': ['assetUrl']
 };
 
 function readWriteOperations(value: unknown): WriteOperation[] {
@@ -816,7 +845,8 @@ function readRevisionPrecondition(value: unknown): RevisionFingerprint {
     document: readNullableFingerprint(revision.document),
     hierarchy: readNullableFingerprint(revision.hierarchy),
     assetDatabase: readNullableFingerprint(revision.assetDatabase),
-    scriptCompilation: readNullableFingerprint(revision.scriptCompilation)
+    scriptCompilation: readNullableFingerprint(revision.scriptCompilation),
+    prefabGraph: readNullableFingerprint(revision.prefabGraph)
   };
 }
 

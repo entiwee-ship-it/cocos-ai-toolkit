@@ -16,12 +16,34 @@ describe('validateWriteTransactionRequest（经 prepare 触发）', () => {
       .rejects.toThrow('IDEMPOTENCY_KEY_REQUIRED');
   });
 
-  it('拒绝阶段三作用域和空操作列表', async () => {
+  it('阶段三作用域缺影响分析时拒绝，携带影响分析时放行；空操作列表拒绝', async () => {
     const manager = createManager();
     await expect(manager.prepare(writeRequest({ scope: 'source-prefab' })))
-      .rejects.toThrow('WRITE_SCOPE_UNSUPPORTED');
+      .rejects.toThrow('PREFAB_IMPACT_ANALYSIS_REQUIRED');
+    await expect(manager.prepare(writeRequest({
+      scope: 'source-prefab',
+      impactAnalysis: { sourceAssetUuid: 'a1' }
+    }))).resolves.toMatchObject({ status: 'validated' });
     await expect(manager.prepare(writeRequest({ operations: [] })))
       .rejects.toThrow('INVALID_WRITE_OPERATIONS');
+  });
+
+  it('含应用到源操作但缺 revision.prefabGraph 时拒绝', async () => {
+    const manager = createManager();
+    await expect(manager.prepare(writeRequest({
+      scope: 'apply-to-source',
+      impactAnalysis: { sourceAssetUuid: 'a1' },
+      operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
+    }))).rejects.toThrow('PREFAB_GRAPH_REVISION_REQUIRED');
+    const managerWithGraph = createManager({
+      captureRevision: async () => revisionCapture({ fingerprint: fingerprint({ prefabGraph: 'sha256:p' }) })
+    });
+    await expect(managerWithGraph.prepare(writeRequest({
+      scope: 'apply-to-source',
+      impactAnalysis: { sourceAssetUuid: 'a1' },
+      revision: fingerprint({ prefabGraph: 'sha256:p' }),
+      operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
+    }))).resolves.toMatchObject({ status: 'validated' });
   });
 
   it('拒绝未知操作类型和缺少必填字段的操作', async () => {
