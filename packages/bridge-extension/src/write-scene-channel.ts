@@ -47,13 +47,14 @@ export async function executeWriteSceneOperations(
         : operation.type.startsWith('prefab.')
           ? await dependencies.executePrefabOperation(operation)
           : await dependencies.executeComponentOperation(operation);
-      // 回填执行结果产生的目标 UUID，重读验证据此定位新建节点/组件。
+      // 回填执行结果产生的目标 UUID，重读验证据此定位新建节点/组件；
+      // create_from_node 等操作会重建节点（UUID 变更），必须以结果 UUID 覆盖原操作值。
       const resultNodeUuid = 'nodeUuid' in result ? result.nodeUuid : null;
       const resultComponentUuid = 'componentUuid' in result ? result.componentUuid : null;
       const enrichedOperation = {
         ...operation,
-        ...(resultNodeUuid && !operation.nodeUuid ? { resultNodeUuid } : {}),
-        ...(resultComponentUuid && !operation.componentUuid ? { resultComponentUuid } : {})
+        ...(resultNodeUuid ? { resultNodeUuid } : {}),
+        ...(resultComponentUuid ? { resultComponentUuid } : {})
       };
       executed.push({ operation: enrichedOperation, ...result } as VerifiedOperation);
     } catch (error) {
