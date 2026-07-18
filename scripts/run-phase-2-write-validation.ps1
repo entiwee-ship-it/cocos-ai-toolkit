@@ -436,7 +436,23 @@ function Get-ProbeServerListener {
     }
     Assert-Condition -Condition ($processIds.Count -eq 1) -Message "127.0.0.1:$Port 存在多个监听进程"
     $processId = $processIds[0]
-    $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+    # netstat 与进程查询之间监听进程可能已退出（竞态）：先短重试，仍不可读且监听已消失时按缺失处理
+    $processInfo = $null
+    for ($attempt = 1; $attempt -le 5 -and $null -eq $processInfo; $attempt += 1) {
+        try {
+            $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+        } catch {
+            $processInfo = $null
+        }
+        if ($null -ne $processInfo) { break }
+        $stillListening = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { [int]$_.OwningProcess -eq $processId })
+        if ($stillListening.Count -eq 0) {
+            if ($AllowMissing) { return $null }
+            throw "127.0.0.1:$Port 的监听进程 $processId 已退出"
+        }
+        Start-Sleep -Milliseconds 200
+    }
     Assert-Condition -Condition ($null -ne $processInfo) -Message "无法读取监听进程 $processId"
     $normalizedCommandLine = ([string]$processInfo.CommandLine).Replace('\', '/')
     $normalizedEntryPath = $probeServerEntryPath.Replace('\', '/')
