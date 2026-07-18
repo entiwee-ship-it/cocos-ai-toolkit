@@ -307,15 +307,22 @@ async function writeRollback(request: unknown): Promise<unknown> {
 }
 
 /**
- * 触发 asset-db 重新导入指定资产（脚本变更后的刷新入口）。
- * 用于替代手动编译：写入脚本文件后调用，再经挂载守卫核对类注册。
+ * 触发 asset-db 重新导入指定资产，并尝试驱动 TypeScript 编译（脚本变更后的刷新入口）。
+ * 3.8.8 实测：refresh-asset 只重新导入，不触发编译；programming/execute-script 为候选编译入口。
  */
 async function refreshAsset(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const assetUrl = typeof input.assetUrl === 'string' && input.assetUrl ? input.assetUrl : null;
   if (!assetUrl) throw new ProbeError('ASSET_URL_REQUIRED');
   await Editor.Message.request('asset-db', 'refresh-asset', assetUrl);
-  return { refreshed: true, assetUrl };
+  let compileTriggered: boolean | null = null;
+  try {
+    await Editor.Message.request('programming' as never, 'execute-script' as never);
+    compileTriggered = true;
+  } catch {
+    compileTriggered = false;
+  }
+  return { refreshed: true, assetUrl, compileTriggered };
 }
 
 /**
