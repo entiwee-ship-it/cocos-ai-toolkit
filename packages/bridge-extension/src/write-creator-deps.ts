@@ -56,6 +56,23 @@ function focusAndLog(nodeUuid: string | null, message: string): void {
   }
 }
 
+/** 节点日志描述：名称(uuid)，节点不可解析时只保留 uuid。 */
+function describeNode(uuid: string): string {
+  const node = findRuntimeNode(uuid);
+  const name = node && typeof node.name === 'string' && node.name ? node.name : null;
+  return name ? `${name}(${uuid})` : uuid;
+}
+
+/** 组件日志描述：取运行时类名，无法识别时回退组件 uuid。 */
+function describeComponent(component: RuntimeNode, fallbackUuid: string): string {
+  const type = typeof component?.__classname__ === 'string' && component.__classname__
+    ? component.__classname__
+    : typeof component?.constructor?.name === 'string' && component.constructor.name
+      ? component.constructor.name
+      : null;
+  return type ?? fallbackUuid;
+}
+
 /** 当前文档身份与层级指纹，供事务管理器 Revision 前置采集。 */
 export interface CurrentDocumentIdentity {
   documentId: string;
@@ -110,30 +127,32 @@ export function buildNodeWriterDependencies(): NodeWriterDependencies {
       if (typeof uuid !== 'string' || !uuid) {
         throw new ProbeError('NODE_CREATE_FAILED', { parentUuid, name });
       }
-      focusAndLog(uuid, `创建节点 ${name}（父节点 ${parentUuid}）`);
+      focusAndLog(uuid, `创建节点 ${name}（父节点 ${describeNode(parentUuid)}）`);
       return uuid;
     },
     removeNode: async (uuid) => {
+      const deletedName = describeNode(uuid);
       await Editor.Message.request('scene', 'remove-node', { uuid });
-      focusAndLog(null, `删除节点 ${uuid}`);
+      focusAndLog(null, `删除节点 ${deletedName}`);
     },
     renameNode: async (uuid, name) => {
+      const oldName = describeNode(uuid);
       await setNodePropertyViaDump(uuid, 'name', name);
-      focusAndLog(uuid, `重命名节点为 ${name}`);
+      focusAndLog(uuid, `重命名节点 ${oldName} 为 ${name}`);
     },
     setNodeActive: async (uuid, active) => {
       await setNodePropertyViaDump(uuid, 'active', active);
-      focusAndLog(uuid, `设置节点激活为 ${active}`);
+      focusAndLog(uuid, `节点 ${describeNode(uuid)} 激活状态设为 ${active}`);
     },
     setNodeLayer: async (uuid, layer) => {
       await setNodePropertyViaDump(uuid, 'layer', layer);
-      focusAndLog(uuid, `设置节点层级为 ${layer}`);
+      focusAndLog(uuid, `节点 ${describeNode(uuid)} 层级设为 ${layer}`);
     },
     setNodeTransform: async (uuid, transform) => {
       if (transform.position) await setNodePropertyViaDump(uuid, 'position', transform.position);
       if (transform.rotation) await setNodePropertyViaDump(uuid, 'rotation', transform.rotation);
       if (transform.scale) await setNodePropertyViaDump(uuid, 'scale', transform.scale);
-      focusAndLog(uuid, `设置节点局部变换 ${JSON.stringify(transform)}`);
+      focusAndLog(uuid, `节点 ${describeNode(uuid)} 设置局部变换 ${JSON.stringify(transform)}`);
     },
     reparentNode: async (uuid, newParentUuid, siblingIndex) => {
       const node = requireRuntimeNode(uuid);
@@ -145,7 +164,7 @@ export function buildNodeWriterDependencies(): NodeWriterDependencies {
       if (typeof siblingIndex === 'number' && typeof node.setSiblingIndex === 'function') {
         node.setSiblingIndex(siblingIndex);
       }
-      focusAndLog(uuid, `移动节点 ${uuid} 到父节点 ${newParentUuid}`);
+      focusAndLog(uuid, `移动节点 ${describeNode(uuid)} 到父节点 ${describeNode(newParentUuid)}`);
     },
     duplicateNode: async (uuid) => {
       const node = findRuntimeNode(uuid);
@@ -153,7 +172,7 @@ export function buildNodeWriterDependencies(): NodeWriterDependencies {
       const duplicated = instantiate(node) as RuntimeNode;
       if (node.parent) duplicated.parent = node.parent;
       const duplicatedUuid = readRuntimeUuid(duplicated);
-      focusAndLog(duplicatedUuid, `复制节点 ${uuid} 得到 ${duplicatedUuid}`);
+      focusAndLog(duplicatedUuid, `复制节点 ${describeNode(uuid)} 得到 ${describeNode(duplicatedUuid)}`);
       return duplicatedUuid;
     }
   };
@@ -216,7 +235,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       const afterUuids = readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid));
       for (const [uuid, type] of afterUuids) {
         if (!beforeUuids.has(uuid) && type === componentType) {
-          focusAndLog(nodeUuid, `节点 ${nodeUuid} 挂载组件 ${componentType}`);
+          focusAndLog(nodeUuid, `节点 ${describeNode(nodeUuid)} 挂载组件 ${componentType}`);
           return uuid;
         }
       }
@@ -228,6 +247,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
         throw new ProbeError('COMPONENT_NOT_FOUND', { componentUuid });
       }
       const ownerUuid = readRuntimeUuid(runtime.node);
+      const componentType = describeComponent(runtime.component, componentUuid);
       if (typeof runtime.node.removeComponent === 'function') {
         runtime.node.removeComponent(runtime.component);
       } else if (typeof runtime.component.destroy === 'function') {
@@ -235,7 +255,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       } else {
         throw new ProbeError('COMPONENT_REMOVE_FAILED', { componentUuid });
       }
-      focusAndLog(ownerUuid, `节点 ${ownerUuid} 移除组件 ${componentUuid}`);
+      focusAndLog(ownerUuid, `节点 ${describeNode(ownerUuid)} 移除组件 ${componentType}`);
     },
     setComponentEnabled: async (componentUuid, enabled) => {
       // enabled 直接写运行时对象：set-property(record:true) 对组件 enabled 实测不生效（0.1.4 验证）。
@@ -244,7 +264,10 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
         throw new ProbeError('COMPONENT_NOT_FOUND', { componentUuid });
       }
       runtime.component.enabled = enabled;
-      focusAndLog(readRuntimeUuid(runtime.node), `组件 ${componentUuid} 启用状态设为 ${enabled}`);
+      focusAndLog(
+        readRuntimeUuid(runtime.node),
+        `组件 ${describeComponent(runtime.component, componentUuid)} 启用状态设为 ${enabled}`
+      );
     },
     getComponentProperty: async (componentUuid, propertyPath) => {
       const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
@@ -273,7 +296,10 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
         currentValue,
         propertyPath
       );
-      focusAndLog(readRuntimeUuid(runtime.node), `组件 ${componentUuid} 属性 ${propertyPath} 写入完成`);
+      focusAndLog(
+        readRuntimeUuid(runtime.node),
+        `组件 ${describeComponent(runtime.component, componentUuid)} 属性 ${propertyPath} 写入完成`
+      );
     },
     resizeComponentArray: async (componentUuid, propertyPath, length) => {
       const runtime = findRuntimeComponent(componentUuid);
