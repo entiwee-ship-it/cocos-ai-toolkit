@@ -180,6 +180,8 @@ export interface WriteTransactionManagerOptions {
   /** 单次 confirm 执行窗口，超时标记 outcome-unknown，默认 120 秒。 */
   executionTimeoutMs?: number;
   undoCapability?: WriteUndoCapability;
+  /** 事务级日志（登记/开始执行/提交/回滚/结果未知），由 main.ts 接到 Creator 控制台。 */
+  logger?: (message: string) => void;
   captureRevision: (request: WriteTransactionRequest) => Promise<WriteRevisionCapture>;
   execute: (transaction: WriteTransactionRecord, context: WriteExecutionContext) => Promise<WriteExecutionOutcome>;
   rollback: (transaction: WriteTransactionRecord, context: WriteExecutionContext) => Promise<WriteRollbackEvidence>;
@@ -264,6 +266,7 @@ export class WriteTransactionManager {
   private readonly ttlMs: number;
   private readonly executionTimeoutMs: number;
   private readonly undoCapability: WriteUndoCapability;
+  private readonly log: (message: string) => void;
   private readonly documentLocks = new Map<string, string>();
 
   constructor(private readonly options: WriteTransactionManagerOptions) {
@@ -273,6 +276,7 @@ export class WriteTransactionManager {
     this.ttlMs = options.ttlMs ?? 30 * 60_000;
     this.executionTimeoutMs = options.executionTimeoutMs ?? 120_000;
     this.undoCapability = options.undoCapability ?? 'step-undo-with-inverse';
+    this.log = options.logger ?? (() => {});
   }
 
   /**
@@ -315,6 +319,7 @@ export class WriteTransactionManager {
       stateHistory: [{ state: 'validated', at: now.toISOString(), reason: 'prepare' }]
     };
     this.store.set(record);
+    this.log(`事务 ${record.transactionId} 已登记（${request.operations.length} 个操作，Undo 组 ${request.undoGroup}）`);
     return toResult(record);
   }
 
@@ -345,6 +350,7 @@ export class WriteTransactionManager {
 
     record = this.transition(record, 'locked', 'confirm');
     record = this.transition(record, 'executing', 'confirm');
+    this.log(`事务 ${transactionId} 开始执行（${record.request.operations.length} 个操作）`);
 
     const execution = this.options.execute(record, { undoCapability: this.undoCapability });
     let outcome: WriteExecutionOutcome;
@@ -357,6 +363,7 @@ export class WriteTransactionManager {
       record = this.updateRecord(record, { failure: toWriteFailure(error) });
       record = this.transition(record, 'outcome-unknown', record.failure?.code);
       this.releaseDocumentLock(record);
+      this.log(`事务 ${transactionId} 结果未知（${record.failure?.code}），禁止盲目重试`);
       return toResult(record);
     }
 
@@ -369,6 +376,7 @@ export class WriteTransactionManager {
       record = this.transition(record, 'failed', outcome.failure.code);
       record = await this.performRollback(record);
       this.releaseDocumentLock(record);
+      this.log(`事务 ${transactionId} 失败（${outcome.failure.code}），${record.state === 'rolled-back' ? '已回滚并验证干净' : '回滚后需人工处理'}`);
       return toResult(record);
     }
 
@@ -389,11 +397,13 @@ export class WriteTransactionManager {
       record = this.transition(record, 'failed', 'WRITE_VERIFICATION_FAILED');
       record = await this.performRollback(record);
       this.releaseDocumentLock(record);
+      this.log(`事务 ${transactionId} 重读验证未通过，${record.state === 'rolled-back' ? '已回滚并验证干净' : '回滚后需人工处理'}`);
       return toResult(record);
     }
 
     record = this.transition(record, 'committed', 'verification-passed');
     this.releaseDocumentLock(record);
+    this.log(`事务 ${transactionId} 已提交，重读验证通过`);
     return toResult(record);
   }
 
@@ -415,6 +425,7 @@ export class WriteTransactionManager {
     }
     const updated = await this.performRollback(record);
     this.releaseDocumentLock(updated);
+    this.log(`事务 ${transactionId} 手动回滚${updated.state === 'rolled-back' ? '完成并验证干净' : '后需人工处理'}`);
     return toResult(updated);
   }
 

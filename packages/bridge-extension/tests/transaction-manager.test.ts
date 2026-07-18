@@ -300,6 +300,48 @@ describe('WriteTransactionManager 过期与列表', () => {
       .rejects.toThrow('TRANSACTION_EXPIRED');
   });
 
+  it('提交路径输出事务级日志', async () => {
+    const logger = vi.fn();
+    const manager = createManager({ logger });
+    const prepared = await manager.prepare(writeRequest());
+    await manager.confirm({ transactionId: prepared.transactionId });
+
+    const messages = logger.mock.calls.map((call) => String(call[0]));
+    expect(messages.some((message) => message.includes('事务 tx-1 已登记'))).toBe(true);
+    expect(messages.some((message) => message.includes('事务 tx-1 开始执行'))).toBe(true);
+    expect(messages.some((message) => message.includes('事务 tx-1 已提交'))).toBe(true);
+  });
+
+  it('失败回滚和结果未知路径输出事务级日志', async () => {
+    const logger = vi.fn();
+    const failedManager = createManager({
+      logger,
+      execute: vi.fn(async (): Promise<WriteExecutionOutcome> => ({
+        kind: 'operation-failed',
+        executedOps: 0,
+        failure: { code: 'NODE_NOT_FOUND', message: '目标节点不存在', operationIndex: 0 }
+      }))
+    });
+    const prepared = await failedManager.prepare(writeRequest());
+    await failedManager.confirm({ transactionId: prepared.transactionId });
+
+    const failedMessages = logger.mock.calls.map((call) => String(call[0]));
+    expect(failedMessages.some((message) => message.includes('已回滚并验证干净'))).toBe(true);
+
+    const unknownLogger = vi.fn();
+    const unknownManager = createManager({
+      logger: unknownLogger,
+      execute: vi.fn(async () => {
+        throw new Error('CREATOR_WRITE_INTERRUPTED');
+      })
+    });
+    const unknownPrepared = await unknownManager.prepare(writeRequest());
+    await unknownManager.confirm({ transactionId: unknownPrepared.transactionId });
+
+    const unknownMessages = unknownLogger.mock.calls.map((call) => String(call[0]));
+    expect(unknownMessages.some((message) => message.includes('结果未知'))).toBe(true);
+  });
+
   it('transactionList 只列未完成事务', async () => {
     const manager = createManager();
     const first = await manager.prepare(writeRequest());
@@ -322,6 +364,7 @@ function createManager(options: {
   now?: () => Date;
   delay?: (ms: number) => Promise<void>;
   executionTimeoutMs?: number;
+  logger?: (message: string) => void;
   captureRevision?: (request: WriteTransactionRequest) => Promise<WriteRevisionCapture>;
   execute?: (transaction: never) => Promise<WriteExecutionOutcome>;
   rollback?: (transaction: never) => Promise<WriteRollbackEvidence>;
@@ -331,6 +374,7 @@ function createManager(options: {
     now: options.now ?? (() => new Date('2026-07-17T00:00:00.000Z')),
     delay: options.delay ?? (() => new Promise<void>(() => {})),
     executionTimeoutMs: options.executionTimeoutMs,
+    logger: options.logger,
     captureRevision: options.captureRevision ?? (async () => revisionCapture()),
     execute: options.execute ?? (vi.fn(async () => successOutcome()) as never),
     rollback: options.rollback ?? (vi.fn(async () => cleanEvidence()) as never)

@@ -22,7 +22,7 @@ import {
   type WriteTransactionRecord
 } from './transaction-manager';
 
-const BRIDGE_VERSION = '0.1.20';
+const BRIDGE_VERSION = '0.1.21';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 let client: BridgeClient | null = null;
@@ -48,6 +48,16 @@ const transactionCoordinator = new ProbeTransactionCoordinator({
 // 执行和回滚经 Scene 写通道（node-writer / component-writer / write-verifier）。
 const writeTransactionManager = new WriteTransactionManager({
   store: new InMemoryWriteTransactionStore(),
+  logger: (message) => {
+    try {
+      const editorGlobal = Editor as unknown as Record<string, unknown>;
+      if (typeof editorGlobal.log === 'function') {
+        (editorGlobal.log as (text: string) => void)(`[CocosAI] ${message}`);
+      }
+    } catch {
+      // 日志失败不影响事务
+    }
+  },
   captureRevision: async () => captureWriteRevision(),
   execute: async (transaction) => forwardToScene('writeExecute', {
     operations: transaction.request.operations,
