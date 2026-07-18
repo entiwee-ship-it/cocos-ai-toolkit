@@ -13,14 +13,15 @@ export const TransactionStateSchema = z.enum([
 
 /**
  * 写事务执行前的修订前置。
- * 四个维度分别对应文档内容、层级结构、资产数据库和脚本编译状态的指纹；
- * 为 null 表示该维度不参与前置校验。
+ * 五个维度分别对应文档内容、层级结构、资产数据库、脚本编译状态和预制体图状态的指纹；
+ * 为 null 或省略表示该维度不参与前置校验；prefabGraph 由含应用到源操作的事务强制要求。
  */
 export const RevisionPreconditionSchema = z.object({
   document: z.string().nullable(),
   hierarchy: z.string().nullable(),
   assetDatabase: z.string().nullable(),
-  scriptCompilation: z.string().nullable()
+  scriptCompilation: z.string().nullable(),
+  prefabGraph: z.string().nullable().optional()
 });
 
 export const Vec3Schema = z.object({
@@ -141,6 +142,42 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
     componentUuid: z.string().min(1),
     propertyPath: z.string().min(1),
     length: z.number().int().nonnegative()
+  }),
+  // 阶段三预制体语义操作：实例化、生成、还原覆盖、应用到源、替换源、解除与重新关联。
+  z.object({
+    type: z.literal('prefab.instantiate'),
+    prefabAssetUuid: z.string().min(1),
+    parentNodeUuid: z.string().min(1),
+    name: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('prefab.create_from_node'),
+    nodeUuid: z.string().min(1),
+    assetUrl: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal('prefab.revert_override'),
+    instanceRootUuid: z.string().min(1),
+    // 省略为整实例还原；提供时按属性路径细粒度还原。
+    propertyPath: z.string().min(1).optional()
+  }),
+  z.object({
+    type: z.literal('prefab.apply_to_source'),
+    instanceRootUuid: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal('prefab.replace_source'),
+    instanceRootUuid: z.string().min(1),
+    newPrefabAssetUuid: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal('prefab.unlink_instance'),
+    instanceRootUuid: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal('prefab.link_instance'),
+    nodeUuid: z.string().min(1),
+    prefabAssetUuid: z.string().min(1)
   })
 ]);
 

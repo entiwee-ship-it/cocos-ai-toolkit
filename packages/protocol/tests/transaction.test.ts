@@ -319,3 +319,116 @@ describe('WriteTransactionResultSchema', () => {
     })).toBeTruthy();
   });
 });
+
+/**
+ * 构造一份合法的影响分析报告，便于 scope 门禁用例按需覆盖单字段。
+ *
+ * @returns 通过 PrefabImpactAnalysisSchema 校验的影响分析对象。
+ */
+function createImpactAnalysis() {
+  return {
+    sourceAssetUuid: 'asset-1',
+    sourceAssetPath: 'db://assets/gui/dialog.prefab',
+    affectedDocuments: [
+      { assetUuid: 'doc-1', path: 'db://assets/scenes/main.scene', documentType: 'scene', instanceCount: 3 }
+    ],
+    totalInstanceCount: 3,
+    overrideLayers: ['scene'],
+    risks: []
+  };
+}
+
+describe('阶段三写事务协议', () => {
+  it('scope 接受 current-document / source-prefab / apply-to-source 三值', () => {
+    for (const scope of ['current-document', 'source-prefab', 'apply-to-source'] as const) {
+      const request = {
+        ...createValidRequest(),
+        scope,
+        ...(scope === 'current-document' ? {} : { impactAnalysis: createImpactAnalysis() })
+      };
+      expect(WriteTransactionRequestSchema.parse(request).scope).toBe(scope);
+    }
+  });
+
+  it('scope 拒绝三值之外的取值', () => {
+    expect(() => WriteTransactionRequestSchema.parse({
+      ...createValidRequest(),
+      scope: 'whole-project'
+    })).toThrow();
+  });
+
+  it('source-prefab 缺少影响分析时拒绝', () => {
+    expect(() => WriteTransactionRequestSchema.parse({
+      ...createValidRequest(),
+      scope: 'source-prefab'
+    })).toThrow();
+  });
+
+  it('apply-to-source 缺少影响分析时拒绝', () => {
+    expect(() => WriteTransactionRequestSchema.parse({
+      ...createValidRequest(),
+      scope: 'apply-to-source'
+    })).toThrow();
+  });
+
+  it('current-document 不强制影响分析', () => {
+    expect(WriteTransactionRequestSchema.parse(createValidRequest())).toBeTruthy();
+  });
+
+  it('prefab.apply_to_source 操作缺少 revision.prefabGraph 时拒绝', () => {
+    expect(() => WriteTransactionRequestSchema.parse({
+      ...createValidRequest(),
+      scope: 'apply-to-source',
+      impactAnalysis: createImpactAnalysis(),
+      operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
+    })).toThrow();
+  });
+
+  it('prefab.apply_to_source 操作携带 revision.prefabGraph 时接受', () => {
+    expect(WriteTransactionRequestSchema.parse({
+      ...createValidRequest(),
+      scope: 'apply-to-source',
+      impactAnalysis: createImpactAnalysis(),
+      revision: { ...createRevisionPrecondition(), prefabGraph: 'sha256:p' },
+      operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
+    })).toBeTruthy();
+  });
+
+  it('接受七类 prefab 写操作', () => {
+    const operations = [
+      { type: 'prefab.instantiate', prefabAssetUuid: 'a1', parentNodeUuid: 'n0', name: 'Card' },
+      { type: 'prefab.create_from_node', nodeUuid: 'n1', assetUrl: 'db://assets/a.prefab' },
+      { type: 'prefab.revert_override', instanceRootUuid: 'n2' },
+      { type: 'prefab.apply_to_source', instanceRootUuid: 'n3' },
+      { type: 'prefab.replace_source', instanceRootUuid: 'n4', newPrefabAssetUuid: 'a2' },
+      { type: 'prefab.unlink_instance', instanceRootUuid: 'n5' },
+      { type: 'prefab.link_instance', nodeUuid: 'n6', prefabAssetUuid: 'a3' }
+    ];
+    for (const operation of operations) {
+      expect(WriteOperationSchema.parse(operation)).toBeTruthy();
+    }
+  });
+
+  it('prefab.revert_override 支持按属性路径的细粒度还原', () => {
+    expect(WriteOperationSchema.parse({
+      type: 'prefab.revert_override',
+      instanceRootUuid: 'n1',
+      propertyPath: 'position'
+    })).toBeTruthy();
+  });
+
+  it('拒绝缺少 prefabAssetUuid 的实例化操作', () => {
+    expect(() => WriteOperationSchema.parse({
+      type: 'prefab.instantiate',
+      parentNodeUuid: 'n0'
+    })).toThrow();
+  });
+
+  it('Revision 接受 prefabGraph 维度且可省略', () => {
+    expect(RevisionPreconditionSchema.parse(createRevisionPrecondition())).toBeTruthy();
+    expect(RevisionPreconditionSchema.parse({
+      ...createRevisionPrecondition(),
+      prefabGraph: 'sha256:p'
+    }).prefabGraph).toBe('sha256:p');
+  });
+});

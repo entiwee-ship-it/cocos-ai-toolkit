@@ -3,7 +3,7 @@ import { CoverageSchema } from './coverage.js';
 import { ObjectIdentitySchema } from './identity.js';
 import { PrefabContextSchema } from './prefab.js';
 
-export const PROTOCOL_VERSION = '0.3.0';
+export const PROTOCOL_VERSION = '0.4.0';
 
 export const UnresolvedItemSchema = z.object({
   path: z.string(),

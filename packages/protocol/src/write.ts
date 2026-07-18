@@ -2,19 +2,63 @@ import { z } from 'zod';
 import { RevisionPreconditionSchema, TransactionStateSchema, WriteOperationSchema } from './transaction.js';
 
 /**
- * 阶段二写事务请求。
- * scope 固定为 current-document；source-prefab、apply-to-source 属阶段三，
- * 在协议层直接拒绝，避免 Bridge 收到语义未定义的作用域。
+ * 写事务作用域。
+ * current-document：只写当前打开文档（阶段二行为）；
+ * source-prefab：直接写源预制体资产；apply-to-source：把实例覆盖应用到源。
+ * 后两者影响面跨文档，必须携带影响分析（设计规格 8.4）。
+ */
+export const WriteScopeSchema = z.enum(['current-document', 'source-prefab', 'apply-to-source']);
+
+/** 影响分析中单个受影响文档（Scene 或 Prefab）。 */
+export const PrefabImpactAffectedDocumentSchema = z.object({
+  assetUuid: z.string().min(1),
+  path: z.string().min(1),
+  documentType: z.enum(['scene', 'prefab']),
+  instanceCount: z.number().int().nonnegative()
+});
+
+/**
+ * 源预制体影响分析报告：修改哪个资产、受影响文档与实例数、覆盖层标注、风险列表。
+ * source-prefab / apply-to-source 事务必须在 Bridge 执行前生成并随请求携带。
+ */
+export const PrefabImpactAnalysisSchema = z.object({
+  sourceAssetUuid: z.string().min(1),
+  sourceAssetPath: z.string().min(1),
+  affectedDocuments: z.array(PrefabImpactAffectedDocumentSchema),
+  totalInstanceCount: z.number().int().nonnegative(),
+  overrideLayers: z.array(z.string()),
+  risks: z.array(z.string())
+});
+
+/**
+ * 阶段三写事务请求。
+ * scope 三值；source-prefab、apply-to-source 必须携带影响分析（协议层门禁，
+ * Bridge 执行前再做一次双保险）；含 prefab.apply_to_source 操作时 revision.prefabGraph 必填。
  */
 export const WriteTransactionRequestSchema = z.object({
   transactionId: z.string().min(1),
   // 幂等键：相同键重试必须返回原事务状态，不重复执行。
   idempotencyKey: z.string().min(1),
-  scope: z.literal('current-document'),
+  scope: WriteScopeSchema,
   revision: RevisionPreconditionSchema,
+  impactAnalysis: PrefabImpactAnalysisSchema.optional(),
   operations: z.array(WriteOperationSchema).min(1),
   save: z.boolean(),
   undoGroup: z.string().min(1)
+}).superRefine((request, context) => {
+  if ((request.scope === 'source-prefab' || request.scope === 'apply-to-source') && !request.impactAnalysis) {
+    context.addIssue({
+      code: 'custom',
+      message: 'source-prefab / apply-to-source 作用域必须携带影响分析（impactAnalysis）'
+    });
+  }
+  const needsPrefabGraph = request.operations.some((operation) => operation.type === 'prefab.apply_to_source');
+  if (needsPrefabGraph && !request.revision.prefabGraph) {
+    context.addIssue({
+      code: 'custom',
+      message: 'prefab.apply_to_source 操作要求 revision.prefabGraph 前置指纹'
+    });
+  }
 });
 
 /**
@@ -93,6 +137,9 @@ export const WriteTransactionResultSchema = z.object({
 });
 
 export type WriteTransactionRequest = z.infer<typeof WriteTransactionRequestSchema>;
+export type WriteScope = z.infer<typeof WriteScopeSchema>;
+export type PrefabImpactAffectedDocument = z.infer<typeof PrefabImpactAffectedDocumentSchema>;
+export type PrefabImpactAnalysis = z.infer<typeof PrefabImpactAnalysisSchema>;
 export type WriteVerificationItem = z.infer<typeof WriteVerificationItemSchema>;
 export type WriteVerificationReport = z.infer<typeof WriteVerificationReportSchema>;
 export type WriteConflict = z.infer<typeof WriteConflictSchema>;
