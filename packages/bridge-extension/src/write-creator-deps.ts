@@ -444,8 +444,9 @@ async function readPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceI
       const unwrapped = readObject(segment).value ?? segment;
       return String(unwrapped);
     }).join('.');
-    const targetInfo = readObject(entryValue.targetInfo ?? readObject(entry).targetInfo);
-    const localIds = Array.isArray(readObject(targetInfo.localID).value) ? readObject(targetInfo.localID).value as unknown[] : (Array.isArray(targetInfo.localID) ? targetInfo.localID : []);
+    const targetInfoValue = readObject(readObject(entryValue.targetInfo ?? readObject(entry).targetInfo).value);
+    const localIdDump = targetInfoValue.localID;
+    const localIds = Array.isArray(readObject(localIdDump).value) ? readObject(localIdDump).value as unknown[] : (Array.isArray(localIdDump) ? localIdDump : []);
     const firstLocalId = localIds.length > 0 ? (readObject(localIds[0]).value ?? localIds[0]) : null;
     return { path, targetFileId: typeof firstLocalId === 'string' && firstLocalId ? firstLocalId : null };
   }).filter((target) => target.path.length > 0);
