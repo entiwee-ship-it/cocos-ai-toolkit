@@ -1,6 +1,7 @@
 export * from './asset.js';
 export * from './component.js';
 export * from './coverage.js';
+export * from './design.js';
 export * from './envelope.js';
 export * from './identity.js';
 export * from './node.js';
