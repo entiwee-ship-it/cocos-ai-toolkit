@@ -1,5 +1,6 @@
 export * from './coverage-collector.js';
 export * from './design-diff.js';
+export * from './design-plan.js';
 export * from './prefab-graph.js';
 export * from './prefab-impact.js';
 export * from './project-scanner.js';
