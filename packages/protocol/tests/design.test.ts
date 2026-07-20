@@ -35,6 +35,18 @@ describe('DesignTargetDocumentSchema', () => {
     expect(DesignTargetDocumentSchema.parse(createValidTarget())).toBeTruthy();
   });
 
+  it('保留导出文档用于匹配的 fileId 与完整 path', () => {
+    const target = createValidTarget();
+    const root = target.tree[0] as Record<string, unknown>;
+    root.fileId = 'root-file-id';
+    root.path = 'Canvas/exitDialog';
+
+    const parsed = DesignTargetDocumentSchema.parse(target) as typeof target & {
+      tree: Array<{ fileId?: string; path?: string }>;
+    };
+    expect(parsed.tree[0]).toMatchObject({ fileId: 'root-file-id', path: 'Canvas/exitDialog' });
+  });
+
   it('拒绝自引用的逻辑 ID', () => {
     const target = createValidTarget();
     target.tree = [{ id: '$a', name: 'a', references: { 'clickEvents[0].target': '$a' } }];

@@ -32,6 +32,8 @@ export const DesignPrefabInstanceSchema = z.object({
 
 export interface DesignTargetNodeInput {
   id: string;
+  fileId?: string;
+  path?: string;
   name?: string;
   prefabInstance?: z.infer<typeof DesignPrefabInstanceSchema>;
   components?: Array<z.infer<typeof DesignTargetComponentSchema>>;
@@ -44,6 +46,8 @@ export interface DesignTargetNodeInput {
 export const DesignTargetNodeSchema: z.ZodType<DesignTargetNodeInput> = z.lazy(() =>
   z.object({
     id: DesignLogicalIdSchema,
+    fileId: z.string().min(1).optional(),
+    path: z.string().min(1).optional(),
     name: z.string().min(1).optional(),
     prefabInstance: DesignPrefabInstanceSchema.optional(),
     components: z.array(DesignTargetComponentSchema).optional(),
