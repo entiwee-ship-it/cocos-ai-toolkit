@@ -1272,7 +1272,8 @@ try {
     foreach ($node in $rolledBackNodes) {
         Assert-Condition -Condition ([string]$node.name -ne $pageInstanceName) -Message '回滚后仍存在场景实例节点'
     }
-    foreach ($fixtureName in @($cardRootName, $pageRootName)) {
+    # create_from_node 已把夹具根重建并改名为预制体资产名，存活校验必须按资产名匹配。
+    foreach ($fixtureName in @([IO.Path]::GetFileNameWithoutExtension($cardPrefabAssetUrl), [IO.Path]::GetFileNameWithoutExtension($pagePrefabAssetUrl))) {
         $fixtureFound = $false
         foreach ($node in $rolledBackNodes) {
             if ([string]$node.name -eq $fixtureName) {
