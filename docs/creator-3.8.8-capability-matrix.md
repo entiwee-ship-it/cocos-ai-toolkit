@@ -124,6 +124,12 @@
 - `facade.createNode(e)`（JS 层）与 NodeManager 直调一样不录制 Undo；录制由调用方负责。
 - 探测遗留验证：所有探针节点已清理，空白项目 git 逐字干净。
 
+### 预制体编辑模式写入边界（Task 14 真实项目实测）
+
+- **预制体编辑模式下嵌套实例内容封闭**：对嵌套实例的内容子节点 `set_transform`/`set_property`、对实例根组件的 `component.set_property`、在实例下 `node.create`，全部静默不生效（无报错但重读不变）。可对嵌套实例做的是：实例化、整实例还原（restorePrefab）、应用到源、解除/重新关联。
+- 场景模式下实例内部子节点属性可写并产生覆盖（阶段三隔离实测）；预制体编辑容器内嵌套实例仅实例根命名/放置类覆盖可存在（来自实例化过程），且按根挂载点语义在还原时保留。
+- 该边界与 Creator 层级面板对嵌套实例的编辑限制一致（`filterChildOfPrefabAssetWhen*` / `filterPartOfPrefabAssetWhen*` 守卫族）。
+
 ### Task 13 全链路实测补录（往返验证后固化）
 
 - **`createPrefab` 重建节点并改名**：从场景节点生成预制体后，原会话 UUID 失效，实例根名改为预制体资产名；重定位必须按父节点 + 源资产 UUID 匹配。节点树刷新晚于 createPrefab 返回，重定位需有界轮询。
