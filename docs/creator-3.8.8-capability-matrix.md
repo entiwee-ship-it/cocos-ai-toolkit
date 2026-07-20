@@ -124,6 +124,15 @@
 - `facade.createNode(e)`（JS 层）与 NodeManager 直调一样不录制 Undo；录制由调用方负责。
 - 探测遗留验证：所有探针节点已清理，空白项目 git 逐字干净。
 
+### Task 13 全链路实测补录（往返验证后固化）
+
+- **`createPrefab` 重建节点并改名**：从场景节点生成预制体后，原会话 UUID 失效，实例根名改为预制体资产名；重定位必须按父节点 + 源资产 UUID 匹配。节点树刷新晚于 createPrefab 返回，重定位需有界轮询。
+- **`restorePrefab` 整实例还原语义**：只还原实例内部（非根挂载点）覆盖；实例根自身的 `_name`/`_lpos`/`_lrot`/`_euler` 覆盖（target 为根 fileId）按设计保留。写入侧按 targetFileId 判定验证。
+- **`applyPrefab` 应用后覆盖记录不清空**：实例侧 propertyOverrides 保留（值已与源一致）；"应用到源"的真实判据是源文件已写入新值，返回值不可信。
+- **query-node-tree 与 query-node 是两种形态**：树查询返回精简形态（裸字符串字段、`prefab.assetUuid/state`），单节点查询返回 Dump 包装形态（`__prefab__.uuid/instance`）；所有树解析必须按精简形态。
+- **prefabGraph 指纹**：实例标记 = `根UUID|源资产UUID|prefab状态` 排序拼接 SHA-256；Bridge 与外部调用方算法必须逐位对齐（已交叉验证一致）。
+- **PowerShell 陷阱**：`[string]` 参数未传值强制为空串（非 null）；Mandatory 参数遇空集合绑定失败，需 `[AllowEmptyCollection()]`。
+
 ### 脚本编译链路（Task 3 实测结论）
 
 - `Editor.Message` 场景进程侧接口：`request / send / broadcast / addBroadcastListener / removeBroadcastListener`（另有 `__register__` 等内部键）。
