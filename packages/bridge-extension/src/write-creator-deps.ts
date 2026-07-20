@@ -107,16 +107,15 @@ export async function captureCurrentDocumentIdentity(): Promise<CurrentDocumentI
   return { documentId: identity.assetUuid, hierarchySha256, prefabGraphSha256, dirty };
 }
 
-/** 递归收集节点树中的预制体实例标记（根 UUID|源资产|源 FileID|实例 FileID）。 */
+/** 递归收集节点树中的预制体实例标记（根 UUID|源资产 UUID|prefab 状态）。
+ * query-node-tree 为精简形态（裸字段、prefab.assetUuid/state），与单节点 Dump 不同。 */
 function collectPrefabInstanceMarks(node: unknown, marks: string[]): void {
   const record = readObject(node);
-  const prefab = readObject(record.__prefab__);
-  if (Object.keys(prefab).length > 0 && typeof prefab.uuid === 'string' && prefab.uuid) {
-    const nodeUuid = typeof readObject(record.uuid).value === 'string' ? readObject(record.uuid).value as string : '';
-    const instanceFileId = typeof readObject(readObject(readObject(prefab.instance).value).fileId).value === 'string'
-      ? readObject(readObject(readObject(prefab.instance).value).fileId).value as string
-      : '';
-    marks.push(`${nodeUuid}|${prefab.uuid}|${typeof prefab.fileId === 'string' ? prefab.fileId : ''}|${instanceFileId}`);
+  const prefab = readObject(record.prefab);
+  if (typeof prefab.assetUuid === 'string' && prefab.assetUuid) {
+    const nodeUuid = typeof record.uuid === 'string' ? record.uuid : '';
+    const state = typeof prefab.state === 'number' ? prefab.state : 0;
+    marks.push(`${nodeUuid}|${prefab.assetUuid}|${state}`);
   }
   const children = Array.isArray(record.children) ? record.children : [];
   for (const child of children) {

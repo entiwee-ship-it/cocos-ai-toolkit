@@ -792,30 +792,16 @@ function Collect-PrefabInstanceMarks {
     )
 
     # 与 Bridge collectPrefabInstanceMarks 同构：递归收集节点树中的预制体实例标记
-    # （根 UUID|源资产|源 FileID|实例 FileID），供 revision.prefabGraph 指纹使用。
+    # （根 UUID|源资产 UUID|prefab 状态），供 revision.prefabGraph 指纹使用。
+    # query-node-tree 为精简形态（裸字段、prefab.assetUuid/state），与单节点 Dump 不同。
     if ($Node -isnot [Collections.IDictionary]) {
         return
     }
-    $prefab = $Node['__prefab__']
-    if ($prefab -is [Collections.IDictionary] -and $prefab.Count -gt 0 -and $prefab['uuid'] -is [string] -and $prefab['uuid']) {
-        $nodeUuid = ''
-        $uuidDump = $Node['uuid']
-        if ($uuidDump -is [Collections.IDictionary] -and $uuidDump['value'] -is [string]) {
-            $nodeUuid = [string]$uuidDump['value']
-        }
-        $instanceFileId = ''
-        $instance = $prefab['instance']
-        if ($instance -is [Collections.IDictionary]) {
-            $instanceValue = $instance['value']
-            if ($instanceValue -is [Collections.IDictionary]) {
-                $fileId = $instanceValue['fileId']
-                if ($fileId -is [Collections.IDictionary] -and $fileId['value'] -is [string]) {
-                    $instanceFileId = [string]$fileId['value']
-                }
-            }
-        }
-        $sourceFileId = if ($prefab['fileId'] -is [string]) { [string]$prefab['fileId'] } else { '' }
-        $Marks.Add("$nodeUuid|$([string]$prefab['uuid'])|$sourceFileId|$instanceFileId")
+    $prefab = $Node['prefab']
+    if ($prefab -is [Collections.IDictionary] -and $prefab['assetUuid'] -is [string] -and $prefab['assetUuid']) {
+        $nodeUuid = if ($Node['uuid'] -is [string]) { [string]$Node['uuid'] } else { '' }
+        $state = if ($null -ne $prefab['state']) { [string]$prefab['state'] } else { '0' }
+        $Marks.Add("$nodeUuid|$([string]$prefab['assetUuid'])|$state")
     }
     $children = $Node['children']
     if ($children -is [Collections.IList]) {
@@ -1200,9 +1186,10 @@ try {
         [ordered]@{ type = 'prefab.revert_override'; instanceRootUuid = $sceneInstanceUuid }
     )
     $revertEvidence = Read-PrefabOverrideEvidence -NodeUuid $sceneInstanceUuid -Label '还原后 probe.prefab 覆盖证据'
-    $revertRemainingPaths = @($revertEvidence.propertyOverrides | ForEach-Object { @($_.propertyPath)[0] })
-    $revertNonRootRemaining = @($revertRemainingPaths | Where-Object { $_ -ne '_name' })
-    Assert-Condition -Condition ($revertNonRootRemaining.Count -eq 0) -Message "整实例还原后实例内部仍残留 Override: $($revertRemainingPaths -join ',')"
+    # 3.8.8 实测语义：整实例还原只清实例内部覆盖；根挂载点覆盖（targetLocalIds[0] 等于根源 FileID）按设计保留。
+    $revertRootFileId = (Read-NodePrefabEvidence -NodeUuid $sceneInstanceUuid -Label '还原后实例根身份').sourceObjectFileId
+    $revertNonRootRemaining = @($revertEvidence.propertyOverrides | Where-Object { @($_.targetLocalIds)[0] -ne $revertRootFileId })
+    Assert-Condition -Condition ($revertNonRootRemaining.Count -eq 0) -Message '整实例还原后实例内部仍残留 Override'
     $revertEvidencePath = Write-JsonReport -Name "$reportPrefix-revert-evidence.json" -Value $revertEvidence
     Add-PassedStep -Name '还原验证' -DurationMs $revertEvidence.command.durationMs -Evidence $revertEvidencePath
 
