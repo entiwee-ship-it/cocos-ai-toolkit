@@ -788,6 +788,7 @@ function Collect-PrefabInstanceMarks {
         [AllowNull()]
         [object]$Node,
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [Collections.Generic.List[string]]$Marks
     )
 
