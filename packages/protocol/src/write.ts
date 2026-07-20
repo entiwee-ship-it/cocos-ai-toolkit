@@ -9,6 +9,12 @@ import { RevisionPreconditionSchema, TransactionStateSchema, WriteOperationSchem
  */
 export const WriteScopeSchema = z.enum(['current-document', 'source-prefab', 'apply-to-source']);
 
+/** Creator 当前写文档身份与五维 revision 快照。 */
+export const WriteRevisionSnapshotSchema = z.object({
+  documentId: z.string().min(1),
+  revision: RevisionPreconditionSchema
+});
+
 /** 影响分析中单个受影响文档（Scene 或 Prefab）。 */
 export const PrefabImpactAffectedDocumentSchema = z.object({
   assetUuid: z.string().min(1),
@@ -53,6 +59,12 @@ export const WriteTransactionRequestSchema = z.object({
     });
   }
   const needsPrefabGraph = request.operations.some((operation) => operation.type === 'prefab.apply_to_source');
+  if (needsPrefabGraph && request.scope !== 'apply-to-source') {
+    context.addIssue({
+      code: 'custom',
+      message: 'prefab.apply_to_source 操作只能使用 apply-to-source 作用域'
+    });
+  }
   if (needsPrefabGraph && !request.revision.prefabGraph) {
     context.addIssue({
       code: 'custom',
@@ -138,6 +150,7 @@ export const WriteTransactionResultSchema = z.object({
 
 export type WriteTransactionRequest = z.infer<typeof WriteTransactionRequestSchema>;
 export type WriteScope = z.infer<typeof WriteScopeSchema>;
+export type WriteRevisionSnapshot = z.infer<typeof WriteRevisionSnapshotSchema>;
 export type PrefabImpactAffectedDocument = z.infer<typeof PrefabImpactAffectedDocumentSchema>;
 export type PrefabImpactAnalysis = z.infer<typeof PrefabImpactAnalysisSchema>;
 export type WriteVerificationItem = z.infer<typeof WriteVerificationItemSchema>;

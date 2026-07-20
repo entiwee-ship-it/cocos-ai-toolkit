@@ -4,10 +4,21 @@ import {
   RevisionPreconditionSchema,
   TransactionStateSchema,
   WriteOperationSchema,
+  WriteRevisionSnapshotSchema,
   WriteTransactionRequestSchema,
   WriteTransactionResultSchema,
   WriteVerificationReportSchema
 } from '../src/index.js';
+
+it('写 revision 快照保留文档身份与五维指纹', () => {
+  expect(WriteRevisionSnapshotSchema.parse({
+    documentId: 'scene-1',
+    revision: {
+      document: 'sha256:doc', hierarchy: 'sha256:hier',
+      assetDatabase: null, scriptCompilation: null, prefabGraph: 'sha256:prefab'
+    }
+  })).toMatchObject({ documentId: 'scene-1', revision: { prefabGraph: 'sha256:prefab' } });
+});
 
 /**
  * 构造一份合法的事务修订前置，便于各用例按需覆盖单字段。
@@ -392,6 +403,14 @@ describe('阶段三写事务协议', () => {
       revision: { ...createRevisionPrecondition(), prefabGraph: 'sha256:p' },
       operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
     })).toBeTruthy();
+  });
+
+  it('prefab.apply_to_source 操作禁止使用 current-document 作用域', () => {
+    expect(() => WriteTransactionRequestSchema.parse({
+      ...createValidRequest(),
+      revision: { ...createRevisionPrecondition(), prefabGraph: 'sha256:p' },
+      operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
+    })).toThrow();
   });
 
   it('接受七类 prefab 写操作', () => {

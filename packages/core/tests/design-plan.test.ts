@@ -99,6 +99,35 @@ describe('buildDesignPlan', () => {
     });
   });
 
+  it('apply-to-source 计划最后显式应用指定实例到源 Prefab', () => {
+    const target = targetDocument({
+      document: { scope: 'apply-to-source', assetUuid: 'asset-panel' },
+      tree: [{
+        id: '$instance', name: 'panel', prefabInstance: { assetUuid: 'asset-panel' },
+        children: [{ id: '$label', name: 'label' }]
+      }]
+    });
+    const plan = buildDesignPlan([
+      {
+        kind: 'component.set_property', logicalId: '$label', componentType: 'cc.Label',
+        propertyPath: 'string', value: '应用到源'
+      }
+    ], target, {
+      sourceAssetPath: 'db://assets/panel.prefab',
+      prefabGraph: {
+        nodes: [{ assetUuid: 'asset-panel', path: 'db://assets/panel.prefab', documentType: 'prefab' }],
+        edges: [],
+        blocked: false
+      }
+    });
+
+    expect(plan.items.at(-1)).toMatchObject({
+      kind: 'prefab.apply_to_source',
+      target: '$instance',
+      params: { instanceRootLogicalId: '$instance', sourcePrefabAssetUuid: 'asset-panel' }
+    });
+  });
+
   it('预制体编辑模式中的嵌套实例内容写入进入 unresolved', () => {
     const target = targetDocument({
       tree: [{

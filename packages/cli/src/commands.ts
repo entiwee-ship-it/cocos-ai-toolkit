@@ -1,13 +1,16 @@
 import {
   DesignTargetDocumentSchema,
+  RevisionPreconditionSchema,
   WriteTransactionRequestSchema,
   type DesignTargetDocument,
+  type RevisionPrecondition,
   type WriteTransactionRequest
 } from '@cocos-ai/protocol';
 
 export type CliCommand =
   | { command: 'editors' }
   | { command: 'state'; projectId: string; editorInstanceId?: string }
+  | { command: 'write-revision'; projectId: string; editorInstanceId?: string }
   | { command: 'assets'; projectId: string; editorInstanceId?: string; pattern: string; uuid?: string }
   | { command: 'open-asset'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'hierarchy'; projectId: string; editorInstanceId?: string; depth: number }
@@ -21,6 +24,14 @@ export type CliCommand =
   | { command: 'design-inspect'; projectId: string; editorInstanceId?: string; rootUuid?: string }
   | { command: 'design-plan'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
   | { command: 'design-preview'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
+  | {
+      command: 'design-apply';
+      projectId: string;
+      editorInstanceId?: string;
+      target: DesignTargetDocument;
+      executionId?: string;
+      revision?: RevisionPrecondition;
+    }
   | {
       command: 'scan-project';
       projectId: string;
@@ -50,6 +61,7 @@ const PROJECT_SELECTOR_FLAGS = ['project-id', 'editor-instance-id'] as const;
 const COMMAND_FLAGS: Record<string, readonly string[]> = {
   editors: [],
   state: PROJECT_SELECTOR_FLAGS,
+  'write-revision': PROJECT_SELECTOR_FLAGS,
   assets: [...PROJECT_SELECTOR_FLAGS, 'pattern', 'uuid'],
   'open-asset': [...PROJECT_SELECTOR_FLAGS, 'uuid'],
   hierarchy: [...PROJECT_SELECTOR_FLAGS, 'depth'],
@@ -63,6 +75,7 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'design-inspect': [...PROJECT_SELECTOR_FLAGS, 'root-uuid'],
   'design-plan': [...PROJECT_SELECTOR_FLAGS, 'target'],
   'design-preview': [...PROJECT_SELECTOR_FLAGS, 'target'],
+  'design-apply': [...PROJECT_SELECTOR_FLAGS, 'target', 'execution-id', 'revision'],
   'scan-project': [
     ...PROJECT_SELECTOR_FLAGS,
     'report-root',
@@ -99,6 +112,7 @@ export function parseCommand(argv: string[]): CliCommand {
 
   switch (command) {
     case 'state':
+    case 'write-revision':
       return { command, ...selector };
     case 'asset-index':
     case 'prefab-graph':
@@ -116,6 +130,22 @@ export function parseCommand(argv: string[]): CliCommand {
         ...selector,
         target: readDesignTarget(requireFlag(flags, 'target', 'DESIGN_TARGET_REQUIRED'))
       };
+    case 'design-apply': {
+      const target = readDesignTarget(requireFlag(flags, 'target', 'DESIGN_TARGET_REQUIRED'));
+      const revision = flags.has('revision')
+        ? readDesignRevision(flags.get('revision') ?? '')
+        : undefined;
+      if (target.document.scope !== 'current-document' && !revision) {
+        throw new Error('DESIGN_REVISION_REQUIRED');
+      }
+      return {
+        command,
+        ...selector,
+        target,
+        ...(flags.has('execution-id') ? { executionId: flags.get('execution-id') } : {}),
+        ...(revision ? { revision } : {})
+      };
+    }
     case 'assets':
       return {
         command,
@@ -249,6 +279,21 @@ function readDesignTarget(value: string): DesignTargetDocument {
     return DesignTargetDocumentSchema.parse(parsed);
   } catch {
     throw new Error('INVALID_DESIGN_TARGET');
+  }
+}
+
+/** 解析并校验跨文档声明式写入使用的五维 revision。 */
+function readDesignRevision(value: string): RevisionPrecondition {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('INVALID_DESIGN_REVISION_JSON');
+  }
+  try {
+    return RevisionPreconditionSchema.parse(parsed);
+  } catch {
+    throw new Error('INVALID_DESIGN_REVISION');
   }
 }
 

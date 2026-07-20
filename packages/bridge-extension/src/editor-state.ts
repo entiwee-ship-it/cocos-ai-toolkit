@@ -9,6 +9,7 @@ export const BRIDGE_CAPABILITIES = [
   'probe.documentSnapshot',
   'probe.prefab',
   'probe.writePrepare',
+  'probe.writeRevision',
   'probe.writeConfirm',
   'probe.transactionStatus',
   'probe.transactionList',

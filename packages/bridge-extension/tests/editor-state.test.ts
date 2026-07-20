@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBridgeHello } from '../src/editor-state.js';
+import { BRIDGE_CAPABILITIES, buildBridgeHello } from '../src/editor-state.js';
 import { normalizeAssetInfo } from '../src/asset-probe.js';
 
 describe('buildBridgeHello', () => {
@@ -16,6 +16,7 @@ describe('buildBridgeHello', () => {
     expect(hello.payload.editorInstanceId).toBe('project-uuid:123');
     expect(hello.payload.projectPath).toBe('E:/project');
     expect(hello.payload.creatorVersion).toBe('3.8.8');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.writeRevision');
   });
 });
 

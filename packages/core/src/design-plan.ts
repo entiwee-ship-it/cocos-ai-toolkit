@@ -84,18 +84,50 @@ export function buildDesignPlan(
   const sorted = topologicalSort(drafts, unresolved);
   const impactAnalysis = buildImpactAnalysis(target, diffItems, options, unresolved);
   if (impactAnalysis) risks.push(...impactAnalysis.risks);
+  const items = sorted.map((draft) => ({
+    ...draft.item,
+    dependsOn: draft.humanDependencies.size > 0
+      ? [...draft.humanDependencies].sort()
+      : undefined
+  }));
+  appendApplyToSourceItem(items, target, unresolved, risks);
 
   return {
-    items: sorted.map((draft) => ({
-      ...draft.item,
-      dependsOn: draft.humanDependencies.size > 0
-        ? [...draft.humanDependencies].sort()
-        : undefined
-    })),
+    items,
     impactAnalysis,
     risks: [...new Set(risks)],
     unresolved
   };
+}
+
+/** apply-to-source 必须以显式原子操作收口，不能只靠 scope 标签暗示。 */
+function appendApplyToSourceItem(
+  items: DesignPlanItem[],
+  target: DesignTargetDocument,
+  unresolved: DesignPlan['unresolved'],
+  risks: string[]
+): void {
+  if (target.document.scope !== 'apply-to-source') return;
+  const sourceAssetUuid = target.document.assetUuid;
+  const instanceRoot = target.tree.length === 1 ? target.tree[0] : undefined;
+  if (!sourceAssetUuid || !instanceRoot || instanceRoot.prefabInstance?.assetUuid !== sourceAssetUuid) {
+    unresolved.push({
+      path: 'document.applyToSource',
+      reason: 'apply-to-source 要求目标树恰好一个根，且根 prefabInstance.assetUuid 必须等于 document.assetUuid'
+    });
+    return;
+  }
+  items.push({
+    kind: 'prefab.apply_to_source',
+    target: instanceRoot.id,
+    params: {
+      instanceRootLogicalId: instanceRoot.id,
+      sourcePrefabAssetUuid: sourceAssetUuid
+    },
+    overrideLayer: 'apply-to-source',
+    dependsOn: [...new Set(items.map((item) => item.target))]
+  });
+  risks.push(`将实例 ${instanceRoot.id} 的 Override 应用到源 Prefab ${sourceAssetUuid}`);
 }
 
 /** 为每个逻辑节点记录父子层级和最近的 Prefab 实例根。 */

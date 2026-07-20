@@ -85,7 +85,15 @@ export const DesignTargetDocumentSchema = z.object({
           }
         }
       }
+      const componentTypes = new Set<string>();
       for (const component of node.components ?? []) {
+        if (componentTypes.has(component.type)) {
+          context.addIssue({
+            code: 'custom',
+            message: `同一节点不能声明重复组件类型: ${node.id} / ${component.type}`
+          });
+        }
+        componentTypes.add(component.type);
         for (const value of Object.values(component.references ?? {})) {
           if (typeof value === 'string' && value === node.id) {
             context.addIssue({ code: 'custom', message: `逻辑 ID 自引用: ${node.id}` });

@@ -14,7 +14,7 @@ import {
   type WriteTransactionRecord
 } from './transaction-manager';
 
-const BRIDGE_VERSION = '0.1.25';
+const BRIDGE_VERSION = '0.1.26';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 let client: BridgeClient | null = null;
@@ -80,6 +80,10 @@ export function load(): void {
         if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');
         await Editor.Message.request('asset-db', 'open-asset', request.uuid);
         return { opened: true, uuid: request.uuid };
+      },
+      'probe.writeRevision': async () => {
+        const capture = await captureWriteRevision();
+        return { documentId: capture.documentId, revision: capture.fingerprint };
       },
       'probe.writePrepare': (payload) => writeTransactionManager.prepare(payload),
       'probe.writeConfirm': (payload) => writeTransactionManager.confirm(payload),
