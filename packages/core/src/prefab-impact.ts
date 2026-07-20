@@ -1,5 +1,19 @@
 import type { PrefabImpactAnalysis, PrefabImpactAffectedDocument } from '@cocos-ai/protocol';
-import type { PrefabGraph } from './prefab-graph.js';
+
+/** 影响分析实际消费的最小 Prefab 图合同，兼容 protocol 的可选扩展字段。 */
+export interface PrefabImpactGraph {
+  nodes: Array<{
+    assetUuid: string;
+    path: string | null;
+    documentType: 'scene' | 'prefab';
+  }>;
+  edges: Array<{
+    fromAssetUuid: string;
+    toAssetUuid: string;
+    depth: number;
+  }>;
+  blocked?: boolean;
+}
 
 /**
  * 源预制体影响分析：按 Phase 1 prefab-graph 的实例来源边，
@@ -16,7 +30,7 @@ import type { PrefabGraph } from './prefab-graph.js';
  * @returns 协议 PrefabImpactAnalysisSchema 兼容的影响分析。
  */
 export function analyzePrefabImpact(
-  graph: Pick<PrefabGraph, 'nodes' | 'edges' | 'blocked'>,
+  graph: PrefabImpactGraph,
   sourceAssetUuid: string,
   sourceAssetPath: string
 ): PrefabImpactAnalysis {

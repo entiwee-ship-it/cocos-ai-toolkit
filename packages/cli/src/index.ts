@@ -6,12 +6,25 @@ import {
   JsonScanReportWriter,
   ProjectScanner,
   appendWriteJournalEntry,
+  buildDesignPlan,
+  computeDesignDiff,
+  mergeDocumentPages,
   parseScanCheckpoint,
+  type DesignCurrentNode,
   type ProjectScanResult,
   type ReadonlyProbeClient,
   type ScanCheckpoint
 } from '@cocos-ai/core';
-import { WriteTransactionResultSchema, type WriteTransactionResult } from '@cocos-ai/protocol';
+import {
+  DocumentSnapshotSchema,
+  WriteTransactionResultSchema,
+  type DesignPlan,
+  type DesignPlanItem,
+  type DocumentSnapshot,
+  type ProbeComponent,
+  type ProbeNode,
+  type WriteTransactionResult
+} from '@cocos-ai/protocol';
 import { constants } from 'node:fs';
 import {
   access,
@@ -43,6 +56,9 @@ const HELP = `用法:
   cocos-ai-probe component-schema --project-id <id> --uuid <component-uuid> [--editor-instance-id <id>]
   cocos-ai-probe document-snapshot --project-id <id> --mode summary|full --page-size <n> [--cursor <cursor>] [--editor-instance-id <id>]
   cocos-ai-probe prefab-graph --project-id <id> [--editor-instance-id <id>]
+  cocos-ai-probe design-inspect --project-id <id> [--root-uuid <node-uuid>] [--editor-instance-id <id>]
+  cocos-ai-probe design-plan --project-id <id> --target <json> [--editor-instance-id <id>]
+  cocos-ai-probe design-preview --project-id <id> --target <json> [--editor-instance-id <id>]
   cocos-ai-probe scan-project --project-id <id> --report-root <directory> --report <relative-json> [--resume <relative-json>] [--page-size <n>] [--include-raw true|false] [--concurrency <n>] [--editor-instance-id <id>]
   cocos-ai-probe save-report --project-id <id> --sample <name> [--editor-instance-id <id>]
   cocos-ai-probe write-prepare --project-id <id> --request <json> [--editor-instance-id <id>]
@@ -188,6 +204,13 @@ export async function executeCommand(
   preparedScan?: PreparedScanProject,
   options: { journalRoot?: string } = {}
 ): Promise<unknown> {
+  if (
+    command.command === 'design-inspect'
+    || command.command === 'design-plan'
+    || command.command === 'design-preview'
+  ) {
+    return executeDesignCommand(command, client);
+  }
   if (command.command === 'prefab-graph') {
     return executePrefabGraph(command, client);
   }
@@ -231,6 +254,184 @@ export async function executeCommand(
     };
   }
   return client.request(...toRequest(command));
+}
+
+/** design-inspect 的结构化只读摘要。 */
+export interface DesignInspectResult {
+  document: DocumentSnapshot['document'];
+  revision: string;
+  tree: DesignCurrentNode[];
+  prefabInstances: DocumentSnapshot['prefabInstances'];
+  coverage: DocumentSnapshot['coverage'];
+  risks: string[];
+  unresolved: DocumentSnapshot['unresolved'];
+}
+
+/** design-preview 的人类可读渲染，同时保留机器可读字段。 */
+export interface DesignPreviewResult {
+  mode: 'preview';
+  operationCount: number;
+  operations: Array<DesignPlanItem & { index: number; description: string }>;
+  impactAnalysis: DesignPlan['impactAnalysis'];
+  risks: string[];
+  unresolved: DesignPlan['unresolved'];
+}
+
+/**
+ * 执行阶段四三条只读命令。整个流程只读取文档快照；只有源预制体作用域
+ * 需要额外构建 Prefab 图，绝不调用 writePrepare/writeConfirm。
+ */
+export async function executeDesignCommand(
+  command: Extract<CliCommand, { command: 'design-inspect' | 'design-plan' | 'design-preview' }>,
+  client: ReadonlyProbeClient
+): Promise<DesignInspectResult | DesignPlan | DesignPreviewResult> {
+  const snapshot = await readCompleteDesignSnapshot(command, client);
+  const inspect = summarizeDesignSnapshot(
+    snapshot,
+    command.command === 'design-inspect' ? command.rootUuid : undefined
+  );
+  if (command.command === 'design-inspect') return inspect;
+
+  const diffItems = computeDesignDiff(inspect.tree, command.target.tree, command.target.prune === true);
+  const needsImpact = command.target.document.scope !== 'current-document';
+  const prefabGraph = needsImpact
+    ? await executePrefabGraph({
+        command: 'prefab-graph',
+        projectId: command.projectId,
+        ...(command.editorInstanceId ? { editorInstanceId: command.editorInstanceId } : {})
+      }, client)
+    : undefined;
+  const plan = buildDesignPlan(diffItems, command.target, {
+    ...(prefabGraph ? { prefabGraph } : {}),
+    ...(snapshot.document.path ? { sourceAssetPath: snapshot.document.path } : {}),
+    documentEditMode: snapshot.document.documentType === 'prefab' ? 'prefab' : 'scene'
+  });
+  return command.command === 'design-plan' ? plan : renderDesignPreview(plan);
+}
+
+/** 按 cursor 读取当前文档的完整快照，分页期间 revision 改变立即拒绝。 */
+async function readCompleteDesignSnapshot(
+  command: Extract<CliCommand, { command: 'design-inspect' | 'design-plan' | 'design-preview' }>,
+  client: ReadonlyProbeClient
+): Promise<DocumentSnapshot> {
+  const selector = command.editorInstanceId
+    ? { projectId: command.projectId, editorInstanceId: command.editorInstanceId }
+    : { projectId: command.projectId };
+  const pages: DocumentSnapshot[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | null = null;
+  while (true) {
+    const page = DocumentSnapshotSchema.parse(await client.request('probe.documentSnapshot', {
+      selector,
+      params: { mode: 'full', pageSize: 500, cursor }
+    }));
+    if (pages[0] && page.revision !== pages[0].revision) {
+      throw new Error('DOCUMENT_REVISION_CHANGED_DURING_PAGING');
+    }
+    pages.push(page);
+    cursor = page.page.nextCursor;
+    if (!cursor) break;
+    if (cursors.has(cursor)) throw new Error('DOCUMENT_CURSOR_LOOP');
+    cursors.add(cursor);
+  }
+  return mergeDocumentPages(pages);
+}
+
+/** 把 Phase 1 平铺快照规整成 Task 2 使用的树形当前状态。 */
+export function summarizeDesignSnapshot(
+  snapshot: DocumentSnapshot,
+  rootUuid?: string
+): DesignInspectResult {
+  const currentNodes = new Map<string, DesignCurrentNode>();
+  const parentByNode = new Map<string, string | null>();
+  for (const node of snapshot.nodes) {
+    const uuid = node.identity.objectUuid ?? node.identity.sessionId;
+    if (!uuid) continue;
+    currentNodes.set(uuid, toDesignCurrentNode(node, uuid));
+    parentByNode.set(uuid, node.parentObjectUuid ?? null);
+  }
+  for (const [uuid, parentUuid] of parentByNode) {
+    if (!parentUuid) continue;
+    const parent = currentNodes.get(parentUuid);
+    const child = currentNodes.get(uuid);
+    if (parent && child) parent.children.push(child);
+  }
+
+  let tree: DesignCurrentNode[];
+  if (rootUuid) {
+    const root = currentNodes.get(rootUuid);
+    if (!root) throw new Error('DESIGN_ROOT_NOT_FOUND');
+    tree = [root];
+  } else {
+    tree = [...currentNodes.entries()]
+      .filter(([uuid]) => {
+        const parentUuid = parentByNode.get(uuid);
+        return !parentUuid || !currentNodes.has(parentUuid);
+      })
+      .map(([, node]) => node);
+  }
+
+  const risks = [
+    ...snapshot.diagnostics
+      .filter((item) => item.severity !== 'info')
+      .map((item) => item.message),
+    ...snapshot.prefabInstances.flatMap((instance) =>
+      instance.unresolved.map((item) => `${instance.hostNodePath ?? 'prefab-instance'}: ${item.reason}`)
+    )
+  ];
+  return {
+    document: snapshot.document,
+    revision: snapshot.revision,
+    tree,
+    prefabInstances: snapshot.prefabInstances,
+    coverage: snapshot.coverage,
+    risks: [...new Set(risks)],
+    unresolved: snapshot.unresolved
+  };
+}
+
+function toDesignCurrentNode(node: ProbeNode, uuid: string): DesignCurrentNode {
+  return {
+    uuid,
+    fileId: node.identity.fileId,
+    name: node.name ?? uuid,
+    path: node.path ?? node.name ?? uuid,
+    prefabAssetUuid: node.prefabContext?.sourcePrefabAssetUuid ?? null,
+    components: (node.components ?? []).map(toDesignCurrentComponent),
+    children: []
+  };
+}
+
+function toDesignCurrentComponent(component: ProbeComponent): DesignCurrentNode['components'][number] {
+  const properties: Record<string, unknown> = {};
+  const references: Record<string, unknown> = {};
+  for (const property of component.properties) {
+    if (property.valueKind.endsWith('-reference')) references[property.propertyPath] = property.effectiveValue;
+    else properties[property.propertyPath] = property.effectiveValue;
+  }
+  return {
+    uuid: component.identity.objectUuid,
+    type: component.qualifiedName ?? component.className ?? component.identity.typeId ?? 'unknown-component',
+    scriptUuid: component.identity.scriptUuid,
+    properties,
+    references
+  };
+}
+
+/** 把机器计划转为可读的零执行预览。 */
+export function renderDesignPreview(plan: DesignPlan): DesignPreviewResult {
+  return {
+    mode: 'preview',
+    operationCount: plan.items.length,
+    operations: plan.items.map((item, index) => ({
+      ...item,
+      index: index + 1,
+      description: `${index + 1}. ${item.kind} -> ${item.target}${item.overrideLayer ? ` (${item.overrideLayer})` : ''}`
+    })),
+    impactAnalysis: plan.impactAnalysis,
+    risks: plan.risks,
+    unresolved: plan.unresolved
+  };
 }
 
 /** 需要协议结果校验的写命令。 */
@@ -432,6 +633,9 @@ export function toRequest(command: CliCommand): [string, unknown] {
       }];
     case 'prefab-graph':
     case 'scan-project':
+    case 'design-inspect':
+    case 'design-plan':
+    case 'design-preview':
       throw new Error('LOCAL_COMMAND_REQUIRED');
   }
 }

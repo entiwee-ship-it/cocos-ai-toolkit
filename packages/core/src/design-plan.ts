@@ -6,12 +6,11 @@ import type {
   PrefabImpactAnalysis
 } from '@cocos-ai/protocol';
 import type { DesignDiffItem } from './design-diff.js';
-import type { PrefabGraph } from './prefab-graph.js';
-import { analyzePrefabImpact } from './prefab-impact.js';
+import { analyzePrefabImpact, type PrefabImpactGraph } from './prefab-impact.js';
 
 /** 声明式计划组装选项。 */
 export interface BuildDesignPlanOptions {
-  prefabGraph?: Pick<PrefabGraph, 'nodes' | 'edges' | 'blocked'>;
+  prefabGraph?: PrefabImpactGraph;
   sourceAssetPath?: string;
   documentEditMode?: 'scene' | 'prefab';
 }

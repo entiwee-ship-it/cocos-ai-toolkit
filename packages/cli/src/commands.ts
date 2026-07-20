@@ -1,5 +1,7 @@
 import {
+  DesignTargetDocumentSchema,
   WriteTransactionRequestSchema,
+  type DesignTargetDocument,
   type WriteTransactionRequest
 } from '@cocos-ai/protocol';
 
@@ -16,6 +18,9 @@ export type CliCommand =
   | { command: 'component-schema'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'document-snapshot'; projectId: string; editorInstanceId?: string; mode: 'summary' | 'full'; pageSize: number; cursor?: string }
   | { command: 'prefab-graph'; projectId: string; editorInstanceId?: string }
+  | { command: 'design-inspect'; projectId: string; editorInstanceId?: string; rootUuid?: string }
+  | { command: 'design-plan'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
+  | { command: 'design-preview'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
   | {
       command: 'scan-project';
       projectId: string;
@@ -55,6 +60,9 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'component-schema': [...PROJECT_SELECTOR_FLAGS, 'uuid'],
   'document-snapshot': [...PROJECT_SELECTOR_FLAGS, 'mode', 'page-size', 'cursor'],
   'prefab-graph': PROJECT_SELECTOR_FLAGS,
+  'design-inspect': [...PROJECT_SELECTOR_FLAGS, 'root-uuid'],
+  'design-plan': [...PROJECT_SELECTOR_FLAGS, 'target'],
+  'design-preview': [...PROJECT_SELECTOR_FLAGS, 'target'],
   'scan-project': [
     ...PROJECT_SELECTOR_FLAGS,
     'report-root',
@@ -95,6 +103,19 @@ export function parseCommand(argv: string[]): CliCommand {
     case 'asset-index':
     case 'prefab-graph':
       return { command, ...selector };
+    case 'design-inspect':
+      return {
+        command,
+        ...selector,
+        ...(flags.has('root-uuid') ? { rootUuid: flags.get('root-uuid') } : {})
+      };
+    case 'design-plan':
+    case 'design-preview':
+      return {
+        command,
+        ...selector,
+        target: readDesignTarget(requireFlag(flags, 'target', 'DESIGN_TARGET_REQUIRED'))
+      };
     case 'assets':
       return {
         command,
@@ -213,6 +234,21 @@ function readWriteTransactionRequest(value: string): WriteTransactionRequest {
     return WriteTransactionRequestSchema.parse(parsed);
   } catch {
     throw new Error('INVALID_WRITE_REQUEST');
+  }
+}
+
+/** 解析并按阶段四协议校验声明式目标文档 JSON。 */
+function readDesignTarget(value: string): DesignTargetDocument {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('INVALID_DESIGN_TARGET_JSON');
+  }
+  try {
+    return DesignTargetDocumentSchema.parse(parsed);
+  } catch {
+    throw new Error('INVALID_DESIGN_TARGET');
   }
 }
 
