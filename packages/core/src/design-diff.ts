@@ -7,6 +7,7 @@ export interface DesignCurrentComponent {
   scriptUuid?: string | null;
   properties: Record<string, unknown>;
   references?: Record<string, unknown>;
+  propertySources?: Record<string, string>;
 }
 
 /** 差异计算的当前状态节点视图（由 design-inspect 从文档快照规整）。 */
@@ -62,7 +63,8 @@ export function computeDesignDiff(
   prune: boolean
 ): DesignDiffItem[] {
   const items: DesignDiffItem[] = [];
-  diffLevel(current, targets, null, items, prune);
+  const nodeResolutions = resolveTargetNodes(current, targets);
+  diffLevel(current, targets, null, items, prune, nodeResolutions);
   return items;
 }
 
@@ -71,15 +73,16 @@ function diffLevel(
   targetSiblings: DesignTargetNode[],
   parentLogicalId: string | null,
   items: DesignDiffItem[],
-  prune: boolean
+  prune: boolean,
+  nodeResolutions: Map<string, string | null>
 ): void {
   const matchedCurrent = new Set<DesignCurrentNode>();
   for (const target of targetSiblings) {
     const match = findMatch(currentSiblings, target, matchedCurrent);
     if (match) {
       matchedCurrent.add(match.node);
-      diffComponents(match.node, target, items, prune, match.basis);
-      diffLevel(match.node.children, target.children ?? [], target.id, items, prune);
+      diffComponents(match.node, target, items, prune, match.basis, nodeResolutions);
+      diffLevel(match.node.children, target.children ?? [], target.id, items, prune, nodeResolutions);
       continue;
     }
 
@@ -121,13 +124,42 @@ function findMatch(
   return namePathMatch ? { node: namePathMatch, basis: 'name-path' } : null;
 }
 
+/**
+ * 先按目标树层级解析所有已存在节点，供后续比较跨兄弟节点的逻辑 ID 引用。
+ *
+ * @param current 当前状态节点树。
+ * @param targets 目标声明节点树。
+ * @returns 逻辑 ID 到当前节点 UUID 的映射；未匹配节点记为 null。
+ */
+function resolveTargetNodes(
+  current: DesignCurrentNode[],
+  targets: DesignTargetNode[]
+): Map<string, string | null> {
+  const resolutions = new Map<string, string | null>();
+  const resolveLevel = (
+    currentSiblings: DesignCurrentNode[],
+    targetSiblings: DesignTargetNode[]
+  ): void => {
+    const matchedCurrent = new Set<DesignCurrentNode>();
+    for (const target of targetSiblings) {
+      const match = findMatch(currentSiblings, target, matchedCurrent);
+      if (match) matchedCurrent.add(match.node);
+      resolutions.set(target.id, match?.node.uuid ?? null);
+      resolveLevel(match?.node.children ?? [], target.children ?? []);
+    }
+  };
+  resolveLevel(current, targets);
+  return resolutions;
+}
+
 /** 比较已匹配节点的组件与引用：缺失产挂载，声明属性/引用不同才产修改。 */
 function diffComponents(
   current: DesignCurrentNode,
   target: DesignTargetNode,
   items: DesignDiffItem[],
   prune: boolean,
-  matchBasis: 'fileId' | 'name-path'
+  matchBasis: 'fileId' | 'name-path',
+  nodeResolutions: Map<string, string | null>
 ): void {
   const targetComponents = target.components ?? [];
   const usedCurrent = new Set<number>();
@@ -167,7 +199,7 @@ function diffComponents(
       }
     }
     for (const [propertyPath, reference] of Object.entries(component.references ?? {})) {
-      if (!deepEqual(currentComponent.references?.[propertyPath], reference)) {
+      if (!referenceEqual(currentComponent.references?.[propertyPath], reference, nodeResolutions)) {
         items.push({
           kind: 'reference.set',
           logicalId: target.id,
@@ -183,7 +215,7 @@ function diffComponents(
   });
 
   for (const [propertyPath, reference] of Object.entries(target.references ?? {})) {
-    if (!deepEqual(current.references?.[propertyPath], reference)) {
+    if (!referenceEqual(current.references?.[propertyPath], reference, nodeResolutions)) {
       items.push({
         kind: 'reference.set',
         logicalId: target.id,
@@ -209,6 +241,30 @@ function diffComponents(
       }
     });
   }
+}
+
+/**
+ * 比较当前规整引用与目标引用，兼容目标逻辑 ID 和快照节点 UUID 引用两种身份。
+ *
+ * @param actual 当前快照中的引用值。
+ * @param expected 目标文档中的引用值。
+ * @param nodeResolutions 目标逻辑 ID 到当前节点 UUID 的映射。
+ * @returns 两个引用是否指向同一对象。
+ */
+function referenceEqual(
+  actual: unknown,
+  expected: unknown,
+  nodeResolutions: Map<string, string | null>
+): boolean {
+  if (deepEqual(actual, expected)) return true;
+  if (typeof expected !== 'string' || !expected.startsWith('$')) return false;
+  const resolvedUuid = nodeResolutions.get(expected);
+  return Boolean(
+    resolvedUuid
+    && actual
+    && typeof actual === 'object'
+    && (actual as { objectUuid?: unknown }).objectUuid === resolvedUuid
+  );
 }
 
 /** 输出未匹配节点及其声明内容；新建节点的组件负载一次性挂在 component.add 上。 */

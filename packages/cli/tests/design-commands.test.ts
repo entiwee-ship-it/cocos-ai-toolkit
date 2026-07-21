@@ -50,7 +50,7 @@ const REVISION_JSON = JSON.stringify({
 });
 
 describe('声明式 CLI 命令', () => {
-  it('解析 design-inspect / design-plan / design-preview / design-apply', () => {
+  it('解析 design-inspect / design-plan / design-preview / design-verify / design-export / design-apply', () => {
     expect(parseCommand([
       'write-revision', '--project-id', 'project-1'
     ])).toEqual({ command: 'write-revision', projectId: 'project-1' });
@@ -65,6 +65,16 @@ describe('声明式 CLI 命令', () => {
     expect(parseCommand([
       'design-preview', '--project-id', 'project-1', '--target', TARGET_JSON
     ])).toMatchObject({ command: 'design-preview', projectId: 'project-1' });
+    expect(parseCommand([
+      'design-verify', '--project-id', 'project-1', '--target', TARGET_JSON
+    ])).toMatchObject({ command: 'design-verify', projectId: 'project-1' });
+    expect(parseCommand([
+      'design-export', '--project-id', 'project-1', '--root-uuid', 'node-root',
+      '--scope', 'current-document', '--asset-uuid', 'scene-1'
+    ])).toEqual({
+      command: 'design-export', projectId: 'project-1', rootUuid: 'node-root',
+      scope: 'current-document', assetUuid: 'scene-1'
+    });
     expect(parseCommand([
       'design-apply', '--project-id', 'project-1', '--target', TARGET_JSON,
       '--execution-id', 'apply-1'
@@ -310,6 +320,37 @@ describe('声明式 CLI 命令', () => {
     });
     expect([...planClient.methods, ...previewClient.methods]).not.toContain('probe.writePrepare');
     expect([...planClient.methods, ...previewClient.methods]).not.toContain('probe.writeConfirm');
+  });
+
+  it('verify 与 export 都只重读快照，导出结果可直接作为目标文档', async () => {
+    const verifyClient = createDesignClient();
+    const verifyTarget = JSON.stringify({
+      document: { scope: 'current-document', assetUuid: 'scene-1' },
+      tree: [{
+        id: '$root', fileId: 'file-root', name: 'root',
+        children: [{
+          id: '$label', fileId: 'file-label', name: 'label',
+          components: [{ type: 'cc.Label', properties: { fontSize: 24 } }]
+        }]
+      }]
+    });
+    const report = await executeCommand(
+      parseCommand(['design-verify', '--project-id', 'project-1', '--target', verifyTarget]),
+      verifyClient
+    ) as { passed: boolean; items: Array<{ passed: boolean }> };
+    expect(report.passed).toBe(true);
+    expect(report.items.every((item) => item.passed)).toBe(true);
+
+    const exportClient = createDesignClient();
+    const exported = await executeCommand(
+      parseCommand(['design-export', '--project-id', 'project-1', '--root-uuid', 'node-root']),
+      exportClient
+    ) as { document: { scope: string; assetUuid?: string }; tree: Array<{ id: string; children?: unknown[] }> };
+    expect(exported).toMatchObject({
+      document: { scope: 'current-document', assetUuid: 'scene-1' },
+      tree: [{ id: '$node-file-root', children: [{ id: '$node-file-label' }] }]
+    });
+    expect(exportClient.methods).toEqual(['probe.documentSnapshot']);
   });
 
   it('apply 经写事务通道执行、独立重读验证并写入 journal', async () => {

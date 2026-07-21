@@ -24,6 +24,15 @@ export type CliCommand =
   | { command: 'design-inspect'; projectId: string; editorInstanceId?: string; rootUuid?: string }
   | { command: 'design-plan'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
   | { command: 'design-preview'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
+  | { command: 'design-verify'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
+  | {
+      command: 'design-export';
+      projectId: string;
+      editorInstanceId?: string;
+      rootUuid?: string;
+      scope: DesignTargetDocument['document']['scope'];
+      assetUuid?: string;
+    }
   | {
       command: 'design-apply';
       projectId: string;
@@ -75,6 +84,8 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'design-inspect': [...PROJECT_SELECTOR_FLAGS, 'root-uuid'],
   'design-plan': [...PROJECT_SELECTOR_FLAGS, 'target'],
   'design-preview': [...PROJECT_SELECTOR_FLAGS, 'target'],
+  'design-verify': [...PROJECT_SELECTOR_FLAGS, 'target'],
+  'design-export': [...PROJECT_SELECTOR_FLAGS, 'root-uuid', 'scope', 'asset-uuid'],
   'design-apply': [...PROJECT_SELECTOR_FLAGS, 'target', 'execution-id', 'revision'],
   'scan-project': [
     ...PROJECT_SELECTOR_FLAGS,
@@ -125,11 +136,25 @@ export function parseCommand(argv: string[]): CliCommand {
       };
     case 'design-plan':
     case 'design-preview':
+    case 'design-verify':
       return {
         command,
         ...selector,
         target: readDesignTarget(requireFlag(flags, 'target', 'DESIGN_TARGET_REQUIRED'))
       };
+    case 'design-export': {
+      const scope = flags.get('scope') ?? 'current-document';
+      if (scope !== 'current-document' && scope !== 'source-prefab' && scope !== 'apply-to-source') {
+        throw new Error('INVALID_DESIGN_SCOPE');
+      }
+      return {
+        command,
+        ...selector,
+        scope,
+        ...(flags.has('root-uuid') ? { rootUuid: flags.get('root-uuid') } : {}),
+        ...(flags.has('asset-uuid') ? { assetUuid: flags.get('asset-uuid') } : {})
+      };
+    }
     case 'design-apply': {
       const target = readDesignTarget(requireFlag(flags, 'target', 'DESIGN_TARGET_REQUIRED'));
       const revision = flags.has('revision')

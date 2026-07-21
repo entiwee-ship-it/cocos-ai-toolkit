@@ -15,13 +15,16 @@ import {
   appendWriteJournalEntry,
   buildDesignPlan,
   computeDesignDiff,
+  exportDesignDocument,
   mergeDocumentPages,
   parseScanCheckpoint,
+  verifyDesignTarget,
   type DesignCurrentNode,
   type DesignApplyResult,
   type DesignApplyRuntime,
   type DesignApplyVerificationContext,
   type DesignApplyVerificationItem,
+  type DesignExportOptions,
   type ProjectScanResult,
   type ReadonlyProbeClient,
   type ScanCheckpoint
@@ -35,6 +38,7 @@ import {
   type DesignPlanItem,
   type DesignTargetDocument,
   type DesignTargetNode,
+  type DesignVerifyReport,
   type DocumentSnapshot,
   type ProbeComponent,
   type ProbeNode,
@@ -81,6 +85,8 @@ const HELP = `用法:
   cocos-ai-probe design-inspect --project-id <id> [--root-uuid <node-uuid>] [--editor-instance-id <id>]
   cocos-ai-probe design-plan --project-id <id> --target <json> [--editor-instance-id <id>]
   cocos-ai-probe design-preview --project-id <id> --target <json> [--editor-instance-id <id>]
+  cocos-ai-probe design-verify --project-id <id> --target <json> [--editor-instance-id <id>]
+  cocos-ai-probe design-export --project-id <id> [--root-uuid <node-uuid>] [--scope current-document|source-prefab|apply-to-source] [--asset-uuid <uuid>] [--editor-instance-id <id>]
   cocos-ai-probe design-apply --project-id <id> --target <json> [--execution-id <id>] [--revision <json>] [--editor-instance-id <id>]
   cocos-ai-probe scan-project --project-id <id> --report-root <directory> --report <relative-json> [--resume <relative-json>] [--page-size <n>] [--include-raw true|false] [--concurrency <n>] [--editor-instance-id <id>]
   cocos-ai-probe save-report --project-id <id> --sample <name> [--editor-instance-id <id>]
@@ -237,6 +243,8 @@ export async function executeCommand(
     command.command === 'design-inspect'
     || command.command === 'design-plan'
     || command.command === 'design-preview'
+    || command.command === 'design-verify'
+    || command.command === 'design-export'
     || command.command === 'design-apply'
   ) {
     return executeDesignCommand(command, client, options);
@@ -313,22 +321,36 @@ export interface DesignPreviewResult {
  * @param command 已解析且通过协议校验的声明式 CLI 命令。
  * @param client 已连接的共享 Probe Client。
  * @param options 写事务审计目录等执行选项。
- * @returns 只读摘要、声明式计划、预览或事务应用结果。
+ * @returns 只读摘要、声明式计划、预览、验证报告、导出文档或事务应用结果。
  */
 export async function executeDesignCommand(
-  command: Extract<CliCommand, { command: 'design-inspect' | 'design-plan' | 'design-preview' | 'design-apply' }>,
+  command: Extract<CliCommand, {
+    command: 'design-inspect' | 'design-plan' | 'design-preview' | 'design-verify' | 'design-export' | 'design-apply'
+  }>,
   client: ReadonlyProbeClient,
   options: { journalRoot?: string } = {}
-): Promise<DesignInspectResult | DesignPlan | DesignPreviewResult | DesignApplyResult> {
+): Promise<
+  DesignInspectResult
+  | DesignPlan
+  | DesignPreviewResult
+  | DesignApplyResult
+  | DesignVerifyReport
+  | DesignTargetDocument
+> {
   const snapshot = await readCompleteDesignSnapshot(command, client);
   const selector = command.editorInstanceId
     ? { projectId: command.projectId, editorInstanceId: command.editorInstanceId }
     : { projectId: command.projectId };
-  const needsImpact = command.command !== 'design-inspect'
-    && command.target.document.scope !== 'current-document';
+  const needsImpact = (
+    command.command === 'design-plan'
+    || command.command === 'design-preview'
+    || command.command === 'design-apply'
+  ) && command.target.document.scope !== 'current-document';
   const writeDocumentId = snapshot.document.assetUuid;
   if (
     command.command !== 'design-inspect'
+    && command.command !== 'design-verify'
+    && command.command !== 'design-export'
     && command.target.document.scope === 'source-prefab'
     && snapshot.document.assetUuid !== command.target.document.assetUuid
   ) {
@@ -336,6 +358,8 @@ export async function executeDesignCommand(
   }
   if (
     command.command !== 'design-inspect'
+    && command.command !== 'design-verify'
+    && command.command !== 'design-export'
     && command.target.document.scope === 'source-prefab'
     && snapshot.document.documentType !== 'prefab'
   ) {
@@ -343,9 +367,23 @@ export async function executeDesignCommand(
   }
   const inspect = summarizeDesignSnapshot(
     snapshot,
-    command.command === 'design-inspect' ? command.rootUuid : undefined
+    command.command === 'design-inspect' || command.command === 'design-export'
+      ? command.rootUuid
+      : undefined
   );
   if (command.command === 'design-inspect') return inspect;
+  if (command.command === 'design-verify') return verifyDesignTarget(inspect.tree, command.target);
+  if (command.command === 'design-export') {
+    const exportOptions: DesignExportOptions = {
+      scope: command.scope,
+      assetUuid: command.assetUuid ?? snapshot.document.assetUuid,
+      prefabInstances: snapshot.prefabInstances.map((instance) => ({
+        instanceRootObjectUuid: instance.instanceRootObjectUuid,
+        sourcePrefabAssetUuid: instance.sourcePrefabAssetUuid
+      }))
+    };
+    return exportDesignDocument(inspect.tree, exportOptions);
+  }
 
   const diffItems = computeDesignDiff(inspect.tree, command.target.tree, command.target.prune === true);
   let prefabGraph: ProjectScanResult['prefabGraph'] | undefined;
@@ -411,7 +449,9 @@ export function resolveDesignSourceAssetPath(
 
 /** 按 cursor 读取当前文档的完整快照，分页期间 revision 改变立即拒绝。 */
 async function readCompleteDesignSnapshot(
-  command: Extract<CliCommand, { command: 'design-inspect' | 'design-plan' | 'design-preview' | 'design-apply' }>,
+  command: Extract<CliCommand, {
+    command: 'design-inspect' | 'design-plan' | 'design-preview' | 'design-verify' | 'design-export' | 'design-apply'
+  }>,
   client: ReadonlyProbeClient
 ): Promise<DocumentSnapshot> {
   const selector = command.editorInstanceId
@@ -505,7 +545,9 @@ function toDesignCurrentNode(node: ProbeNode, uuid: string): DesignCurrentNode {
 function toDesignCurrentComponent(component: ProbeComponent): DesignCurrentNode['components'][number] {
   const properties: Record<string, unknown> = {};
   const references: Record<string, unknown> = {};
+  const propertySources: Record<string, string> = {};
   for (const property of component.properties) {
+    propertySources[property.propertyPath] = property.valueSource;
     if (property.valueKind.endsWith('-reference')) references[property.propertyPath] = property.effectiveValue;
     else properties[property.propertyPath] = property.effectiveValue;
   }
@@ -514,7 +556,8 @@ function toDesignCurrentComponent(component: ProbeComponent): DesignCurrentNode[
     type: component.qualifiedName ?? component.className ?? component.identity.typeId ?? 'unknown-component',
     scriptUuid: component.identity.scriptUuid,
     properties,
-    references
+    references,
+    propertySources
   };
 }
 
@@ -1234,6 +1277,8 @@ export function toRequest(command: CliCommand): [string, unknown] {
     case 'design-inspect':
     case 'design-plan':
     case 'design-preview':
+    case 'design-verify':
+    case 'design-export':
     case 'design-apply':
       throw new Error('LOCAL_COMMAND_REQUIRED');
   }
