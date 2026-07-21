@@ -87,7 +87,7 @@ function createEmptyCheckpoint() {
       projectPath: 'E:/project',
       creatorVersion: '3.8.8',
       bridgeVersion: '0.1.0',
-      protocolVersion: '0.4.0',
+      protocolVersion: '0.5.0',
       parameters: { pageSize: 100, includeRaw: false, concurrency: 2 },
       assetManifestHash: 'manifest-1',
       assetUuids: []
