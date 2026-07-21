@@ -106,7 +106,9 @@ function exportNode(
   prefabRoots: Map<string, string>
 ): DesignTargetNode {
   const prefabAssetUuid = prefabRoots.get(node.uuid);
-  const components = node.components.map((component) => exportComponent(component, logicalIds));
+  const components = node.components.map((component) =>
+    exportComponent(component, logicalIds, node.uuid)
+  );
   return {
     id: logicalIds.get(node.uuid) ?? `$node-${sanitizeIdPart(node.uuid)}`,
     ...(node.fileId ? { fileId: node.fileId } : {}),
@@ -115,7 +117,7 @@ function exportNode(
     ...(prefabAssetUuid ? { prefabInstance: { assetUuid: prefabAssetUuid, name: node.name } } : {}),
     ...(components.length > 0 ? { components } : {}),
     ...(node.references && Object.keys(node.references).length > 0
-      ? { references: exportReferences(node.references, logicalIds) }
+      ? { references: exportReferences(node.references, logicalIds, node.uuid) }
       : {}),
     ...(node.children.length > 0
       ? { children: node.children.map((child) => exportNode(child, logicalIds, prefabRoots)) }
@@ -126,9 +128,10 @@ function exportNode(
 
 function exportComponent(
   component: DesignCurrentComponent,
-  logicalIds: Map<string, string>
+  logicalIds: Map<string, string>,
+  ownerNodeUuid: string
 ): NonNullable<DesignTargetNode['components']>[number] {
-  const references = exportReferences(component.references ?? {}, logicalIds);
+  const references = exportReferences(component.references ?? {}, logicalIds, ownerNodeUuid);
   return {
     type: component.type,
     ...(component.scriptUuid !== undefined ? { scriptUuid: component.scriptUuid } : {}),
@@ -139,11 +142,13 @@ function exportComponent(
 
 function exportReferences(
   references: Record<string, unknown>,
-  logicalIds: Map<string, string>
+  logicalIds: Map<string, string>,
+  ownerNodeUuid: string
 ): Record<string, DesignReferenceValue> {
   const exported: Record<string, DesignReferenceValue> = {};
   for (const [propertyPath, value] of Object.entries(references)) {
     if (isNodeReference(value)) {
+      if (value.objectUuid === ownerNodeUuid) continue;
       const logicalId = value.objectUuid ? logicalIds.get(value.objectUuid) : undefined;
       if (logicalId) {
         exported[propertyPath] = logicalId;

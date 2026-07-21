@@ -180,21 +180,31 @@ function Invoke-NativeCommand {
     }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
+    $timedOut = $false
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        $timedOut = $true
         try { $process.Kill($true) } catch { }
-        $null = $process.WaitForExit(10000)
-        throw "$Label 超过 $TimeoutSeconds 秒仍未完成"
+        if (-not $process.WaitForExit(10000)) {
+            throw "$Label 超时后无法终止子进程"
+        }
     }
+    $start.Stop()
     $result = [PSCustomObject]@{
         label = $Label
-        exitCode = $process.ExitCode
+        exitCode = if ($timedOut) { -1 } elseif ($process.HasExited) { $process.ExitCode } else { -1 }
+        timedOut = $timedOut
         durationMs = $start.ElapsedMilliseconds
         stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
         stderr = $stderrTask.GetAwaiter().GetResult().Trim()
     }
-    $start.Stop()
-    if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
-        throw "$Label 失败，退出码 $($process.ExitCode)。stdout: $($result.stdout) stderr: $($result.stderr)"
+    if ($timedOut) {
+        if (-not $AllowFailure) {
+            throw "$Label 超过 $TimeoutSeconds 秒仍未完成。stdout: $($result.stdout) stderr: $($result.stderr)"
+        }
+        return $result
+    }
+    if ($result.exitCode -ne 0 -and -not $AllowFailure) {
+        throw "$Label 失败，退出码 $($result.exitCode)。stdout: $($result.stdout) stderr: $($result.stderr)"
     }
     return $result
 }
@@ -210,15 +220,18 @@ function Invoke-CliJson {
     )
 
     $result = Invoke-NativeCommand -FilePath $nodeExe -Arguments (@($cliPath) + $Arguments) -Label $Label -TimeoutSeconds $TimeoutSeconds -AllowFailure:$AllowFailure
-    if ($result.exitCode -ne 0) {
-        return [PSCustomObject]@{ raw = $null; data = $null; command = $result }
-    }
     if ([string]::IsNullOrWhiteSpace($result.stdout)) {
+        if ($result.exitCode -ne 0) {
+            return [PSCustomObject]@{ raw = $result.stdout; data = $null; command = $result }
+        }
         throw "$Label 未返回 JSON"
     }
     try {
         $data = $result.stdout | ConvertFrom-Json -AsHashtable
     } catch {
+        if ($AllowFailure -and $result.exitCode -ne 0) {
+            return [PSCustomObject]@{ raw = $result.stdout; data = $null; command = $result }
+        }
         throw "$Label 返回的内容不是有效 JSON: $($result.stdout)"
     }
     return [PSCustomObject]@{ raw = $result.stdout; data = $data; command = $result }
@@ -370,26 +383,99 @@ function Wait-EditorConnection {
     throw "等待 Creator Bridge 连接超时: $lastError"
 }
 
+function Test-AssetLocation {
+    param(
+        [Parameter(Mandatory = $true)][object]$Asset,
+        [Parameter(Mandatory = $true)][string]$ExpectedPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedUrl
+    )
+
+    return [string]$Asset.path -eq $ExpectedPath -or [string]$Asset.url -eq $ExpectedUrl
+}
+
+function Wait-AssetIndexReady {
+    $deadline = [DateTime]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
+    $attempt = 0
+    $lastError = '尚未读取资产索引'
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $attempt += 1
+        $index = Invoke-CliJson -Arguments (@('asset-index') + $script:selectorArguments) -Label '等待 AssetDB 资产索引 Ready' -TimeoutSeconds 60 -AllowFailure
+        if ($index.command.exitCode -eq 0) {
+            $scenes = @($index.data.assets | Where-Object {
+                [string]$_.type -eq 'cc.SceneAsset' -and
+                (Test-AssetLocation -Asset $_ -ExpectedPath 'db://assets/phase2-probe' -ExpectedUrl 'db://assets/phase2-probe.scene')
+            })
+            $probeScripts = @($index.data.assets | Where-Object {
+                [string]$_.type -eq 'cc.Script' -and
+                (Test-AssetLocation -Asset $_ -ExpectedPath 'db://assets/Phase2Probe' -ExpectedUrl 'db://assets/Phase2Probe.ts')
+            })
+            if ($scenes.Count -eq 1 -and $probeScripts.Count -eq 1) {
+                return $index
+            }
+            $lastError = "phase2-probe 场景资产数 $($scenes.Count)，Phase2Probe 脚本数 $($probeScripts.Count)"
+        } else {
+            $lastError = $index.command.stderr
+        }
+        Start-Sleep -Milliseconds $PollIntervalMilliseconds
+    }
+    throw "等待 AssetDB 文档索引 Ready 超时（$attempt 次）: $lastError"
+}
+
 function Find-SampleDocument {
     param([Parameter(Mandatory = $true)][object]$AssetIndex)
 
-    $scenes = @($AssetIndex.documents | Where-Object { [string]$_.documentType -eq 'scene' })
+    $scenes = @($AssetIndex.assets | Where-Object { [string]$_.type -eq 'cc.SceneAsset' })
     Assert-Condition -Condition ($scenes.Count -gt 0) -Message '资产索引没有可写场景'
-    $preferred = @($scenes | Where-Object { [string]$_.path -eq 'db://assets/phase2-probe.scene' })
+    $preferred = @($scenes | Where-Object {
+        Test-AssetLocation -Asset $_ -ExpectedPath 'db://assets/phase2-probe' -ExpectedUrl 'db://assets/phase2-probe.scene'
+    })
     $document = if ($preferred.Count -eq 1) { $preferred[0] } else { $scenes[0] }
     $assetUuid = [string]($document.assetUuid ?? $document.uuid)
     Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($assetUuid)) -Message '样本文档缺少资产 UUID'
-    return [PSCustomObject]@{ assetUuid = $assetUuid; path = [string]$document.path }
+    return [PSCustomObject]@{ assetUuid = $assetUuid; path = [string]($document.url ?? $document.path) }
 }
 
 function Find-Phase2ProbeScript {
     param([Parameter(Mandatory = $true)][object]$AssetIndex)
 
     $matches = @($AssetIndex.assets | Where-Object {
-        [string]$_.type -eq 'cc.Script' -and [string]$_.path -eq 'db://assets/Phase2Probe'
+        [string]$_.type -eq 'cc.Script' -and
+        (Test-AssetLocation -Asset $_ -ExpectedPath 'db://assets/Phase2Probe' -ExpectedUrl 'db://assets/Phase2Probe.ts')
     })
     Assert-Condition -Condition ($matches.Count -eq 1) -Message '资产索引中必须存在唯一的 Phase2Probe.ts 脚本'
     return [PSCustomObject]@{ assetUuid = [string]$matches[0].assetUuid; componentType = 'Phase2Probe' }
+}
+
+function Wait-SampleDocumentReady {
+    param([Parameter(Mandatory = $true)][string]$ExpectedAssetUuid)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
+    $lastError = '场景文档尚未打开'
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $openAsset = Invoke-CliJson -Arguments (@('open-asset') + $script:selectorArguments + @('--uuid', $ExpectedAssetUuid)) -Label '等待 Creator 打开样本场景' -TimeoutSeconds 30 -AllowFailure
+        if ($openAsset.command.exitCode -eq 0) {
+            $hierarchy = Invoke-CliJson -Arguments (@('hierarchy') + $script:selectorArguments + @('--depth', '1')) -Label '等待样本场景根可读' -TimeoutSeconds 30 -AllowFailure
+            if (
+                $hierarchy.command.exitCode -eq 0 -and
+                $null -ne $hierarchy.data -and
+                $null -ne $hierarchy.data.data -and
+                $hierarchy.data.data.identity.objectUuid -ceq $ExpectedAssetUuid
+            ) {
+                return [PSCustomObject]@{ openAsset = $openAsset; hierarchy = $hierarchy }
+            }
+            $lastError = if ($hierarchy.command.timedOut) {
+                '读取场景层级超时'
+            } elseif ($hierarchy.command.exitCode -ne 0) {
+                $hierarchy.command.stderr
+            } else {
+                "当前场景根 UUID 尚未切换为 $ExpectedAssetUuid"
+            }
+        } else {
+            $lastError = if ($openAsset.command.timedOut) { '打开场景请求超时' } else { $openAsset.command.stderr }
+        }
+        Start-Sleep -Milliseconds $PollIntervalMilliseconds
+    }
+    throw "等待 Creator 样本场景真正可读超时: $lastError"
 }
 
 function Wait-DesignInspect {
@@ -410,7 +496,7 @@ function Wait-DesignInspect {
 
 function Test-DesignNodeName {
     param(
-        [Parameter(Mandatory = $true)][object[]]$Nodes,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Nodes,
         [Parameter(Mandatory = $true)][string]$Name
     )
 
@@ -429,43 +515,46 @@ function New-DesignTarget {
     )
 
     # 合同标记：id = '$dialog' / id = '$label' / id = '$target'；引用在执行期解析为真实 UUID。
-    return [ordered]@{
-        document = [ordered]@{ scope = 'current-document'; assetUuid = $AssetUuid }
-        tree = @(
+    $sceneTarget = [ordered]@{
+        id = '$scene'
+        match = 'name-path'
+        path = [string]$Root.path
+        name = [string]$Root.name
+        children = @(
             [ordered]@{
-                id = '$scene'
-                fileId = [string]$Root.fileId
-                path = [string]$Root.path
-                name = [string]$Root.name
+                id = '$dialog'
+                name = $dialogName
+                components = @(
+                    [ordered]@{
+                        type = 'Phase2Probe'
+                        scriptUuid = $ScriptAsset.assetUuid
+                        properties = [ordered]@{ probeFlag = $true }
+                        references = [ordered]@{ targetNode = '$target' }
+                    }
+                )
                 children = @(
                     [ordered]@{
-                        id = '$dialog'
-                        name = $dialogName
+                        id = '$label'
+                        name = $labelName
                         components = @(
                             [ordered]@{
-                                type = 'Phase2Probe'
-                                scriptUuid = $ScriptAsset.assetUuid
-                                properties = [ordered]@{ probeFlag = $true }
-                                references = [ordered]@{ targetNode = '$target' }
+                                type = 'cc.Label'
+                                properties = [ordered]@{ string = 'Phase 4'; fontSize = 28 }
                             }
                         )
-                        children = @(
-                            [ordered]@{
-                                id = '$label'
-                                name = $labelName
-                                components = @(
-                                    [ordered]@{
-                                        type = 'cc.Label'
-                                        properties = [ordered]@{ string = 'Phase 4'; fontSize = 28 }
-                                    }
-                                )
-                            },
-                            [ordered]@{ id = '$target'; name = $targetName }
-                        )
-                    }
+                    },
+                    [ordered]@{ id = '$target'; name = $targetName }
                 )
             }
         )
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Root.fileId)) {
+        $sceneTarget['fileId'] = [string]$Root.fileId
+    }
+
+    return [ordered]@{
+        document = [ordered]@{ scope = 'current-document'; assetUuid = $AssetUuid }
+        tree = @($sceneTarget)
         prune = $false
     }
 }
@@ -486,17 +575,47 @@ function Invoke-DesignRollbackChain {
         [switch]$AllowFailure
     )
 
-    $ids = @($ApplyResult.transactions | Where-Object { [string]$_.status -eq 'committed' } | ForEach-Object { [string]$_.transactionId } | Select-Object -Unique)
-    [Array]::Reverse($ids)
-    foreach ($transactionId in $ids) {
-        $rollback = Invoke-CliJson -Arguments (@('transaction-rollback') + $script:selectorArguments + @('--transaction-id', $transactionId)) -Label "声明式事务回滚 $transactionId" -AllowFailure:$AllowFailure
-        if ($rollback.command.exitCode -ne 0) {
-            if ($AllowFailure) { return $false }
-            throw "声明式事务回滚失败: $transactionId"
+    $committedIds = @($ApplyResult.transactions | Where-Object {
+        [string]$_.status -eq 'committed'
+    } | ForEach-Object { [string]$_.transactionId } | Select-Object -Unique)
+    $rollbackOrder = @($committedIds)
+    [Array]::Reverse($rollbackOrder)
+
+    $applyRolledBackIds = [Collections.Generic.List[string]]::new()
+    if (Test-ObjectProperty -Value $ApplyResult -Name 'rollbackResults') {
+        $applyRollbackResults = @($ApplyResult.rollbackResults)
+        for ($index = 0; $index -lt $applyRollbackResults.Count -and $index -lt $rollbackOrder.Count; $index += 1) {
+            $result = $applyRollbackResults[$index]
+            $expectedTransactionId = [string]$rollbackOrder[$index]
+            if ([string]$result.transactionId -cne $expectedTransactionId) { break }
+            if (
+                [string]$result.status -ne 'rolled-back' -or
+                $null -eq $result.rollbackEvidence -or
+                $result.rollbackEvidence.verifiedClean -ne $true
+            ) { break }
+            $applyRolledBackIds.Add($expectedTransactionId)
         }
-        Assert-Condition -Condition ($rollback.data.status -eq 'rolled-back') -Message "事务回滚状态异常: $transactionId / $($rollback.data.status)"
-        Assert-Condition -Condition ($rollback.data.rollbackEvidence.verifiedClean -eq $true) -Message "事务回滚未验证干净: $transactionId"
-        $rollbackResults.Add($rollback.data)
+    }
+
+    $rolledBackIds = @(
+        @($rollbackResults | ForEach-Object { [string]$_.transactionId }) + @($applyRolledBackIds) |
+            Select-Object -Unique
+    )
+    $ids = @($rollbackOrder | Where-Object { $rolledBackIds -notcontains $_ })
+    foreach ($transactionId in $ids) {
+        try {
+            $rollback = Invoke-CliJson -Arguments (@('transaction-rollback') + $script:selectorArguments + @('--transaction-id', $transactionId)) -Label "声明式事务回滚 $transactionId" -AllowFailure:$AllowFailure
+            if ($rollback.command.exitCode -ne 0) {
+                throw "声明式事务回滚失败: $transactionId"
+            }
+            Assert-Condition -Condition ($rollback.data.transactionId -ceq $transactionId) -Message "事务回滚 ID 错配: $transactionId / $($rollback.data.transactionId)"
+            Assert-Condition -Condition ($rollback.data.status -eq 'rolled-back') -Message "事务回滚状态异常: $transactionId / $($rollback.data.status)"
+            Assert-Condition -Condition ($rollback.data.rollbackEvidence.verifiedClean -eq $true) -Message "事务回滚未验证干净: $transactionId"
+            $rollbackResults.Add($rollback.data)
+        } catch {
+            if ($AllowFailure) { return $false }
+            throw
+        }
     }
     return $true
 }
@@ -541,18 +660,19 @@ try {
     $script:selectorArguments = @('--project-id', [string]$selectedEditor.projectId, '--editor-instance-id', [string]$selectedEditor.editorInstanceId)
     Add-PassedStep -Name 'Bridge 连接与声明式能力检查' -DurationMs $connection.command.durationMs -Evidence $editorsPath
 
-    $assetIndex = Invoke-CliJson -Arguments (@('asset-index') + $script:selectorArguments) -Label 'CLI asset-index'
+    $assetIndex = Wait-AssetIndexReady
     $assetIndexPath = Write-RawJsonReport -Name "$reportPrefix-asset-index.json" -RawJson $assetIndex.raw
     $sampleDocument = Find-SampleDocument -AssetIndex $assetIndex.data
     $probeScript = Find-Phase2ProbeScript -AssetIndex $assetIndex.data
     Add-PassedStep -Name '资产与脚本夹具定位' -DurationMs $assetIndex.command.durationMs -Evidence $assetIndexPath
 
-    $null = Invoke-CliJson -Arguments (@('open-asset') + $script:selectorArguments + @('--uuid', $sampleDocument.assetUuid)) -Label 'CLI open-asset'
+    $documentReady = Wait-SampleDocumentReady -ExpectedAssetUuid $sampleDocument.assetUuid
+    $documentReadyPath = Write-RawJsonReport -Name "$reportPrefix-hierarchy-ready.json" -RawJson $documentReady.hierarchy.raw
+    Add-PassedStep -Name 'Creator 场景文档真正可读' -DurationMs ($documentReady.openAsset.command.durationMs + $documentReady.hierarchy.command.durationMs) -Evidence $documentReadyPath
     $inspect = Wait-DesignInspect -ExpectedAssetUuid $sampleDocument.assetUuid
     $inspectPath = Write-RawJsonReport -Name "$reportPrefix-design-inspect.json" -RawJson $inspect.raw
     Assert-Condition -Condition (@($inspect.data.tree).Count -gt 0) -Message 'design-inspect 没有返回场景根节点'
     $sceneRoot = @($inspect.data.tree)[0]
-    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace([string]$sceneRoot.fileId)) -Message '场景根缺少稳定 fileId'
     Assert-Condition -Condition (-not (Test-DesignNodeName -Nodes @($inspect.data.tree) -Name $dialogName)) -Message '运行前已存在同名阶段四夹具'
     Add-PassedStep -Name 'design-inspect 基线' -DurationMs $inspect.command.durationMs -Evidence $inspectPath
 
@@ -571,10 +691,11 @@ try {
     $previewPath = Write-RawJsonReport -Name "$reportPrefix-design-preview.json" -RawJson $preview.raw
     Add-PassedStep -Name 'design-preview 零执行预览' -DurationMs $preview.command.durationMs -Evidence $previewPath
 
-    $apply = Invoke-CliJson -Arguments (@('design-apply') + $script:selectorArguments + @('--target', $targetJson, '--execution-id', $executionId)) -Label 'CLI design-apply' -TimeoutSeconds $ValidationTimeoutSeconds
+    $apply = Invoke-CliJson -Arguments (@('design-apply') + $script:selectorArguments + @('--target', $targetJson, '--execution-id', $executionId)) -Label 'CLI design-apply' -TimeoutSeconds $ValidationTimeoutSeconds -AllowFailure
+    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace([string]$apply.raw)) -Message 'design-apply 未返回可恢复 JSON'
+    $applyPath = Write-RawJsonReport -Name "$reportPrefix-design-apply.json" -RawJson $apply.raw
     Assert-Condition -Condition ($apply.data.status -eq 'committed') -Message "design-apply 未完整提交: $($apply.data.status)"
     Assert-Condition -Condition ($apply.data.verification.passed -eq $true) -Message 'design-apply 内嵌逐项验证未通过'
-    $applyPath = Write-RawJsonReport -Name "$reportPrefix-design-apply.json" -RawJson $apply.raw
     Add-PassedStep -Name 'design-apply 事务链执行' -DurationMs $apply.command.durationMs -Evidence $applyPath
 
     $verify = Invoke-CliJson -Arguments (@('design-verify') + $script:selectorArguments + @('--target', $targetJson)) -Label 'CLI design-verify'
@@ -629,7 +750,11 @@ try {
     throw
 } finally {
     $cleanupFailures = [Collections.Generic.List[string]]::new()
-    if ($null -ne $apply -and @($rollbackResults).Count -eq 0) {
+    if (
+        $null -ne $apply -and
+        $null -ne $apply.data -and
+        [string]$apply.data.status -ne 'manual-recovery-required'
+    ) {
         try {
             $rollbackSucceeded = Invoke-DesignRollbackChain -ApplyResult $apply.data -AllowFailure
             if (-not $rollbackSucceeded) {
@@ -638,8 +763,14 @@ try {
         } catch {
             $cleanupFailures.Add("自动事务回滚异常: $($_.Exception.Message)")
         }
+    } elseif (
+        $null -ne $apply -and
+        $null -ne $apply.data -and
+        [string]$apply.data.status -eq 'manual-recovery-required'
+    ) {
+        $cleanupFailures.Add('design-apply 返回人工恢复状态禁止自动回滚，已保留事务现场')
     }
-    if ($cleanupFailures.Count -gt 0 -or ($null -ne $failure -and $null -ne $apply)) {
+    if ($cleanupFailures.Count -gt 0 -or $null -ne $failure) {
         try {
             $null = Write-JsonReport -Name "$reportPrefix-recovery-required.json" -Value ([ordered]@{
                 schemaVersion = 1
@@ -647,7 +778,16 @@ try {
                 executionId = $executionId
                 projectPath = $project
                 document = $sampleDocument
-                transactions = if ($null -ne $apply) { $apply.data.transactions } else { @() }
+                transactions = @(if ($null -ne $apply -and $null -ne $apply.data) {
+                    @($apply.data.transactions)
+                })
+                applyRollbackResults = @(if (
+                    $null -ne $apply -and
+                    $null -ne $apply.data -and
+                    (Test-ObjectProperty -Value $apply.data -Name 'rollbackResults')
+                ) {
+                    @($apply.data.rollbackResults)
+                })
                 rollbackResults = $rollbackResults
                 cleanupFailures = $cleanupFailures
                 instruction = '禁止继续写入；核对 transaction-status 后逆序回滚，必要时在确认项目基线干净后用 Git 还原目标文档。'

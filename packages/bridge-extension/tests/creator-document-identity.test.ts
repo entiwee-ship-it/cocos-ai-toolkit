@@ -45,6 +45,26 @@ describe('Creator document identity', () => {
     });
   });
 
+  it('当前文档 UUID 短暂为空时有限重试并读取恢复后的身份', async () => {
+    let calls = 0;
+    const identity = await resolveCreatorDocumentIdentity({
+      cce: {
+        SceneFacadeManager: {
+          queryCurrentSceneUuid() {
+            calls += 1;
+            return calls === 1 ? null : 'scene-after-refresh';
+          }
+        }
+      }
+    });
+
+    expect(identity).toMatchObject({
+      assetUuid: 'scene-after-refresh',
+      source: 'cce.SceneFacadeManager'
+    });
+    expect(calls).toBe(2);
+  });
+
   it('Scene 快照只使用运行时 Facade 证据确认当前文档', async () => {
     const source = await readFile(sceneSourcePath, 'utf8');
     const snapshotFunction = source.slice(

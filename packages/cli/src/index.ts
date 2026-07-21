@@ -490,6 +490,9 @@ export function summarizeDesignSnapshot(
     currentNodes.set(uuid, toDesignCurrentNode(node, uuid));
     parentByNode.set(uuid, node.parentObjectUuid ?? null);
   }
+  for (const entry of readSnapshotComponentEntries(snapshot)) {
+    currentNodes.get(entry.nodeUuid)?.components.push(toDesignCurrentComponent(entry.component));
+  }
   for (const [uuid, parentUuid] of parentByNode) {
     if (!parentUuid) continue;
     const parent = currentNodes.get(parentUuid);
@@ -537,7 +540,7 @@ function toDesignCurrentNode(node: ProbeNode, uuid: string): DesignCurrentNode {
     name: node.name ?? uuid,
     path: node.path ?? node.name ?? uuid,
     prefabAssetUuid: node.prefabContext?.sourcePrefabAssetUuid ?? null,
-    components: (node.components ?? []).map(toDesignCurrentComponent),
+    components: [],
     children: []
   };
 }
@@ -877,8 +880,8 @@ export function verifyPlanItemFromSnapshot(
     case 'component.add': {
       const componentType = readPlanString(item, 'componentType');
       const componentUuid = componentType ? context.componentResolutions[`${item.target}::${componentType}`] : undefined;
-      const actual = targetUuid && componentUuid
-        ? findSnapshotNode(snapshot, targetUuid)?.components?.find(
+      const actual = targetUuid && componentUuid && componentType
+        ? findSnapshotComponents(snapshot, targetUuid, componentType).find(
             (component) => component.identity.objectUuid === componentUuid
           )?.identity.objectUuid ?? null
         : null;
@@ -1023,20 +1026,21 @@ function findSnapshotComponents(
   nodeUuid: string,
   componentType: string
 ): ProbeComponent[] {
-  return findSnapshotNode(snapshot, nodeUuid)?.components?.filter((component) =>
-    (component.qualifiedName ?? component.className ?? component.identity.typeId) === componentType
-  ) ?? [];
+  return readSnapshotComponentEntries(snapshot)
+    .filter((entry) => entry.nodeUuid === nodeUuid)
+    .map((entry) => entry.component)
+    .filter((component) =>
+      (component.qualifiedName ?? component.className ?? component.identity.typeId) === componentType
+    );
 }
 
 function findSnapshotComponentByUuid(
   snapshot: DocumentSnapshot,
   componentUuid: string
 ): ProbeComponent | undefined {
-  for (const node of snapshot.nodes) {
-    const component = node.components?.find((entry) => entry.identity.objectUuid === componentUuid);
-    if (component) return component;
-  }
-  return undefined;
+  return readSnapshotComponentEntries(snapshot)
+    .find((entry) => entry.component.identity.objectUuid === componentUuid)
+    ?.component;
 }
 
 function readProbeNodeUuid(node: ProbeNode): string | null {
@@ -1048,11 +1052,188 @@ function readSnapshotNodeUuids(snapshot: DocumentSnapshot): string[] {
 }
 
 function readSnapshotComponentUuids(snapshot: DocumentSnapshot): string[] {
-  return snapshot.nodes.flatMap((node) =>
-    (node.components ?? [])
-      .map((component) => component.identity.objectUuid)
-      .filter((uuid): uuid is string => uuid !== null)
+  return readSnapshotComponentEntries(snapshot)
+    .map((entry) => entry.component.identity.objectUuid)
+    .filter((uuid): uuid is string => uuid !== null);
+}
+
+interface SnapshotComponentEntry {
+  nodeUuid: string;
+  component: ProbeComponent;
+}
+
+/** 统一读取真实 document-scan 顶层组件，并兼容旧快照的节点内组件。 */
+function readSnapshotComponentEntries(snapshot: DocumentSnapshot): SnapshotComponentEntry[] {
+  const entries = snapshot.componentSchemas.map((schema) => ({
+    nodeUuid: schema.nodeUuid,
+    component: componentSchemaToProbeComponent(schema)
+  }));
+  const knownUuids = new Set(snapshot.componentSchemas.map((schema) => schema.componentUuid));
+  for (const node of snapshot.nodes) {
+    const nodeUuid = readProbeNodeUuid(node);
+    if (!nodeUuid) continue;
+    for (const component of node.components ?? []) {
+      const componentUuid = component.identity.objectUuid;
+      if (componentUuid && knownUuids.has(componentUuid)) continue;
+      entries.push({ nodeUuid, component });
+    }
+  }
+  return entries;
+}
+
+/** 把组件 Schema 的当前值与引用还原为声明式层既有的 ProbeComponent 视图。 */
+function componentSchemaToProbeComponent(
+  schema: DocumentSnapshot['componentSchemas'][number]
+): ProbeComponent {
+  return {
+    kind: 'component',
+    identity: {
+      sessionId: null,
+      objectUuid: schema.componentUuid,
+      assetUuid: null,
+      fileId: schema.componentFileId,
+      typeId: schema.typeId,
+      scriptUuid: schema.scriptUuid
+    },
+    className: schema.className,
+    qualifiedName: schema.qualifiedName,
+    scriptPath: schema.scriptPath,
+    inheritance: schema.inheritance,
+    properties: schema.properties.flatMap(componentSchemaPropertyToProbeProperties),
+    rawSerializedState: schema.rawClassAttributes
+  };
+}
+
+type ComponentSchemaProperty = DocumentSnapshot['componentSchemas'][number]['properties'][number];
+type ComponentSchemaReference = ComponentSchemaProperty['references'][number];
+type ProbeProperty = ProbeComponent['properties'][number];
+
+/** 把顶层组件属性还原为基础值，并补出数组或嵌套对象内引用的精确属性路径。 */
+function componentSchemaPropertyToProbeProperties(property: ComponentSchemaProperty): ProbeProperty[] {
+  const base: ProbeProperty = {
+    propertyPath: property.propertyPath,
+    serializedName: property.serializedName,
+    displayName: property.displayName,
+    declaredType: property.declaredType,
+    actualType: property.actualType,
+    valueKind: property.valueKind,
+    nullable: property.nullable,
+    serializable: property.serializable,
+    visible: property.visible,
+    readonly: property.readonly,
+    defaultValue: property.defaultValue,
+    effectiveValue: property.valueKind.endsWith('-reference') && property.references.length === 1
+      ? property.references[0]
+      : property.currentValue,
+    sourceValue: property.currentValue,
+    overrideValue: null,
+    valueSource: 'local',
+    inspectorMetadata: property.inspectorMetadata,
+    raw: property.rawClassAttributes
+  };
+  if (property.valueKind.endsWith('-reference') || property.references.length === 0) {
+    return [base];
+  }
+
+  const paths: string[] = [];
+  collectSchemaReferencePaths(
+    property.rawClassAttributes,
+    property.propertyPath,
+    null,
+    paths,
+    new Set<unknown>(),
+    0
   );
+  if (paths.length !== property.references.length) return [base];
+  return [
+    base,
+    ...paths.map((propertyPath, index): ProbeProperty => ({
+      ...base,
+      propertyPath,
+      serializedName: propertyPath,
+      displayName: propertyPath,
+      declaredType: null,
+      actualType: null,
+      valueKind: schemaReferenceValueKind(property.references[index]),
+      nullable: false,
+      defaultValue: null,
+      effectiveValue: property.references[index],
+      sourceValue: property.references[index]
+    }))
+  ];
+}
+
+function collectSchemaReferencePaths(
+  value: unknown,
+  propertyPath: string,
+  inheritedKind: 'node' | 'component' | 'asset' | null,
+  paths: string[],
+  visited: Set<unknown>,
+  depth: number
+): void {
+  if (depth > 8 || !value || typeof value !== 'object' || visited.has(value)) return;
+  visited.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectSchemaReferencePaths(
+      item, `${propertyPath}[${index}]`, inheritedKind, paths, visited, depth + 1
+    ));
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const expectedKind = readSchemaReferenceKind(record) ?? inheritedKind;
+  const currentValue = Object.prototype.hasOwnProperty.call(record, 'value') ? record.value : value;
+  if (record.isArray === true || Array.isArray(currentValue)) {
+    if (Array.isArray(currentValue)) {
+      currentValue.forEach((item, index) => collectSchemaReferencePaths(
+        item, `${propertyPath}[${index}]`, expectedKind, paths, visited, depth + 1
+      ));
+    }
+    return;
+  }
+  if (expectedKind) {
+    paths.push(propertyPath);
+    return;
+  }
+  if (currentValue !== value) {
+    collectSchemaReferencePaths(currentValue, propertyPath, null, paths, visited, depth + 1);
+    return;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (key === 'default' || key === 'elementTypeData') continue;
+    collectSchemaReferencePaths(child, `${propertyPath}.${key}`, null, paths, visited, depth + 1);
+  }
+}
+
+function readSchemaReferenceKind(
+  property: Record<string, unknown>
+): 'node' | 'component' | 'asset' | null {
+  const type = typeof property.type === 'string' ? property.type : null;
+  const inheritance = Array.isArray(property.extends)
+    ? property.extends.filter((item): item is string => typeof item === 'string')
+    : [];
+  if (type === 'cc.Node') return 'node';
+  if (inheritance.includes('cc.Component')) return 'component';
+  if (
+    inheritance.includes('cc.Asset')
+    || type === 'cc.Script'
+    || type === 'cc.Prefab'
+    || type === 'cc.SpriteFrame'
+    || type === 'cc.RenderTexture'
+  ) return 'asset';
+  return null;
+}
+
+function schemaReferenceValueKind(
+  reference: ComponentSchemaReference
+): ProbeProperty['valueKind'] {
+  if (reference.kind === 'node') return 'node-reference';
+  if (reference.kind === 'component') return 'component-reference';
+  if (reference.kind === 'asset') return 'asset-reference';
+  if (reference.expectedKind === 'node') return 'node-reference';
+  if (reference.expectedKind === 'component') return 'component-reference';
+  if (reference.expectedKind === 'asset') return 'asset-reference';
+  return 'unknown-serialized';
 }
 
 function readPlanString(item: DesignPlanItem, key: string): string | null {

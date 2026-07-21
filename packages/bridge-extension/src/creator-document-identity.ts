@@ -10,6 +10,9 @@ export interface CreatorDocumentIdentity {
   failures: CreatorDocumentIdentityFailure[];
 }
 
+const DOCUMENT_UUID_READ_ATTEMPTS = 10;
+const DOCUMENT_UUID_RETRY_DELAY_MS = 50;
+
 /**
  * 从 Creator Scene Facade 独立读取当前打开文档的资产 UUID。
  *
@@ -37,8 +40,15 @@ export async function resolveCreatorDocumentIdentity(
     if (typeof owner.queryCurrentSceneUuid !== 'function') continue;
 
     try {
-      const value = await owner.queryCurrentSceneUuid.call(owner);
-      const assetUuid = typeof value === 'string' && value ? value : null;
+      let assetUuid: string | null = null;
+      for (let attempt = 0; attempt < DOCUMENT_UUID_READ_ATTEMPTS; attempt += 1) {
+        const value = await owner.queryCurrentSceneUuid.call(owner);
+        assetUuid = typeof value === 'string' && value ? value : null;
+        if (assetUuid) break;
+        if (attempt + 1 < DOCUMENT_UUID_READ_ATTEMPTS) {
+          await delay(DOCUMENT_UUID_RETRY_DELAY_MS);
+        }
+      }
       if (!assetUuid) {
         failures.push({ source, reason: 'CURRENT_DOCUMENT_UUID_EMPTY' });
         continue;
@@ -74,4 +84,8 @@ function readObject(value: unknown): Record<string, unknown> {
 
 function readReason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

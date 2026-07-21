@@ -10,6 +10,7 @@ import {
   readCurrentWriteRevision,
   resolveDesignSourceAssetPath,
   restoreDesignWriteDocument,
+  summarizeDesignSnapshot,
   verifyPlanItemFromSnapshot
 } from '../src/index.js';
 
@@ -299,6 +300,69 @@ describe('声明式 CLI 命令', () => {
     expect(client.methods).toEqual(['probe.documentSnapshot']);
   });
 
+  it('inspect 从真实 Bridge 顶层 componentSchemas 还原组件和属性', () => {
+    const result = summarizeDesignSnapshot(createBridgeComponentSnapshot());
+
+    expect(result.tree[0].children[0].components).toEqual([expect.objectContaining({
+      uuid: 'component-label',
+      type: 'cc.Label',
+      properties: { fontSize: 24 }
+    })]);
+  });
+
+  it('inspect 把数组内引用按嵌套属性路径从顶层 componentSchemas 还原', () => {
+    const snapshot = createBridgeComponentSnapshot();
+    const schema = snapshot.componentSchemas[0] as {
+      properties: Array<Record<string, unknown>>;
+    };
+    schema.properties.push({
+      propertyPath: 'targets',
+      serializedName: 'targets',
+      displayName: 'Targets',
+      declaredType: 'cc.Node',
+      actualType: 'Array',
+      valueKind: 'array',
+      nullable: false,
+      serializable: true,
+      visible: true,
+      readonly: false,
+      defaultValue: [],
+      currentValue: [{
+        value: { uuid: 'node-root' },
+        type: 'cc.Node',
+        extends: ['cc.Object']
+      }],
+      references: [{
+        kind: 'node', objectUuid: 'node-root', fileId: 'file-root',
+        nodePath: 'root', available: true
+      }],
+      inspectorMetadata: {},
+      rawClassAttributes: {
+        name: 'targets',
+        value: [{
+          value: { uuid: 'node-root' },
+          type: 'cc.Node',
+          extends: ['cc.Object']
+        }],
+        type: 'cc.Node',
+        isArray: true,
+        extends: ['cc.Object']
+      },
+      rawConsumedKeys: []
+    });
+
+    const result = summarizeDesignSnapshot(snapshot);
+    expect(result.tree[0].children[0].components[0]).toMatchObject({
+      properties: { targets: expect.any(Array) },
+      references: {
+        'targets[0]': {
+          kind: 'node', objectUuid: 'node-root', fileId: 'file-root',
+          nodePath: 'root', available: true
+        }
+      }
+    });
+  });
+
   it('plan 复用差异与排序引擎，preview 只渲染而不执行写请求', async () => {
     const planClient = createDesignClient();
     const plan = await executeCommand(
@@ -476,6 +540,30 @@ describe('声明式 CLI 命令', () => {
         failedStep: { code: 'CREATED_COMPONENT_NOT_FOUND' }
       });
       expect(client.methods).toContain('probe.transactionRollback');
+    } finally {
+      await rm(journalRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('component.add 从真实 Bridge 顶层 componentSchemas 解析新组件 UUID', async () => {
+    const journalRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-design-bridge-component-'));
+    try {
+      const client = createBridgeComponentApplyClient();
+      const result = await executeCommand(
+        parseCommand([
+          'design-apply', '--project-id', 'project-1', '--target', COMPONENT_TARGET_JSON,
+          '--execution-id', 'apply-bridge-component'
+        ]),
+        client,
+        undefined,
+        { journalRoot }
+      ) as { status: string; resolutions: { components: Record<string, string> } };
+
+      expect(result).toMatchObject({
+        status: 'committed',
+        resolutions: { components: { '$root::cc.Button': 'component-button' } }
+      });
+      expect(client.methods).not.toContain('probe.transactionRollback');
     } finally {
       await rm(journalRoot, { recursive: true, force: true });
     }
@@ -802,6 +890,36 @@ function createAmbiguousComponentApplyClient(): DesignClient {
   };
 }
 
+/** 创建使用真实 Bridge 顶层 componentSchemas 返回新组件的 Client。 */
+function createBridgeComponentApplyClient(): DesignClient {
+  const methods: string[] = [];
+  let mounted = false;
+  return {
+    methods,
+    async request(method, payload) {
+      methods.push(method);
+      if (method === 'probe.documentSnapshot') {
+        return createBridgeComponentSnapshot(24, mounted ? ['component-button'] : []);
+      }
+      const transactionId = (payload as { params: { transactionId: string } }).params.transactionId;
+      if (method === 'probe.writePrepare') return createWriteResult(transactionId, 'validated', 0);
+      if (method === 'probe.writeConfirm') {
+        mounted = true;
+        return createWriteResult(transactionId, 'committed', 1);
+      }
+      if (method === 'probe.transactionRollback') {
+        mounted = false;
+        return {
+          ...createWriteResult(transactionId, 'rolled-back', 1),
+          verification: null,
+          rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
+        };
+      }
+      throw new Error(`UNEXPECTED_METHOD:${method}`);
+    }
+  };
+}
+
 /** 创建脚本资产存在且挂载后可重读到自定义组件的 Client。 */
 function createScriptComponentApplyClient(): DesignClient {
   const methods: string[] = [];
@@ -930,6 +1048,56 @@ function createSnapshot(
       prefabInstances: { total: 0, resolved: 0 }, overrides: { total: 0, decoded: 0 }
     },
     unresolved: [], diagnostics: []
+  };
+}
+
+/** 把旧节点内组件夹具转换为 Creator document-scan 的真实顶层组件形状。 */
+function createBridgeComponentSnapshot(
+  fontSize = 24,
+  buttonUuids: string[] = [],
+  extraComponents: Array<{ uuid: string; type: string }> = []
+) {
+  const snapshot = createSnapshot(fontSize, buttonUuids, extraComponents);
+  const componentSchemas = snapshot.nodes.flatMap((node) =>
+    (node.components ?? []).map((component, componentIndex) => ({
+      componentUuid: component.identity.objectUuid as string,
+      componentFileId: component.identity.fileId,
+      nodeUuid: node.identity.objectUuid as string,
+      nodePath: node.path,
+      componentIndex,
+      className: component.className,
+      qualifiedName: component.qualifiedName ?? component.className,
+      typeId: component.identity.typeId,
+      scriptUuid: component.identity.scriptUuid,
+      scriptPath: component.scriptPath ?? null,
+      inheritance: component.inheritance ?? [],
+      executionOrder: null,
+      properties: component.properties.map((property) => ({
+        propertyPath: property.propertyPath,
+        serializedName: property.propertyPath,
+        displayName: property.displayName ?? property.propertyPath,
+        declaredType: property.declaredType,
+        actualType: property.actualType ?? property.declaredType,
+        valueKind: property.valueKind,
+        nullable: property.effectiveValue === null,
+        serializable: true,
+        visible: true,
+        readonly: false,
+        defaultValue: property.defaultValue ?? null,
+        currentValue: property.effectiveValue,
+        references: [],
+        inspectorMetadata: property.inspectorMetadata ?? {},
+        rawClassAttributes: {},
+        rawConsumedKeys: []
+      })),
+      rawClassAttributes: {},
+      unresolved: []
+    }))
+  );
+  return {
+    ...snapshot,
+    nodes: snapshot.nodes.map((node) => ({ ...node, components: [] })),
+    componentSchemas
   };
 }
 

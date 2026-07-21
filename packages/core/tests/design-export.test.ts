@@ -39,6 +39,25 @@ describe('design-export', () => {
     expect(computeDesignDiff(current, target.tree, false)).toEqual([]);
   });
 
+  it('导出时省略组件指向所属节点的自引用，但保留跨节点引用', () => {
+    const current = createCurrentTree();
+    current[0]!.children[1]!.components[0]!.references!.node = {
+      kind: 'node', objectUuid: 'node-button', fileId: 'file-button',
+      nodePath: 'root/button', available: true
+    };
+
+    const target = exportDesignDocument(current, {
+      scope: 'current-document', assetUuid: 'scene-1'
+    });
+    const references = target.tree[0]!.children![1]!.components![0]!.references;
+
+    expect(references).not.toHaveProperty('node');
+    expect(references).toMatchObject({
+      'clickEvents[0].target': '$node-file-label'
+    });
+    expect(computeDesignDiff(current, target.tree, false)).toEqual([]);
+  });
+
   it('verify 对节点、属性、引用和覆盖归属逐项报告', () => {
     const current = createCurrentTree();
     const target = exportDesignDocument(current, {
