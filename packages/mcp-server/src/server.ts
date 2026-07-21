@@ -1,7 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   CocosReadonlyToolService,
+  CocosDesignToolService,
   CocosWriteToolService,
+  registerCocosDesignGatedTools,
+  registerCocosDesignReadonlyTools,
   registerCocosReadonlyTools,
   registerCocosWriteTools,
   type CocosReadonlyToolServiceOptions
@@ -15,7 +18,10 @@ export const COCOS_READONLY_TOOL_NAMES = [
   'cocos_component_schema',
   'cocos_document_snapshot',
   'cocos_prefab_graph',
-  'cocos_project_scan'
+  'cocos_project_scan',
+  'cocos_design_inspect',
+  'cocos_design_plan',
+  'cocos_design_preview'
 ] as const;
 
 export const COCOS_WRITE_TOOL_NAMES = [
@@ -23,7 +29,14 @@ export const COCOS_WRITE_TOOL_NAMES = [
   'cocos_write_confirm',
   'cocos_transaction_status',
   'cocos_transaction_list',
-  'cocos_transaction_rollback'
+  'cocos_transaction_rollback',
+  'cocos_design_apply'
+] as const;
+
+/** 只有显式 enableWrites 才注册、但本身不修改 Creator 的设计工具。 */
+export const COCOS_GATED_READONLY_TOOL_NAMES = [
+  'cocos_design_verify',
+  'cocos_design_export'
 ] as const;
 
 /** MCP 运行时开关；写能力必须显式开启，默认保持只读。 */
@@ -32,8 +45,9 @@ export interface CocosMcpRuntimeOptions {
 }
 
 /**
- * 创建 Cocos MCP Server：默认只暴露阶段一八个只读工具；
- * 仅当显式 enableWrites（对应启动参数 --enable-writes）时追加注册阶段二写工具。
+ * 创建 Cocos MCP Server：默认暴露阶段一基础只读工具和阶段四三个声明式只读工具；
+ * 默认同时开放声明式 inspect/plan/preview；仅当显式 enableWrites（对应启动参数
+ * --enable-writes）时追加注册阶段二写工具和 design apply/verify/export。
  *
  * @param options 共享 Probe Client 和服务器授权的报告根目录。
  * @param runtime 运行时开关。
@@ -49,8 +63,14 @@ export function createCocosMcpServer(
   });
   const readonlyService = new CocosReadonlyToolService(options);
   registerCocosReadonlyTools(server, readonlyService);
+  registerCocosDesignReadonlyTools(server, new CocosDesignToolService(options, readonlyService));
   if (runtime.enableWrites === true) {
-    registerCocosWriteTools(server, new CocosWriteToolService(options, readonlyService));
+    const writeService = new CocosWriteToolService(options, readonlyService);
+    registerCocosWriteTools(server, writeService);
+    registerCocosDesignGatedTools(
+      server,
+      new CocosDesignToolService(options, readonlyService, writeService)
+    );
   }
   return server;
 }

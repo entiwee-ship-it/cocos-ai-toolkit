@@ -51,9 +51,9 @@ export function readMcpRuntimeConfig(
 /**
  * 先连接唯一 Probe Client，再启动 MCP Transport，并返回幂等关闭句柄。
  *
- * @param options 已构造的 Probe Client、MCP Server 和 Transport。
+ * @param options 已构造的 Probe Client、MCP Server（包含默认只读和可选门控工具）和 Transport。
  * @param options.probeClient 提供 Creator WebSocket 请求的共享客户端。
- * @param options.server 已登记八个只读工具的 MCP Server。
+ * @param options.server 已登记默认只读工具和可选门控工具的 MCP Server。
  * @param options.transport 当前 MCP stdio Transport。
  * @returns 可安全重复调用的运行时关闭句柄。
  */

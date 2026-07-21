@@ -1,10 +1,25 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
+  DesignApplyCommittedError,
+  DesignApplyConfirmError,
+  DesignApplyOutcomeUnknownError,
+  DesignApplyPreparedError,
+  DesignApplyRollbackError,
+  applyDesignPlan,
   appendWriteJournalEntry,
+  buildDesignPlan,
+  computeDesignDiff,
   createAssetManifestHash,
+  exportDesignDocument,
   JsonScanReportWriter,
+  mergeDocumentPages,
   parseScanCheckpoint,
   ProjectScanner,
+  verifyDesignTarget,
+  type DesignApplyRuntime,
+  type DesignApplyVerificationContext,
+  type DesignApplyVerificationItem,
+  type DesignCurrentNode,
   type ProjectScanDocumentSummary,
   type ProjectScanResult,
   type ReadonlyProbeClient,
@@ -13,6 +28,9 @@ import {
 import {
   AssetRecordSchema,
   ComponentTypeSchemaSchema,
+  DesignPlanSchema,
+  DesignTargetDocumentSchema,
+  DesignVerifyReportSchema,
   DocumentAssetRecordSchema,
   DocumentSnapshotSchema,
   PrefabGraphEdgeSchema,
@@ -24,11 +42,23 @@ import {
   WriteOperationSchema,
   WriteTransactionRequestSchema,
   WriteTransactionResultSchema,
+  WriteRevisionSnapshotSchema,
   type AssetRecord,
+  type DesignPlan,
+  type DesignPlanItem,
+  type DesignTargetDocument,
+  type DesignTargetNode,
+  type DocumentSnapshot,
   type PrefabGraph,
-  type ProjectCoverage
+  type PrefabImpactAnalysis,
+  type ProbeComponent,
+  type ProbeNode,
+  type ProjectCoverage,
+  type WriteTransactionResult,
+  type WriteScope
 } from '@cocos-ai/protocol';
 import { randomUUID, createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { constants, createReadStream } from 'node:fs';
 import {
   access,
@@ -53,6 +83,8 @@ const SUPPORTED_CREATOR_VERSION = '3.8.8';
 const ASSET_SEARCH_PAGE_SIZE_MAX = 200;
 const ASSET_INSPECT_PAGE_SIZE_MAX = 500;
 const REPORT_PAGE_SIZE_MAX = 200;
+const DESIGN_DOCUMENT_READY_TIMEOUT_MS = 10_000;
+const DESIGN_DOCUMENT_READY_POLL_MS = 50;
 
 const EditorSessionSchema = z.object({
   editorInstanceId: z.string().min(1),
@@ -302,6 +334,55 @@ const READONLY_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false
 } as const;
+
+const DesignInspectPayloadSchema = z.object({
+  document: z.record(z.string(), z.unknown()),
+  revision: z.string().min(1),
+  tree: z.array(z.record(z.string(), z.unknown())),
+  prefabInstances: z.array(z.unknown()),
+  coverage: z.record(z.string(), z.unknown()),
+  risks: z.array(z.string()),
+  unresolved: z.array(z.unknown())
+});
+
+const DesignInspectOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  inspect: DesignInspectPayloadSchema
+});
+
+const DesignPlanOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  plan: DesignPlanSchema
+});
+
+const DesignPreviewSchema = z.object({
+  mode: z.literal('preview'),
+  operationCount: z.number().int().nonnegative(),
+  operations: z.array(z.record(z.string(), z.unknown())),
+  impactAnalysis: z.unknown().optional(),
+  risks: z.array(z.string()),
+  unresolved: z.array(z.unknown())
+});
+
+const DesignPreviewOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  preview: DesignPreviewSchema
+});
+
+const DesignVerifyOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  report: DesignVerifyReportSchema
+});
+
+const DesignExportOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  target: DesignTargetDocumentSchema
+});
+
+const DesignApplyOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  result: z.record(z.string(), z.unknown())
+});
 
 export type EditorSession = z.infer<typeof EditorSessionSchema>;
 type AssetCursor = z.infer<typeof CursorSchema>;
@@ -855,8 +936,729 @@ export class CocosReadonlyToolService {
   }
 }
 
+interface DesignInspectPayload {
+  document: DocumentSnapshot['document'];
+  revision: string;
+  tree: DesignCurrentNode[];
+  prefabInstances: DocumentSnapshot['prefabInstances'];
+  coverage: DocumentSnapshot['coverage'];
+  risks: string[];
+  unresolved: DocumentSnapshot['unresolved'];
+}
+
+interface DesignReadContext {
+  editor: EditorSession;
+  snapshot: DocumentSnapshot;
+  inspect: DesignInspectPayload;
+}
+
 /**
- * 把阶段一八个 Cocos 只读工具登记到 MCP Server。
+ * 阶段四声明式工具服务。只读入口和门控入口共用同一套完整快照、差异、计划与导出引擎。
+ */
+export class CocosDesignToolService {
+  constructor(
+    private readonly options: CocosReadonlyToolServiceOptions,
+    private readonly editors: CocosReadonlyToolService,
+    private readonly writes?: CocosWriteToolService
+  ) {}
+
+  /**
+   * 读取当前文档或指定子树的声明式摘要。
+   *
+   * @param input 项目选择与可选根节点 UUID。
+   * @returns 编辑器身份和规整后的设计摘要。
+   */
+  async inspectDesign(input: {
+    projectId: string;
+    editorInstanceId?: string;
+    rootUuid?: string;
+  }) {
+    const context = await this.readDesignContext(input, input.rootUuid);
+    const output = DesignInspectOutputSchema.parse({
+      editor: context.editor,
+      inspect: context.inspect
+    });
+    await this.audit('cocos_design_inspect', input, output.inspect);
+    return output;
+  }
+
+  /**
+   * 对比当前文档与目标文档并生成有序声明式计划。
+   *
+   * @param input 项目选择与目标文档。
+   * @returns 编辑器身份和协议校验后的计划。
+   */
+  async planDesign(input: {
+    projectId: string;
+    editorInstanceId?: string;
+    target: DesignTargetDocument;
+  }) {
+    const target = DesignTargetDocumentSchema.parse(input.target);
+    const context = await this.readDesignContext(input);
+    const plan = await this.createPlan(context, target);
+    const output = DesignPlanOutputSchema.parse({ editor: context.editor, plan });
+    await this.audit('cocos_design_plan', input, output.plan);
+    return output;
+  }
+
+  /**
+   * 把声明式计划渲染为带顺序和 Override 标注的零执行预览。
+   *
+   * @param input 项目选择与目标文档。
+   * @returns 编辑器身份和人类可读预览。
+   */
+  async previewDesign(input: {
+    projectId: string;
+    editorInstanceId?: string;
+    target: DesignTargetDocument;
+  }) {
+    const target = DesignTargetDocumentSchema.parse(input.target);
+    const context = await this.readDesignContext(input);
+    const plan = await this.createPlan(context, target);
+    const preview = renderDesignPreview(plan);
+    const output = DesignPreviewOutputSchema.parse({ editor: context.editor, preview });
+    await this.audit('cocos_design_preview', input, output.preview);
+    return output;
+  }
+
+  /**
+   * 独立重读当前文档并逐项验证目标结构、属性、引用和 Override 归属。
+   *
+   * @param input 项目选择与目标文档。
+   * @returns 编辑器身份和逐项验证报告。
+   */
+  async verifyDesign(input: {
+    projectId: string;
+    editorInstanceId?: string;
+    target: DesignTargetDocument;
+  }) {
+    const target = DesignTargetDocumentSchema.parse(input.target);
+    const context = await this.readDesignContext(input);
+    const report = DesignVerifyReportSchema.parse(verifyDesignTarget(
+      context.inspect.tree,
+      target
+    ));
+    const output = DesignVerifyOutputSchema.parse({ editor: context.editor, report });
+    await this.audit('cocos_design_verify', input, output.report);
+    return output;
+  }
+
+  /**
+   * 把当前文档或指定子树导出为可 round-trip 的声明式目标文档。
+   *
+   * @param input 项目选择、可选根节点、目标作用域和资产 UUID。
+   * @returns 编辑器身份和通过协议校验的目标文档。
+   */
+  async exportDesign(input: {
+    projectId: string;
+    editorInstanceId?: string;
+    rootUuid?: string;
+    scope?: DesignTargetDocument['document']['scope'];
+    assetUuid?: string;
+  }) {
+    const context = await this.readDesignContext(input, input.rootUuid);
+    const target = exportDesignDocument(
+      context.inspect.tree,
+      {
+        scope: input.scope ?? 'current-document',
+        assetUuid: input.assetUuid ?? context.snapshot.document.assetUuid,
+        prefabInstances: context.snapshot.prefabInstances.map((instance) => ({
+          instanceRootObjectUuid: instance.instanceRootObjectUuid,
+          sourcePrefabAssetUuid: instance.sourcePrefabAssetUuid
+        }))
+      }
+    );
+    const output = DesignExportOutputSchema.parse({ editor: context.editor, target });
+    await this.audit('cocos_design_export', input, output.target);
+    return output;
+  }
+
+  /**
+   * 生成计划并经现有事务写服务执行，执行期维护逻辑 ID 与真实 UUID 映射。
+   *
+   * @param input 项目选择、目标文档、执行 ID 和可选 revision。
+   * @returns 编辑器身份和声明式事务执行结果。
+   */
+  async applyDesign(input: {
+    projectId: string;
+    editorInstanceId?: string;
+    target: DesignTargetDocument;
+    executionId?: string;
+    revision?: z.infer<typeof RevisionPreconditionSchema>;
+  }) {
+    if (!this.writes) throw new Error('DESIGN_WRITES_DISABLED');
+    const target = DesignTargetDocumentSchema.parse(input.target);
+    const context = await this.readDesignContext(input);
+    const plan = await this.createPlan(context, target);
+    const executionId = input.executionId ?? `mcp-design-${randomUUID()}`;
+    const initialNodeResolutions = collectInitialNodeResolutions(context.inspect.tree, target.tree);
+    const runtime = this.createApplyRuntime(input, context, initialNodeResolutions);
+    const result = await applyDesignPlan(plan, runtime, {
+      executionId,
+      initialNodeResolutions,
+      scope: target.document.scope,
+      ...(input.revision ? { revision: input.revision } : {})
+    });
+    const output = DesignApplyOutputSchema.parse({ editor: context.editor, result });
+    await this.audit('cocos_design_apply', input, output.result, executionId);
+    return output;
+  }
+
+  /** 按当前作用域组装最小差异、有序计划和必要的 Prefab 影响分析。 */
+  private async createPlan(
+    context: DesignReadContext,
+    target: DesignTargetDocument
+  ): Promise<DesignPlan> {
+    const tree = context.inspect.tree;
+    let prefabGraph: ProjectScanResult['prefabGraph'] | undefined;
+    let sourceAssetPath: string | undefined;
+    if (target.document.scope !== 'current-document') {
+      const documentId = context.snapshot.document.assetUuid;
+      if (!documentId) throw new Error('DESIGN_WRITE_DOCUMENT_IDENTITY_REQUIRED');
+      prefabGraph = await this.readDesignPrefabGraph(context.editor, documentId);
+      sourceAssetPath = target.document.scope === 'source-prefab'
+        ? context.snapshot.document.path ?? undefined
+        : prefabGraph.nodes.find((node) =>
+            node.assetUuid === target.document.assetUuid
+          )?.path ?? undefined;
+    }
+    return DesignPlanSchema.parse(buildDesignPlan(
+      computeDesignDiff(tree, target.tree, target.prune === true),
+      target,
+      {
+        ...(prefabGraph ? { prefabGraph } : {}),
+        ...(sourceAssetPath ? { sourceAssetPath } : {}),
+        documentEditMode: context.snapshot.document.documentType === 'prefab' ? 'prefab' : 'scene'
+      }
+    ));
+  }
+
+  /** 扫描完整 Prefab 图，并在 finally 中恢复最初打开的设计文档。 */
+  private async readDesignPrefabGraph(
+    editor: EditorSession,
+    documentId: string
+  ): Promise<ProjectScanResult['prefabGraph']> {
+    const reportRoot = resolve(this.options.reportRoot);
+    const reportDirectory = join(reportRoot, 'mcp', 'design-impact');
+    await mkdir(reportDirectory, { recursive: true });
+    const runId = randomUUID();
+    const scanner = new ProjectScanner(
+      this.options.probeClient,
+      new JsonScanReportWriter(
+        join(reportDirectory, `${runId}.report.json`),
+        join(reportDirectory, `${runId}.checkpoint.json`),
+        reportRoot
+      )
+    );
+    try {
+      const result = await scanner.scan({
+        projectId: editor.projectId,
+        editorInstanceId: editor.editorInstanceId
+      });
+      return result.prefabGraph;
+    } finally {
+      await this.restoreDesignDocument(editor, documentId);
+    }
+  }
+
+  /** 重新打开影响扫描前的文档，等待 Scene/AssetDB 可读并核对文档身份。 */
+  private async restoreDesignDocument(editor: EditorSession, documentId: string): Promise<void> {
+    assertCapability(editor, 'probe.openAsset');
+    await this.options.probeClient.request('probe.openAsset', {
+      selector: toSelector(editor),
+      params: { uuid: documentId }
+    });
+    const deadline = Date.now() + DESIGN_DOCUMENT_READY_TIMEOUT_MS;
+    while (true) {
+      const state = await this.options.probeClient.request('probe.editorState', {
+        selector: toSelector(editor),
+        params: {}
+      });
+      const ready = state && typeof state === 'object'
+        ? (state as { ready?: unknown }).ready
+        : undefined;
+      if (
+        ready
+        && typeof ready === 'object'
+        && (ready as { scene?: unknown }).scene === true
+        && (ready as { assetDatabase?: unknown }).assetDatabase === true
+      ) {
+        break;
+      }
+      if (Date.now() >= deadline) throw new Error('DOCUMENT_NOT_READY');
+      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, DESIGN_DOCUMENT_READY_POLL_MS));
+    }
+    if (editor.capabilities.includes('probe.writeRevision')) {
+      const revision = WriteRevisionSnapshotSchema.parse(await this.options.probeClient.request(
+        'probe.writeRevision',
+        { selector: toSelector(editor), params: {} }
+      ));
+      if (revision.documentId !== documentId) throw new Error('DESIGN_WRITE_DOCUMENT_CHANGED');
+      return;
+    }
+    const snapshot = DocumentSnapshotSchema.parse(await this.options.probeClient.request(
+      'probe.documentSnapshot',
+      { selector: toSelector(editor), params: { mode: 'summary', pageSize: 1, cursor: null } }
+    ));
+    if (snapshot.document.assetUuid !== documentId) throw new Error('DESIGN_WRITE_DOCUMENT_CHANGED');
+  }
+
+  /** 读取同一 revision 的完整分页快照并规整成声明式树。 */
+  private async readDesignContext(
+    input: { projectId: string; editorInstanceId?: string },
+    rootUuid?: string
+  ): Promise<DesignReadContext> {
+    const editor = await this.editors.resolveEditor(input);
+    assertCapability(editor, 'probe.documentSnapshot');
+    const pages: DocumentSnapshot[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    while (true) {
+      const page = DocumentSnapshotSchema.parse(await this.options.probeClient.request(
+        'probe.documentSnapshot',
+        {
+          selector: toSelector(editor),
+          params: { mode: 'full', pageSize: 500, cursor }
+        }
+      ));
+      if (pages[0] && page.revision !== pages[0].revision) {
+        throw new Error('DOCUMENT_REVISION_CHANGED_DURING_PAGING');
+      }
+      pages.push(page);
+      cursor = page.page.nextCursor;
+      if (!cursor) break;
+      if (seenCursors.has(cursor)) throw new Error('DOCUMENT_CURSOR_LOOP');
+      seenCursors.add(cursor);
+    }
+    const snapshot = mergeDocumentPages(pages);
+    return {
+      editor,
+      snapshot,
+      inspect: summarizeDesignSnapshot(snapshot, rootUuid)
+    };
+  }
+
+  /** 使用现有写服务组装 core 声明式执行器需要的事务、重读和 revision 能力。 */
+  private createApplyRuntime(
+    input: { projectId: string; editorInstanceId?: string },
+    initialContext: DesignReadContext,
+    initialNodeResolutions: Record<string, string>
+  ): DesignApplyRuntime {
+    if (!this.writes) throw new Error('DESIGN_WRITES_DISABLED');
+    const writes = this.writes;
+    const client = this.options.probeClient;
+    const knownNodeUuids = new Set(readSnapshotNodeUuids(initialContext.snapshot));
+    const knownComponentUuids = new Set(readSnapshotComponentUuids(initialContext.snapshot));
+    const runtimeNodeResolutions = { ...initialNodeResolutions };
+    let cachedContext: DesignReadContext | null = initialContext;
+    const readContext = async (): Promise<DesignReadContext> => {
+      cachedContext ??= await this.readDesignContext(input);
+      return cachedContext;
+    };
+    return {
+      async prepare(request) {
+        try {
+          return (await writes.prepareWrite({
+            ...input,
+            transactionId: request.transactionId,
+            idempotencyKey: request.idempotencyKey,
+            scope: request.scope,
+            revision: request.revision,
+            impactAnalysis: request.impactAnalysis,
+            operations: request.operations,
+            save: request.save,
+            undoGroup: request.undoGroup
+          })).result;
+        } catch (error) {
+          if (error instanceof CocosWriteAuditError) {
+            throw new DesignApplyPreparedError(error.result, error.message);
+          }
+          throw new DesignApplyOutcomeUnknownError(readErrorMessage(error));
+        }
+      },
+      async confirm(transactionId) {
+        try {
+          const response = await writes.confirmWrite({ ...input, transactionId });
+          cachedContext = null;
+          return response.result;
+        } catch (error) {
+          cachedContext = null;
+          if (error instanceof CocosWriteAuditError) {
+            if (error.result.status === 'committed') {
+              throw new DesignApplyCommittedError(error.result, error.message);
+            }
+            throw new DesignApplyConfirmError(error.result, error.message);
+          }
+          throw new DesignApplyOutcomeUnknownError(readErrorMessage(error));
+        }
+      },
+      async rollback(transactionId) {
+        try {
+          const response = await writes.rollbackTransaction({ ...input, transactionId });
+          cachedContext = null;
+          return response.result;
+        } catch (error) {
+          cachedContext = null;
+          if (error instanceof CocosWriteAuditError) {
+            throw new DesignApplyRollbackError(error.result, error.message);
+          }
+          throw error;
+        }
+      },
+      async resolveCreatedNode(_logicalId, item) {
+        const { snapshot } = await readContext();
+        const parentIdentity = readPlanString(item, 'parentLogicalId')
+          ?? readPlanString(item, 'parentNodeUuid');
+        const parentUuid = parentIdentity?.startsWith('$')
+          ? runtimeNodeResolutions[parentIdentity]
+          : parentIdentity;
+        const expectedName = readPlanString(item, 'name');
+        const candidates = snapshot.nodes.filter((node) => {
+          const uuid = readProbeNodeUuid(node);
+          if (!uuid || knownNodeUuids.has(uuid)) return false;
+          if (parentUuid && node.parentObjectUuid !== parentUuid) return false;
+          return !expectedName || node.name === expectedName;
+        });
+        for (const uuid of readSnapshotNodeUuids(snapshot)) knownNodeUuids.add(uuid);
+        const resolved = candidates.length === 1 ? readProbeNodeUuid(candidates[0]) : null;
+        if (resolved) runtimeNodeResolutions[_logicalId] = resolved;
+        return resolved;
+      },
+      async resolveComponent(nodeUuid, componentType, expectCreated = false) {
+        const { snapshot } = await readContext();
+        const matches = findSnapshotComponents(snapshot, nodeUuid, componentType);
+        const newMatches = matches.filter((component) => {
+          const uuid = component.identity.objectUuid;
+          return uuid !== null && !knownComponentUuids.has(uuid);
+        });
+        const resolved = expectCreated
+          ? newMatches.length === 1 ? newMatches[0] : undefined
+          : newMatches.length === 1
+            ? newMatches[0]
+            : newMatches.length === 0 && matches.length === 1 ? matches[0] : undefined;
+        for (const uuid of readSnapshotComponentUuids(snapshot)) knownComponentUuids.add(uuid);
+        return resolved?.identity.objectUuid ?? null;
+      },
+      async verifyPlanItem(item, verificationContext) {
+        return verifyPlanItemFromSnapshot(
+          item,
+          verificationContext,
+          (await readContext()).snapshot
+        );
+      },
+      async waitForScript(scriptUuid) {
+        const index = readAssetIndex(await client.request(
+          'probe.assetIndex',
+          { selector: toSelector(initialContext.editor), params: {} }
+        ));
+        const script = index.scripts.find((entry) => entry.assetUuid === scriptUuid && entry.available);
+        if (!script) throw new Error(`SCRIPT_ASSET_NOT_FOUND:${scriptUuid}`);
+      },
+      async captureRevision() {
+        assertCapability(initialContext.editor, 'probe.writeRevision');
+        return WriteRevisionSnapshotSchema.parse(await client.request('probe.writeRevision', {
+          selector: toSelector(initialContext.editor), params: {}
+        })).revision;
+      }
+    };
+  }
+
+  /** 把声明式调用和结果摘要写入统一 MCP 审计目录。 */
+  private async audit(event: string, request: unknown, result: unknown, transactionId?: string): Promise<void> {
+    await mkdir(this.options.reportRoot, { recursive: true });
+    await appendWriteJournalEntry(this.options.reportRoot, {
+      transactionId: transactionId ?? `mcp-design-${randomUUID()}`,
+      idempotencyKey: transactionId ?? '',
+      at: new Date().toISOString(),
+      event,
+      source: 'mcp',
+      request,
+      verification: event === 'cocos_design_verify' ? result : undefined,
+      details: { status: readResultStatus(result) }
+    });
+  }
+}
+
+/** 把完整文档快照规整为声明式工具共享的树和风险摘要。 */
+function summarizeDesignSnapshot(
+  snapshot: DocumentSnapshot,
+  rootUuid?: string
+): DesignInspectPayload {
+  const nodes = new Map<string, DesignCurrentNode>();
+  const parents = new Map<string, string | null>();
+  for (const node of snapshot.nodes) {
+    const uuid = readProbeNodeUuid(node);
+    if (!uuid) continue;
+    nodes.set(uuid, toDesignCurrentNode(node, uuid));
+    parents.set(uuid, node.parentObjectUuid ?? null);
+  }
+  for (const [uuid, parentUuid] of parents) {
+    if (!parentUuid) continue;
+    const parent = nodes.get(parentUuid);
+    const child = nodes.get(uuid);
+    if (parent && child) parent.children.push(child);
+  }
+  let tree: DesignCurrentNode[];
+  if (rootUuid) {
+    const root = nodes.get(rootUuid);
+    if (!root) throw new Error('DESIGN_ROOT_NOT_FOUND');
+    tree = [root];
+  } else {
+    tree = [...nodes.entries()]
+      .filter(([uuid]) => {
+        const parentUuid = parents.get(uuid);
+        return !parentUuid || !nodes.has(parentUuid);
+      })
+      .map(([, node]) => node);
+  }
+  const risks = [
+    ...snapshot.diagnostics
+      .filter((item) => item.severity !== 'info')
+      .map((item) => item.message),
+    ...snapshot.prefabInstances.flatMap((instance) =>
+      instance.unresolved.map((item) => `${instance.hostNodePath ?? 'prefab-instance'}: ${item.reason}`)
+    )
+  ];
+  const inspect: DesignInspectPayload = {
+    document: snapshot.document,
+    revision: snapshot.revision,
+    tree,
+    prefabInstances: snapshot.prefabInstances,
+    coverage: snapshot.coverage,
+    risks: [...new Set(risks)],
+    unresolved: snapshot.unresolved
+  };
+  DesignInspectPayloadSchema.parse(inspect);
+  return inspect;
+}
+
+/** 把单个 Probe 节点转为差异引擎的当前节点视图。 */
+function toDesignCurrentNode(node: ProbeNode, uuid: string): DesignCurrentNode {
+  return {
+    uuid,
+    fileId: node.identity.fileId,
+    name: node.name ?? uuid,
+    path: node.path ?? node.name ?? uuid,
+    prefabAssetUuid: node.prefabContext?.sourcePrefabAssetUuid ?? null,
+    components: (node.components ?? []).map(toDesignCurrentComponent),
+    children: []
+  };
+}
+
+/** 把 Probe 组件属性拆成普通属性、引用和 Override 来源。 */
+function toDesignCurrentComponent(component: ProbeComponent): DesignCurrentNode['components'][number] {
+  const properties: Record<string, unknown> = {};
+  const references: Record<string, unknown> = {};
+  const propertySources: Record<string, string> = {};
+  for (const property of component.properties) {
+    propertySources[property.propertyPath] = property.valueSource;
+    if (property.valueKind.endsWith('-reference')) references[property.propertyPath] = property.effectiveValue;
+    else properties[property.propertyPath] = property.effectiveValue;
+  }
+  return {
+    uuid: component.identity.objectUuid,
+    type: component.qualifiedName ?? component.className ?? component.identity.typeId ?? 'unknown-component',
+    scriptUuid: component.identity.scriptUuid,
+    properties,
+    references,
+    propertySources
+  };
+}
+
+/** 把机器计划转为带序号和说明文本的零执行预览。 */
+function renderDesignPreview(plan: DesignPlan): z.infer<typeof DesignPreviewSchema> {
+  return DesignPreviewSchema.parse({
+    mode: 'preview',
+    operationCount: plan.items.length,
+    operations: plan.items.map((item, index) => ({
+      ...item,
+      index: index + 1,
+      description: `${index + 1}. ${item.kind} -> ${item.target}${item.overrideLayer ? ` (${item.overrideLayer})` : ''}`
+    })),
+    impactAnalysis: plan.impactAnalysis,
+    risks: plan.risks,
+    unresolved: plan.unresolved
+  });
+}
+
+/** 把目标树中已存在节点映射为真实 UUID，供执行器解析父子与引用身份。 */
+function collectInitialNodeResolutions(
+  currentNodes: DesignCurrentNode[],
+  targetNodes: DesignTargetNode[]
+): Record<string, string> {
+  const resolutions: Record<string, string> = {};
+  const matchLevel = (current: DesignCurrentNode[], targets: DesignTargetNode[]): void => {
+    const used = new Set<DesignCurrentNode>();
+    for (const target of targets) {
+      const prefabAssetUuid = target.prefabInstance?.assetUuid;
+      const matchesPrefab = (node: DesignCurrentNode): boolean =>
+        !prefabAssetUuid || node.prefabAssetUuid === prefabAssetUuid;
+      let match = target.fileId && target.match !== 'name-path'
+        ? current.find((node) => !used.has(node) && node.fileId === target.fileId && matchesPrefab(node))
+        : undefined;
+      if (!match && target.match !== 'fileId') {
+        const expectedName = target.prefabInstance?.name ?? target.name;
+        match = current.find((node) =>
+          !used.has(node)
+          && Boolean(expectedName)
+          && node.name === expectedName
+          && (!target.path || node.path === target.path)
+          && matchesPrefab(node)
+        );
+      }
+      if (!match) continue;
+      used.add(match);
+      resolutions[target.id] = match.uuid;
+      matchLevel(match.children, target.children ?? []);
+    }
+  };
+  matchLevel(currentNodes, targetNodes);
+  return resolutions;
+}
+
+/** 使用提交后的全新快照验证一个声明式计划项。 */
+function verifyPlanItemFromSnapshot(
+  item: DesignPlanItem,
+  context: DesignApplyVerificationContext,
+  snapshot: DocumentSnapshot
+): DesignApplyVerificationItem {
+  const targetUuid = readPlanString(item, 'targetUuid')
+    ?? (item.target.startsWith('$') ? context.nodeResolutions[item.target] : item.target);
+  if (item.kind === 'script.wait_for_compile') {
+    return createDesignVerificationItem(item, 'script-asset-available', 'script-asset-available');
+  }
+  if (item.kind === 'node.create' || item.kind === 'prefab.instantiate') {
+    const node = targetUuid ? findSnapshotNode(snapshot, targetUuid) : undefined;
+    const expectedName = readPlanString(item, 'name');
+    const nameMatches = Boolean(node) && (!expectedName || node?.name === expectedName);
+    if (item.kind === 'prefab.instantiate') {
+      const sourcePrefabAssetUuid = readPlanString(item, 'prefabAssetUuid');
+      const relation = snapshot.prefabInstances.find((instance) =>
+        instance.instanceRootObjectUuid === targetUuid
+      );
+      const passed = nameMatches && relation?.sourcePrefabAssetUuid === sourcePrefabAssetUuid;
+      return createDesignVerificationItem(
+        item,
+        { nodeExists: true, name: expectedName ?? 'any', sourcePrefabAssetUuid },
+        { nodeExists: Boolean(node), name: node?.name ?? null, sourcePrefabAssetUuid: relation?.sourcePrefabAssetUuid ?? null },
+        passed
+      );
+    }
+    return createDesignVerificationItem(item, expectedName ?? 'exists', node?.name ?? 'missing', nameMatches);
+  }
+  if (item.kind === 'node.delete') {
+    const actual = targetUuid ? findSnapshotNode(snapshot, targetUuid) : undefined;
+    return createDesignVerificationItem(item, 'missing', actual ? 'exists' : 'missing');
+  }
+  if (item.kind === 'component.add' || item.kind === 'component.remove') {
+    const componentType = readPlanString(item, 'componentType');
+    const componentUuid = readPlanString(item, 'componentUuid')
+      ?? (componentType ? context.componentResolutions[`${item.target}::${componentType}`] : undefined);
+    const actual = componentUuid ? findSnapshotComponentByUuid(snapshot, componentUuid) : undefined;
+    return item.kind === 'component.add'
+      ? createDesignVerificationItem(item, componentUuid ?? 'resolved-component', actual?.identity.objectUuid ?? 'missing')
+      : createDesignVerificationItem(item, 'missing', actual ? 'exists' : 'missing');
+  }
+  if (item.kind === 'component.set_property' || item.kind === 'component.set_reference') {
+    const componentType = readPlanString(item, 'componentType');
+    const componentUuid = readPlanString(item, 'componentUuid')
+      ?? (componentType ? context.componentResolutions[`${item.target}::${componentType}`] : undefined);
+    const component = componentUuid ? findSnapshotComponentByUuid(snapshot, componentUuid) : undefined;
+    const property = component?.properties.find((entry) => entry.propertyPath === item.propertyPath);
+    if (item.kind === 'component.set_property') {
+      return createDesignVerificationItem(item, item.value, property?.effectiveValue ?? null);
+    }
+    const resolveTo = readPlanString(item, 'resolveTo');
+    const expected = resolveTo ? context.nodeResolutions[resolveTo] ?? null : item.params?.reference;
+    const actual = property?.effectiveValue;
+    const actualIdentity = resolveTo
+      && actual && typeof actual === 'object'
+      ? (actual as { objectUuid?: unknown }).objectUuid
+      : actual;
+    return createDesignVerificationItem(item, expected, actualIdentity ?? null);
+  }
+  if (item.kind === 'prefab.apply_to_source') {
+    const sourcePrefabAssetUuid = readPlanString(item, 'sourcePrefabAssetUuid');
+    const relation = snapshot.prefabInstances.find((instance) =>
+      instance.instanceRootObjectUuid === targetUuid
+    );
+    return createDesignVerificationItem(
+      item,
+      sourcePrefabAssetUuid,
+      relation?.sourcePrefabAssetUuid ?? null
+    );
+  }
+  return createDesignVerificationItem(item, item.kind, 'unsupported', false);
+}
+
+/** 创建一个稳定的声明式逐项验证结果。 */
+function createDesignVerificationItem(
+  item: DesignPlanItem,
+  expected: unknown,
+  actual: unknown,
+  passed = isDeepStrictEqual(expected, actual)
+): DesignApplyVerificationItem {
+  return {
+    description: `${item.kind}:${item.target}${item.propertyPath ? `.${item.propertyPath}` : ''}`,
+    expected,
+    actual,
+    passed
+  };
+}
+
+function readPlanString(item: DesignPlanItem, key: string): string | null {
+  const value = item.params?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function findSnapshotNode(snapshot: DocumentSnapshot, uuid: string): ProbeNode | undefined {
+  return snapshot.nodes.find((node) => readProbeNodeUuid(node) === uuid);
+}
+
+function findSnapshotComponentByUuid(snapshot: DocumentSnapshot, uuid: string): ProbeComponent | undefined {
+  for (const node of snapshot.nodes) {
+    const component = node.components?.find((entry) => entry.identity.objectUuid === uuid);
+    if (component) return component;
+  }
+  return undefined;
+}
+
+function findSnapshotComponents(
+  snapshot: DocumentSnapshot,
+  nodeUuid: string,
+  componentType: string
+): ProbeComponent[] {
+  return findSnapshotNode(snapshot, nodeUuid)?.components?.filter((component) =>
+    (component.qualifiedName ?? component.className ?? component.identity.typeId) === componentType
+  ) ?? [];
+}
+
+function readProbeNodeUuid(node: ProbeNode): string | null {
+  return node.identity.objectUuid ?? node.identity.sessionId;
+}
+
+function readSnapshotNodeUuids(snapshot: DocumentSnapshot): string[] {
+  return snapshot.nodes.map(readProbeNodeUuid).filter((uuid): uuid is string => uuid !== null);
+}
+
+function readSnapshotComponentUuids(snapshot: DocumentSnapshot): string[] {
+  return snapshot.nodes.flatMap((node) =>
+    (node.components ?? [])
+      .map((component) => component.identity.objectUuid)
+      .filter((uuid): uuid is string => uuid !== null)
+  );
+}
+
+function readResultStatus(result: unknown): string {
+  if (!result || typeof result !== 'object') return 'completed';
+  const status = (result as { status?: unknown; passed?: unknown }).status;
+  if (typeof status === 'string') return status;
+  const passed = (result as { passed?: unknown }).passed;
+  return typeof passed === 'boolean' ? passed ? 'passed' : 'failed' : 'completed';
+}
+
+/**
+ * 把基础 Cocos 只读工具登记到 MCP Server。
  *
  * @param server 待登记工具的 MCP Server。
  * @param service 共享的只读 Creator 请求服务。
@@ -952,6 +1754,78 @@ export function registerCocosReadonlyTools(
     outputSchema: ProjectScanOutputSchema,
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(await service.scanProject(input)));
+}
+
+/** 登记默认开放的声明式只读工具。 */
+export function registerCocosDesignReadonlyTools(
+  server: McpServer,
+  service: CocosDesignToolService
+): void {
+  server.registerTool('cocos_design_inspect', {
+    description: '读取当前 Creator 文档或指定子树的声明式结构、组件、覆盖和风险摘要。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      rootUuid: z.string().min(1).optional()
+    },
+    outputSchema: DesignInspectOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.inspectDesign(input)));
+  server.registerTool('cocos_design_plan', {
+    description: '对比当前文档与声明式目标，生成有序最小差异计划。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      target: DesignTargetDocumentSchema
+    },
+    outputSchema: DesignPlanOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.planDesign(input)));
+  server.registerTool('cocos_design_preview', {
+    description: '渲染声明式计划的逐项预览、Override 标注、影响面和风险，不执行写入。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      target: DesignTargetDocumentSchema
+    },
+    outputSchema: DesignPreviewOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.previewDesign(input)));
+}
+
+/** 登记仅在显式 enableWrites 时开放的声明式验证、导出和应用工具。 */
+export function registerCocosDesignGatedTools(
+  server: McpServer,
+  service: CocosDesignToolService
+): void {
+  server.registerTool('cocos_design_apply', {
+    description: '按声明式计划拆分事务执行，逐项重读验证，失败时逆序回滚。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      target: DesignTargetDocumentSchema,
+      executionId: z.string().min(1).optional(),
+      revision: RevisionPreconditionSchema.optional()
+    },
+    outputSchema: DesignApplyOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.applyDesign(input)));
+  server.registerTool('cocos_design_verify', {
+    description: '独立重读 Creator 当前状态，逐项核对声明式目标。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      target: DesignTargetDocumentSchema
+    },
+    outputSchema: DesignVerifyOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.verifyDesign(input)));
+  server.registerTool('cocos_design_export', {
+    description: '把当前文档或指定子树导出为可 round-trip 的声明式目标文档。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      rootUuid: z.string().min(1).optional(),
+      scope: z.enum(['current-document', 'source-prefab', 'apply-to-source']).optional(),
+      assetUuid: z.string().min(1).optional()
+    },
+    outputSchema: DesignExportOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.exportDesign(input)));
 }
 
 function toToolResult(value: unknown) {
@@ -1537,6 +2411,17 @@ const TransactionIdInput = {
   transactionId: z.string().min(1)
 };
 
+/** Bridge 已返回稳定事务结果，但 MCP 审计落盘失败。 */
+class CocosWriteAuditError extends Error {
+  constructor(
+    readonly result: WriteTransactionResult,
+    cause: unknown
+  ) {
+    super(`MCP_WRITE_AUDIT_FAILED:${readErrorMessage(cause)}`);
+    this.name = 'CocosWriteAuditError';
+  }
+}
+
 /**
  * 阶段二写工具服务。与只读工具共享 Probe Client、编辑器发现和报告根；
  * 每次写调用都把调用来源、参数、结果写入事务审计。
@@ -1552,7 +2437,9 @@ export class CocosWriteToolService {
     editorInstanceId?: string;
     transactionId: string;
     idempotencyKey: string;
+    scope?: WriteScope;
     revision: unknown;
+    impactAnalysis?: PrefabImpactAnalysis;
     operations: unknown[];
     save: boolean;
     undoGroup: string;
@@ -1562,8 +2449,9 @@ export class CocosWriteToolService {
     const request = WriteTransactionRequestSchema.parse({
       transactionId: input.transactionId,
       idempotencyKey: input.idempotencyKey,
-      scope: 'current-document',
+      scope: input.scope ?? 'current-document',
       revision: input.revision,
+      ...(input.impactAnalysis ? { impactAnalysis: input.impactAnalysis } : {}),
       operations: input.operations,
       save: input.save,
       undoGroup: input.undoGroup
@@ -1572,7 +2460,11 @@ export class CocosWriteToolService {
       'probe.writePrepare',
       { selector: toSelector(editor), params: request }
     ));
-    await this.audit('cocos_write_prepare', request, result);
+    try {
+      await this.audit('cocos_write_prepare', request, result);
+    } catch (error) {
+      throw new CocosWriteAuditError(result, error);
+    }
     return { editor, result };
   }
 
@@ -1583,7 +2475,11 @@ export class CocosWriteToolService {
       'probe.writeConfirm',
       { selector: toSelector(editor), params: { transactionId: input.transactionId } }
     ));
-    await this.audit('cocos_write_confirm', null, result);
+    try {
+      await this.audit('cocos_write_confirm', null, result);
+    } catch (error) {
+      throw new CocosWriteAuditError(result, error);
+    }
     return { editor, result };
   }
 
@@ -1614,7 +2510,11 @@ export class CocosWriteToolService {
       'probe.transactionRollback',
       { selector: toSelector(editor), params: { transactionId: input.transactionId } }
     ));
-    await this.audit('cocos_transaction_rollback', null, result);
+    try {
+      await this.audit('cocos_transaction_rollback', null, result);
+    } catch (error) {
+      throw new CocosWriteAuditError(result, error);
+    }
     return { editor, result };
   }
 

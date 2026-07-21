@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   COCOS_READONLY_TOOL_NAMES,
+  COCOS_GATED_READONLY_TOOL_NAMES,
   COCOS_WRITE_TOOL_NAMES,
   createCocosMcpServer
 } from '../src/server.js';
@@ -58,7 +59,7 @@ afterEach(async () => {
 });
 
 describe('Cocos readonly MCP tools', () => {
-  it('只注册八个只读工具，并把 editor_list 作为唯一的全局发现入口', async () => {
+  it('只注册基础只读工具和三个声明式只读工具，并把 editor_list 作为唯一的全局发现入口', async () => {
     const probeClient = new RecordingProbeClient(() => []);
     const { client } = await createHarness(probeClient);
 
@@ -79,7 +80,10 @@ describe('Cocos readonly MCP tools', () => {
       ['cocos_component_schema', ['projectId', 'uuid']],
       ['cocos_document_snapshot', ['projectId', 'mode', 'pageSize']],
       ['cocos_prefab_graph', ['projectId']],
-      ['cocos_project_scan', ['projectId']]
+      ['cocos_project_scan', ['projectId']],
+      ['cocos_design_inspect', ['projectId']],
+      ['cocos_design_plan', ['projectId', 'target']],
+      ['cocos_design_preview', ['projectId', 'target']]
     ]));
     expect(result.tools.every((tool) => tool.outputSchema?.type === 'object')).toBe(true);
     const projectScanSchema = result.tools.find((tool) =>
@@ -890,6 +894,140 @@ describe('Cocos readonly MCP tools', () => {
     }));
     expect(probeClient.requests).toEqual([]);
   });
+
+  it('设计只读工具复用完整快照、差异和计划引擎', async () => {
+    const reportRoot = await createTemporaryRoot();
+    const target = createDesignTarget(28);
+    const probeClient = createDesignProbeClient();
+    const { client } = await createHarness(probeClient, reportRoot);
+
+    const inspect = await client.callTool({
+      name: 'cocos_design_inspect',
+      arguments: { projectId: 'project-a' }
+    });
+    expect(inspect.isError).not.toBe(true);
+    expect(inspect.structuredContent).toMatchObject({
+      editor: createEditorSession('editor-a'),
+      inspect: { tree: [{ name: 'root', children: [{ name: 'label' }] }] }
+    });
+
+    const plan = await client.callTool({
+      name: 'cocos_design_plan',
+      arguments: { projectId: 'project-a', target }
+    });
+    expect(plan.isError).not.toBe(true);
+    expect(plan.structuredContent).toMatchObject({
+      plan: { items: [expect.objectContaining({ kind: 'component.set_property', target: '$label', value: 28 })] }
+    });
+
+    const preview = await client.callTool({
+      name: 'cocos_design_preview',
+      arguments: { projectId: 'project-a', target }
+    });
+    expect(preview.isError).not.toBe(true);
+    expect(preview.structuredContent).toMatchObject({
+      preview: { mode: 'preview', operationCount: 1 }
+    });
+    expect(probeClient.requests.filter((request) => request.method === 'probe.writePrepare')).toHaveLength(0);
+  });
+});
+
+describe('Cocos gated design MCP tools', () => {
+  it('verify/export 默认不注册，显式 enableWrites 后注册并完成独立读取', async () => {
+    const probeClient = createDesignProbeClient();
+    const defaultHarness = await createHarness(probeClient, 'reports', { enableWrites: false });
+    const defaultTools = await defaultHarness.client.listTools();
+    expect(defaultTools.tools.map((tool) => tool.name)).toEqual(COCOS_READONLY_TOOL_NAMES);
+    expect(defaultTools.tools.map((tool) => tool.name)).not.toContain('cocos_design_verify');
+    expect(defaultTools.tools.map((tool) => tool.name)).not.toContain('cocos_design_export');
+
+    const reportRoot = await createTemporaryRoot();
+    const enabledHarness = await createHarness(
+      createDesignProbeClient(), reportRoot, { enableWrites: true }
+    );
+    const enabledTools = await enabledHarness.client.listTools();
+    expect(enabledTools.tools.map((tool) => tool.name)).toEqual([
+      ...COCOS_READONLY_TOOL_NAMES,
+      ...COCOS_WRITE_TOOL_NAMES,
+      ...COCOS_GATED_READONLY_TOOL_NAMES
+    ]);
+    const target = createDesignTarget(24);
+    const verify = await enabledHarness.client.callTool({
+      name: 'cocos_design_verify',
+      arguments: { projectId: 'project-a', target }
+    });
+    expect(verify.isError).not.toBe(true);
+    expect(verify.structuredContent).toMatchObject({ report: { passed: true } });
+
+    const exported = await enabledHarness.client.callTool({
+      name: 'cocos_design_export',
+      arguments: { projectId: 'project-a', rootUuid: 'node-root' }
+    });
+    expect(exported.isError).not.toBe(true);
+    expect(exported.structuredContent).toMatchObject({
+      target: { document: { scope: 'current-document', assetUuid: 'scene-1' }, tree: [{ id: '$node-file-root' }] }
+    });
+  });
+
+  it('design_apply 经事务写通道执行、重新读取验证并写入审计', async () => {
+    const reportRoot = await createTemporaryRoot();
+    const probeClient = createDesignApplyProbeClient();
+    const { client } = await createHarness(probeClient, reportRoot, { enableWrites: true });
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        target: createDesignTarget(28),
+        executionId: 'design-apply-1'
+      }
+    });
+
+    expect(applied.isError).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: { status: 'committed', verification: { passed: true } }
+    });
+    expect(probeClient.requests.map((request) => request.method)).toEqual([
+      'server.editors', 'probe.documentSnapshot',
+      'server.editors', 'probe.writePrepare',
+      'server.editors', 'probe.writeConfirm',
+      'server.editors', 'probe.documentSnapshot'
+    ]);
+    const transactionJournal = (await readFile(
+      join(reportRoot, 'write-journal', 'design-apply-1-001.jsonl'), 'utf8'
+    )).trim().split('\n').map((line) => JSON.parse(line) as { event: string });
+    expect(transactionJournal.map((entry) => entry.event)).toEqual([
+      'cocos_write_prepare', 'cocos_write_confirm'
+    ]);
+    const designJournal = JSON.parse((await readFile(
+      join(reportRoot, 'write-journal', 'design-apply-1.jsonl'), 'utf8'
+    )).trim());
+    expect(designJournal.event).toBe('cocos_design_apply');
+  });
+
+  it('design_apply 的 confirm 结果未知时要求人工恢复，不误报普通失败', async () => {
+    const reportRoot = await createTemporaryRoot();
+    const probeClient = createDesignApplyProbeClient({ confirmOutcomeUnknown: true });
+    const { client } = await createHarness(probeClient, reportRoot, { enableWrites: true });
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        target: createDesignTarget(28),
+        executionId: 'design-unknown-1'
+      }
+    });
+
+    expect(applied.isError).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: {
+        status: 'manual-recovery-required',
+        failedStep: { code: 'DESIGN_CONFIRM_OUTCOME_UNKNOWN' }
+      }
+    });
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.transactionRollback');
+  });
 });
 
 async function createHarness(
@@ -1013,6 +1151,123 @@ function createComponentProbeResult() {
     },
     unresolved: [],
     raw: { value: { uuid: { value: 'component-a' } } }
+  };
+}
+
+function createDesignTarget(fontSize: number) {
+  return {
+    document: { scope: 'current-document' as const, assetUuid: 'scene-1' },
+    tree: [{
+      id: '$root', fileId: 'file-root', name: 'root',
+      children: [{
+        id: '$label', fileId: 'file-label', name: 'label',
+        components: [{ type: 'cc.Label', properties: { fontSize } }]
+      }]
+    }]
+  };
+}
+
+function createDesignProbeClient(): RecordingProbeClient {
+  return new RecordingProbeClient((method) => {
+    if (method === 'server.editors') return [createEditorSession('editor-a')];
+    if (method === 'probe.documentSnapshot') return createDesignDocumentSnapshot();
+    throw new Error(`UNEXPECTED_REQUEST:${method}`);
+  });
+}
+
+function createDesignApplyProbeClient(
+  options: { confirmOutcomeUnknown?: boolean } = {}
+): RecordingProbeClient {
+  let fontSize = 24;
+  return new RecordingProbeClient((method, payload) => {
+    if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+    if (method === 'probe.documentSnapshot') return createDesignDocumentSnapshot(fontSize);
+    const transactionId = (payload as { params?: { transactionId?: string } }).params?.transactionId
+      ?? 'design-apply-1-001';
+    if (method === 'probe.writePrepare') {
+      return createDesignWriteResult(transactionId, 'validated', 0);
+    }
+    if (method === 'probe.writeConfirm') {
+      if (options.confirmOutcomeUnknown) throw new Error('连接在确认后中断');
+      fontSize = 28;
+      return createDesignWriteResult(transactionId, 'committed', 1);
+    }
+    if (method === 'probe.transactionRollback') {
+      fontSize = 24;
+      return {
+        ...createDesignWriteResult(transactionId, 'rolled-back', 1),
+        rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
+      };
+    }
+    throw new Error(`UNEXPECTED_REQUEST:${method}`);
+  });
+}
+
+function createDesignDocumentSnapshot(fontSize = 24) {
+  const snapshot = createDocumentSnapshot('scene-1');
+  snapshot.document = {
+    ...snapshot.document,
+    path: 'db://assets/main.scene',
+    filePath: 'E:/project-a/assets/main.scene',
+    documentType: 'scene' as const
+  };
+  const emptyIdentity = {
+    sessionId: null, assetUuid: null, fileId: null, objectUuid: null,
+    typeId: null, scriptUuid: null
+  };
+  snapshot.page.totalNodes = 2;
+  snapshot.nodes = [
+    {
+      kind: 'node' as const,
+      identity: { ...emptyIdentity, objectUuid: 'node-root', fileId: 'file-root' },
+      name: 'root', path: 'root', parentObjectUuid: null, childObjectUuids: ['node-label'],
+      components: []
+    },
+    {
+      kind: 'node' as const,
+      identity: { ...emptyIdentity, objectUuid: 'node-label', fileId: 'file-label' },
+      name: 'label', path: 'root/label', parentObjectUuid: 'node-root', childObjectUuids: [],
+      components: [{
+        kind: 'component' as const,
+        identity: { ...emptyIdentity, objectUuid: 'component-label', typeId: 'cc.Label' },
+        className: 'cc.Label',
+        properties: [{
+          propertyPath: 'fontSize', declaredType: 'number', valueKind: 'number' as const,
+          effectiveValue: fontSize, sourceValue: fontSize, overrideValue: null, valueSource: 'local'
+        }],
+        rawSerializedState: {}
+      }]
+    }
+  ];
+  snapshot.coverage = {
+    ...snapshot.coverage,
+    nodes: { total: 2, decoded: 2 },
+    components: { total: 1, decoded: 1 },
+    properties: { total: 1, decoded: 1 }
+  };
+  return snapshot;
+}
+
+function createDesignWriteResult(transactionId: string, status: string, executedOps: number) {
+  return {
+    transactionId,
+    status,
+    executedOps,
+    verification: status === 'committed'
+      ? {
+          passed: true,
+          verifiedAt: '2026-07-21T00:00:00.000Z',
+          items: Array.from({ length: executedOps }, (_, operationIndex) => ({
+            operationIndex,
+            description: `operation-${operationIndex}`,
+            expected: true,
+            actual: true,
+            passed: true
+          }))
+        }
+      : null,
+    failure: null,
+    rollbackEvidence: null
   };
 }
 
@@ -1141,20 +1396,26 @@ describe('Cocos write MCP tools', () => {
     expect(result.tools.map((tool) => tool.name)).toEqual(COCOS_READONLY_TOOL_NAMES);
   });
 
-  it('显式 enableWrites 后注册五个写工具且标注非只读', async () => {
+  it('显式 enableWrites 后注册写工具和门控只读工具，标注保持真实', async () => {
     const probeClient = new RecordingProbeClient(() => []);
     const { client } = await createHarness(probeClient, 'reports', { enableWrites: true });
 
     const result = await client.listTools();
     expect(result.tools.map((tool) => tool.name)).toEqual([
       ...COCOS_READONLY_TOOL_NAMES,
-      ...COCOS_WRITE_TOOL_NAMES
+      ...COCOS_WRITE_TOOL_NAMES,
+      ...COCOS_GATED_READONLY_TOOL_NAMES
     ]);
     const writeTools = result.tools.filter((tool) =>
       (COCOS_WRITE_TOOL_NAMES as readonly string[]).includes(tool.name)
     );
     expect(writeTools.every((tool) => tool.annotations?.readOnlyHint === false)).toBe(true);
     expect(writeTools.every((tool) => tool.annotations?.destructiveHint === true)).toBe(true);
+    const gatedReadonlyTools = result.tools.filter((tool) =>
+      (COCOS_GATED_READONLY_TOOL_NAMES as readonly string[]).includes(tool.name)
+    );
+    expect(gatedReadonlyTools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+    expect(gatedReadonlyTools.every((tool) => tool.annotations?.destructiveHint === false)).toBe(true);
   });
 
   it('cocos_write_prepare 校验请求、转发事务并把审计落盘', async () => {
