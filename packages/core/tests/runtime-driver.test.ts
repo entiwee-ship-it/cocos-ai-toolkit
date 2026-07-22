@@ -18,6 +18,7 @@ function createFakePage(options: {
     evaluateCalls: 0,
     gotoUrls: [] as string[],
     closed: false,
+    viewport: null as null | { width: number; height: number },
     consoleListeners: [] as Array<(entry: { level: string; text: string; stack?: string }) => void>,
     pageErrorListeners: [] as Array<(error: { message: string; stack?: string }) => void>
   };
@@ -54,7 +55,13 @@ function createFakePage(options: {
       return state.closed;
     },
     async mouseClick() {},
-    async keyPress() {}
+    async keyPress() {},
+    async setViewportSize(size: { width: number; height: number }) {
+      state.viewport = size;
+    },
+    async screenshotElement() {
+      return Buffer.alloc(0);
+    }
   };
   return { page, state };
 }
@@ -184,6 +191,21 @@ describe('RuntimeDriver', () => {
     });
     expect(session.requestedResolution).toEqual({ width: 720, height: 1280 });
     expect(session.actualResolution).toEqual({ width: 720, height: 826 });
+    await driver.dispose();
+  });
+
+  it('launch 指定分辨率时先放大视口容纳工具栏（与 capture 一致）', async () => {
+    const { page, state } = createFakePage({ actualResolution: { width: 1280, height: 720 } });
+    const driver = new RuntimeDriver({
+      launcher: async () => createFakeBrowser(page),
+      createSessionId: () => 's4b'
+    });
+    await driver.launch({
+      projectId: 'proj1',
+      url: 'http://192.168.1.23:7457/',
+      resolution: { width: 1280, height: 720 }
+    });
+    expect(state.viewport).toEqual({ width: 1480, height: 920 });
     await driver.dispose();
   });
 

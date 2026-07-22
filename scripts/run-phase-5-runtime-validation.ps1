@@ -438,7 +438,7 @@ try {
     # 运行时层级与组件读取
     $hierarchy = Invoke-CliJson -Arguments @('runtime-hierarchy', '--session-id', $script:previewSessionId, '--max-depth', '8') -Label 'CLI runtime-hierarchy' -TimeoutSeconds $ReadyTimeoutSeconds
     Assert-Condition -Condition ($hierarchy.data.source -eq 'preview-runtime') -Message '层级快照 source 必须是 preview-runtime'
-    Assert-Condition -Condition ([string]$hierarchy.data.root.name).Length -gt 0 -Message '层级快照根节点名为空'
+    Assert-Condition -Condition (([string]$hierarchy.data.root.name).Length -gt 0) -Message '层级快照根节点名为空'
     Assert-Condition -Condition ($hierarchy.data.root.dynamic -eq $false) -Message '场景根节点不应标记为动态创建'
     $hierarchyPath = Write-RawJsonReport -Name "$reportPrefix-runtime-hierarchy.json" -RawJson $hierarchy.raw
     Add-PassedStep -Name 'runtime-hierarchy 层级读取' -DurationMs $hierarchy.command.durationMs -Evidence $hierarchyPath
@@ -457,13 +457,16 @@ try {
         $probeComponentType = [string]@($hierarchy.data.root.components)[0].type
     }
     $component = Invoke-CliJson -Arguments @('runtime-component', '--session-id', $script:previewSessionId, '--path', $probePath, '--component-type', "cc.$($probeComponentType -replace '^cc\.', '')") -Label 'CLI runtime-component'
-    Assert-Condition -Condition ($component.data.found -eq $true -or (Test-ObjectProperty -Value $component.data -Name 'properties')) -Message "组件读取失败: $($component.raw)"
+    # 成功形态为协议快照（source/properties），失败形态为 {found:false,...}；StrictMode 下键访问必须先探测
+    $componentOk = (Test-ObjectProperty -Value $component.data -Name 'properties') -or ((Test-ObjectProperty -Value $component.data -Name 'found') -and $component.data.found -eq $true)
+    Assert-Condition -Condition $componentOk -Message "组件读取失败: $($component.raw)"
     $componentPath = Write-RawJsonReport -Name "$reportPrefix-runtime-component.json" -RawJson $component.raw
     Add-PassedStep -Name 'runtime-component 组件读取' -DurationMs $component.command.durationMs -Evidence $componentPath
 
     # 方法调用与属性监听（目标组件必须有 UITransform 才执行尺寸改写）
     $invokeTarget = Invoke-CliJson -Arguments @('runtime-component', '--session-id', $script:previewSessionId, '--path', $probePath, '--component-type', 'cc.UITransform') -Label 'CLI runtime-component UITransform' -AllowFailure
-    if ($invokeTarget.command.exitCode -eq 0 -and $invokeTarget.data.found -eq $true) {
+    $hasUiTransform = $invokeTarget.command.exitCode -eq 0 -and ((Test-ObjectProperty -Value $invokeTarget.data -Name 'properties') -or ((Test-ObjectProperty -Value $invokeTarget.data -Name 'found') -and $invokeTarget.data.found -eq $true))
+    if ($hasUiTransform) {
         $invoke = Invoke-CliJson -Arguments @('runtime-invoke', '--session-id', $script:previewSessionId, '--path', $probePath, '--component-type', 'cc.UITransform', '--method', 'setContentSize', '--args', '[321,222]') -Label 'CLI runtime-invoke'
         Assert-Condition -Condition ($invoke.data.invoked -eq $true) -Message 'invoke 未确认调用'
         $afterInvoke = Invoke-CliJson -Arguments @('runtime-component', '--session-id', $script:previewSessionId, '--path', $probePath, '--component-type', 'cc.UITransform') -Label 'CLI runtime-component 复核'
@@ -532,8 +535,10 @@ try {
     # 自动场景验证（图像差异基准取基准图截图的相对路径：<sessionId>/<文件名>）
     $evidenceSegments = ([string]$baselineCapture.data.files[0].path) -split '[\\/]'
     $baselineRelative = ($evidenceSegments[-2..-1] -join '/')
+    # scenario 自管理会话生命周期（不传 --session-id）：新会话 Console 缓冲从零开始，
+    # 启动日志在场景游标范围内可见；launch 分辨率与基准图保持一致（差异比较尺寸必须相同）
     $scenarioSteps = @(
-        @{ kind = 'launch' },
+        @{ kind = 'launch'; resolution = @{ width = 1280; height = 720 } },
         @{ kind = 'wait-node'; path = $probePath; timeoutMs = 10000 },
         @{ kind = 'assert-property'; path = $probePath; property = 'UITransform._enabled'; expected = $true },
         @{ kind = 'dispatch-input'; inputType = 'tap'; x = 100; y = 100 },
@@ -544,11 +549,15 @@ try {
     if ($scenarioSteps -notmatch '^\[') {
         $scenarioSteps = "[$scenarioSteps]"
     }
-    $scenario = Invoke-CliJson -Arguments (@('runtime-scenario', '--session-id', $script:previewSessionId, '--steps', $scenarioSteps)) -Label 'CLI runtime-scenario' -TimeoutSeconds $ValidationTimeoutSeconds
+    $scenario = Invoke-CliJson -Arguments (@('runtime-scenario', '--project-id', [string]$selectedEditor.projectId, '--editor-instance-id', [string]$selectedEditor.editorInstanceId, '--steps', $scenarioSteps)) -Label 'CLI runtime-scenario' -TimeoutSeconds $ValidationTimeoutSeconds
     Assert-Condition -Condition ($scenario.data.passed -eq $true) -Message "场景验证未通过: $($scenario.raw)"
     Assert-Condition -Condition (@($scenario.data.steps).Count -eq 7) -Message '场景报告步骤数异常'
+    $scenarioSessionId = [string]$scenario.data.steps[0].actual
+    Assert-Condition -Condition (-not [string]::IsNullOrWhiteSpace($scenarioSessionId) -and $scenarioSessionId -ne $script:previewSessionId) -Message 'scenario 未自建独立会话'
     $scenarioPath = Write-RawJsonReport -Name "$reportPrefix-runtime-scenario.json" -RawJson $scenario.raw
     Add-PassedStep -Name 'runtime-scenario 全链路七步编排' -DurationMs $scenario.command.durationMs -Evidence $scenarioPath
+    $scenarioStop = Invoke-CliJson -Arguments @('preview-stop', '--session-id', $scenarioSessionId) -Label 'CLI preview-stop scenario 会话'
+    Assert-Condition -Condition ($scenarioStop.data.closed -eq $true) -Message 'scenario 会话未确认关闭'
 
     # Preview 停止与停止后行为
     $stop = Invoke-CliJson -Arguments @('preview-stop', '--session-id', $script:previewSessionId) -Label 'CLI preview-stop'

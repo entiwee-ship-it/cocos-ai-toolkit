@@ -243,6 +243,11 @@ export class RuntimeDriver {
       await page.goto(url);
       await this.waitGameReady(managed);
       if (options.resolution) {
+        // 视口留余量容纳预览页工具栏，与 capture 一致保证请求分辨率精确生效
+        await page.setViewportSize({
+          width: options.resolution.width + 200,
+          height: options.resolution.height + 200
+        });
         const { setRuntimeResolution } = await import('./runtime-inject.js');
         managed.session.actualResolution = ResolutionSchema.parse(
           await page.evaluate(setRuntimeResolution as never, options.resolution)
