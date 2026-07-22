@@ -146,3 +146,20 @@
 - **`asset-db/refresh-asset` 实测触发完整链路**：重新导入 → 异步 TS 编译 → 类重注册。证据：Phase2Probe 增删属性后 refresh，构造器标记双向变化（len 269→348→269）。
 - 编译完成感知方式：`js.getClassByName(className)` 构造器源码标记（长度+哈希）**有界轮询**，不用固定延时；挂载守卫可按"refresh → 轮询类标记/Schema 出现预期字段 → 允许挂载"落地（设计规格第 15 章）。
 - 自然文件监听在后台无焦点状态下 30 秒未触发；用户点击 Creator（焦点恢复）是手动触发路径，自动化一律用显式 refresh-asset。
+
+## 阶段五 Preview 运行态实测（空白项目，Bridge 0.1.27）
+
+| 能力 | 入口 | 来源层级 | 状态与证据 |
+| --- | --- | --- | --- |
+| Preview URL/连接数/IP 查询 | `preview/query-preview-url`、`query-connect-num`、`get-preview-ip` | message-api（protected types 确认） | 已实测；server bind 0.0.0.0，127.0.0.1 与局域网 IP 均 HTTP 200 |
+| Preview server 启动 | `preview/open` | message-api（package.json 注册） | 已实测；仅准备 server，不打开页面（connect-num 不变） |
+| 编辑器打开预览页 | `preview/open-terminal` | message-api | 已实测；**非 toggle**，每次调用新开系统浏览器页面；无对应关闭消息 |
+| 刷新预览页 | `preview/reload-terminal` | message-api | 已实测返回成功 |
+| Preview 页面停止 | 无公开消息 | — | **不可用**；socket `browser:close` 无 Editor.Message 入口；工具只能管理自 launch 页面 |
+| `preview/generate-settings` | `preview/generate-settings` | message-api | browser 平台不可用（`reading 'type'` 内部错误）；设备清单改从页面 DOM `#view-select` 读取 |
+| 运行时层级/组件读取 | 页面注入 `System.import('cc')` → `cc.director` | 外部浏览器驱动（CDP/evaluate） | 已实测（场景名、节点树、canvas、分辨率） |
+| 分辨率编程切换 | 页面内 `cc.screen.windowSize` + `resize` 事件 | 外部浏览器驱动 | 已实测；实际生效值受页面容器约束，协议必须回传实际生效分辨率 |
+| 输入模拟 | CDP 真实输入 / DOM 合成事件 | 外部浏览器驱动 | 已实测 DOM 合成事件进入 cc.input 派发链 |
+| Console 捕获 | CDP console/pageerror 事件 | 外部浏览器驱动 | 已实测 |
+| Game 视图截图 | CDP 页面/元素截图 | 外部浏览器驱动 | 已实测（`#GameCanvas` 元素级 PNG，无 WebGL 黑屏） |
+| Scene 视图截图 | `scene/snapshot` / `snapshot-abort` | message-api（公开类型） | 消息存在、返回成功但**无可见产物**，本阶段不提供 Scene 视图视觉验证 |
