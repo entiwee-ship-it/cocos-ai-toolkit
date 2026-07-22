@@ -163,3 +163,10 @@
 | Console 捕获 | CDP console/pageerror 事件 | 外部浏览器驱动 | 已实测 |
 | Game 视图截图 | CDP 页面/元素截图 | 外部浏览器驱动 | 已实测（`#GameCanvas` 元素级 PNG，无 WebGL 黑屏） |
 | Scene 视图截图 | `scene/snapshot` / `snapshot-abort` | message-api（公开类型） | 消息存在、返回成功但**无可见产物**，本阶段不提供 Scene 视图视觉验证 |
+
+### 阶段五真实项目实测补录（xy-client 隔离 Worktree，Bridge 0.1.28）
+
+- **Preview 端口按项目分配**：xy-client 为 7458（空白项目 7457）；`query-preview-url` 始终为真值来源，不做端口假设。
+- **启动场景语义**：preview 加载编辑器当前打开的场景（`start_scene=current_scene`）；场景激活阶段引擎资产缺失（实测 Skybox 环境贴图 `reading 'box'`）会阻塞游戏启动，Console 可见错误——验收前先 `probe.openAsset` 打开正确启动场景（xy-client 为 `assets/main.scene`）。
+- **真实运行态形态**：登录场景 40+ 节点可读（root[Boost,Main]/gui/OopsFramework/Profiler）；业务组件 `LoginViewComp` 属性包含 nodes/resPaths/ent/autoLoginFlag；运行时 ID 形态 `Node.N`/`Comp.N` 与编辑态 UUID 不同；96 条业务 Console（卡顿帧/打开 UI）与级别过滤正常；720x1280 登录画面截图与 login 边界/锚点叠加正确；验收前后 git status 逐字一致（零工程写入）。
+- **页面路径参数**：Git Bash（MSYS）会把以 `/` 开头的参数转 Windows 路径——CLI 传节点路径一律不带前导斜杠（`root/gui/...`）。
