@@ -1,3 +1,5 @@
+import { editorPreviewMessageSource, readPreviewStatus } from './preview';
+
 export const BRIDGE_CAPABILITIES = [
   'probe.editorState',
   'probe.assets',
@@ -17,7 +19,10 @@ export const BRIDGE_CAPABILITIES = [
   'probe.createPrefab',
   'probe.createAsset',
   'probe.deleteAsset',
-  'probe.refreshAsset'
+  'probe.refreshAsset',
+  'probe.previewOpen',
+  'probe.previewStatus',
+  'probe.previewReload'
 ] as const;
 
 export interface BridgeEditorState {
@@ -57,7 +62,7 @@ export async function probeEditorState(): Promise<unknown> {
     asset: Editor.Selection.getSelected('asset')
   };
   unresolved.push({ path: 'document.assetUuid', reason: 'PUBLIC_API_NOT_CONFIRMED' });
-  unresolved.push({ path: 'preview', reason: 'PUBLIC_API_NOT_CONFIRMED' });
+  const preview = await readPreviewStatus(editorPreviewMessageSource);
   return {
     creatorVersion: Editor.App.version,
     projectPath: Editor.Project.path,
@@ -65,7 +70,7 @@ export async function probeEditorState(): Promise<unknown> {
     document: { assetUuid: null, dirty },
     ready: { scene: sceneReady, assetDatabase: assetDatabaseReady },
     selection,
-    preview: null,
+    preview,
     unresolved
   };
 }

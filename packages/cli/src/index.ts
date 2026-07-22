@@ -97,6 +97,10 @@ const HELP = `用法:
   cocos-ai-probe transaction-status --project-id <id> --transaction-id <id> [--editor-instance-id <id>]
   cocos-ai-probe transaction-list --project-id <id> [--editor-instance-id <id>]
   cocos-ai-probe transaction-rollback --project-id <id> --transaction-id <id> [--editor-instance-id <id>]
+  cocos-ai-probe preview-launch --project-id <id> [--editor-instance-id <id>] [--resolution <宽x高>] [--channel chrome|msedge]
+  cocos-ai-probe preview-stop --session-id <id>
+  cocos-ai-probe preview-sessions [--project-id <id>]
+  cocos-ai-probe runtime-console --session-id <id> [--since-seq <n>] [--level log|info|warn|error|debug]
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
@@ -1396,12 +1400,35 @@ export function toRequest(command: CliCommand): [string, unknown] {
   if (command.command === 'editors') {
     return ['server.editors', {}];
   }
+  if (command.command === 'preview-stop') {
+    return ['server.previewStop', { sessionId: command.sessionId }];
+  }
+  if (command.command === 'preview-sessions') {
+    return ['server.previewSessions', {
+      ...(command.projectId ? { projectId: command.projectId } : {})
+    }];
+  }
+  if (command.command === 'runtime-console') {
+    return ['server.runtimeConsole', {
+      sessionId: command.sessionId,
+      ...(command.sinceSeq !== undefined ? { sinceSeq: command.sinceSeq } : {}),
+      ...(command.level ? { level: command.level } : {})
+    }];
+  }
 
   const selector = command.editorInstanceId
     ? { projectId: command.projectId, editorInstanceId: command.editorInstanceId }
     : { projectId: command.projectId };
 
   switch (command.command) {
+    case 'preview-launch':
+      return ['server.previewLaunch', {
+        selector,
+        params: {
+          ...(command.resolution ? { resolution: command.resolution } : {}),
+          ...(command.channel ? { channel: command.channel } : {})
+        }
+      }];
     case 'state':
       return ['probe.editorState', { selector, params: {} }];
     case 'write-revision':

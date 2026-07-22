@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
-import { resolveWebSocketMaxPayload } from '@cocos-ai/protocol';
+import { resolveWebSocketMaxPayload, ResolutionSchema } from '@cocos-ai/protocol';
+import { RuntimeDriver } from '@cocos-ai/core';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { z } from 'zod';
 import { RequestRouter } from './request-router.js';
@@ -47,6 +48,39 @@ const ForwardRequestPayloadSchema = z.object({
   params: z.unknown()
 });
 
+const PreviewLaunchPayloadSchema = z.object({
+  selector: z.object({
+    projectId: z.string().min(1),
+    editorInstanceId: z.string().min(1).optional()
+  }),
+  params: z.object({
+    resolution: ResolutionSchema.optional(),
+    channel: z.string().min(1).optional()
+  }).optional()
+});
+
+const PreviewSessionPayloadSchema = z.object({
+  sessionId: z.string().min(1)
+});
+
+const PreviewSessionsPayloadSchema = z.object({
+  projectId: z.string().min(1).optional()
+});
+
+const RuntimeConsolePayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  sinceSeq: z.number().int().nonnegative().optional(),
+  level: z.enum(['log', 'info', 'warn', 'error', 'debug']).optional()
+});
+
+const RUNTIME_METHODS = new Set([
+  'server.previewLaunch',
+  'server.previewStop',
+  'server.previewSessions',
+  'server.previewSession',
+  'server.runtimeConsole'
+]);
+
 export interface ProbeServerOptions {
   /** 仅允许使用的本机监听地址。 */
   host: string;
@@ -56,6 +90,8 @@ export interface ProbeServerOptions {
   requestTimeoutMs: number;
   /** WebSocket 单条消息的最大接收字节数。 */
   maxPayload?: number;
+  /** 运行态页面驱动（阶段五）；未装配时运行态方法返回 RUNTIME_DRIVER_UNAVAILABLE。 */
+  runtimeDriver?: RuntimeDriver;
 }
 
 export interface ProbeServerAddress {
@@ -133,6 +169,9 @@ export class ProbeServer {
     }
 
     this.requestRouter.abortAll();
+    if (this.options.runtimeDriver) {
+      await this.options.runtimeDriver.dispose().catch(() => undefined);
+    }
     for (const socket of server.clients) {
       socket.close();
     }
@@ -229,7 +268,9 @@ export class ProbeServer {
     try {
       const payload = request.method === 'server.editors'
         ? this.sessions.list()
-        : await this.forwardClientRequest(request.method, request.payload);
+        : RUNTIME_METHODS.has(request.method)
+          ? await this.handleRuntimeRequest(request.method, request.payload)
+          : await this.forwardClientRequest(request.method, request.payload);
 
       socket.send(JSON.stringify({
         type: 'response',
@@ -246,6 +287,58 @@ export class ProbeServer {
           code: error instanceof Error ? error.message : 'UNKNOWN_SERVER_ERROR'
         }
       }));
+    }
+  }
+
+  /**
+   * 处理运行态控制方法（阶段五）：Preview 会话生命周期与 console 读取。
+   *
+   * @param method 运行态方法名（server.previewLaunch 等）。
+   * @param payload 方法参数。
+   * @returns 方法结果。
+   */
+  private async handleRuntimeRequest(method: string, payload: unknown): Promise<unknown> {
+    const driver = this.options.runtimeDriver;
+    if (!driver) {
+      throw new Error('RUNTIME_DRIVER_UNAVAILABLE');
+    }
+    switch (method) {
+      case 'server.previewLaunch': {
+        const parsed = PreviewLaunchPayloadSchema.parse(payload);
+        // 先经 Bridge 确保 preview server 已启动并取回页面 URL，再自 launch 浏览器。
+        const opened = await this.request(parsed.selector, 'probe.previewOpen', {}) as { url?: unknown };
+        if (!opened || typeof opened.url !== 'string' || !opened.url) {
+          throw new Error('PREVIEW_URL_UNAVAILABLE');
+        }
+        return driver.launch({
+          projectId: parsed.selector.projectId,
+          ...(parsed.selector.editorInstanceId ? { editorInstanceId: parsed.selector.editorInstanceId } : {}),
+          url: opened.url,
+          ...(parsed.params?.resolution ? { resolution: parsed.params.resolution } : {}),
+          ...(parsed.params?.channel ? { channel: parsed.params.channel } : {})
+        });
+      }
+      case 'server.previewStop': {
+        const parsed = PreviewSessionPayloadSchema.parse(payload);
+        return driver.close(parsed.sessionId);
+      }
+      case 'server.previewSessions': {
+        const parsed = PreviewSessionsPayloadSchema.parse(payload);
+        return driver.list(parsed.projectId);
+      }
+      case 'server.previewSession': {
+        const parsed = PreviewSessionPayloadSchema.parse(payload);
+        return driver.get(parsed.sessionId);
+      }
+      case 'server.runtimeConsole': {
+        const parsed = RuntimeConsolePayloadSchema.parse(payload);
+        return driver.readConsole(parsed.sessionId, {
+          ...(parsed.sinceSeq !== undefined ? { sinceSeq: parsed.sinceSeq } : {}),
+          ...(parsed.level ? { level: parsed.level } : {})
+        });
+      }
+      default:
+        throw new Error('METHOD_NOT_ALLOWED');
     }
   }
 

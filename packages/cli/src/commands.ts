@@ -57,7 +57,11 @@ export type CliCommand =
   | { command: 'write-confirm'; projectId: string; editorInstanceId?: string; transactionId: string }
   | { command: 'transaction-status'; projectId: string; editorInstanceId?: string; transactionId: string }
   | { command: 'transaction-list'; projectId: string; editorInstanceId?: string }
-  | { command: 'transaction-rollback'; projectId: string; editorInstanceId?: string; transactionId: string };
+  | { command: 'transaction-rollback'; projectId: string; editorInstanceId?: string; transactionId: string }
+  | { command: 'preview-launch'; projectId: string; editorInstanceId?: string; resolution?: { width: number; height: number }; channel?: string }
+  | { command: 'preview-stop'; sessionId: string }
+  | { command: 'preview-sessions'; projectId?: string }
+  | { command: 'runtime-console'; sessionId: string; sinceSeq?: number; level?: string };
 
 interface ParsedArguments {
   command: string;
@@ -101,7 +105,11 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'write-confirm': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
   'transaction-status': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
   'transaction-list': PROJECT_SELECTOR_FLAGS,
-  'transaction-rollback': [...PROJECT_SELECTOR_FLAGS, 'transaction-id']
+  'transaction-rollback': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
+  'preview-launch': [...PROJECT_SELECTOR_FLAGS, 'resolution', 'channel'],
+  'preview-stop': ['session-id'],
+  'preview-sessions': ['project-id'],
+  'runtime-console': ['session-id', 'since-seq', 'level']
 };
 
 /**
@@ -116,12 +124,46 @@ export function parseCommand(argv: string[]): CliCommand {
   if (command === 'editors') {
     return { command };
   }
+  // 会话维度命令：Preview 页面会话由 Probe Server 管理，不需要项目选择器。
+  if (command === 'preview-stop') {
+    return { command, sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED') };
+  }
+  if (command === 'runtime-console') {
+    const level = flags.get('level');
+    if (level && !['log', 'info', 'warn', 'error', 'debug'].includes(level)) {
+      throw new Error('INVALID_CONSOLE_LEVEL');
+    }
+    return {
+      command,
+      sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
+      ...(flags.has('since-seq') ? { sinceSeq: readNonNegativeInteger(flags.get('since-seq') ?? '', 'INVALID_SINCE_SEQ') } : {}),
+      ...(level ? { level } : {})
+    };
+  }
+  if (command === 'preview-sessions') {
+    return {
+      command,
+      ...(flags.has('project-id') ? { projectId: flags.get('project-id') } : {})
+    };
+  }
 
   const projectId = requireFlag(flags, 'project-id', 'PROJECT_ID_REQUIRED');
   const editorInstanceId = flags.get('editor-instance-id');
   const selector = editorInstanceId ? { projectId, editorInstanceId } : { projectId };
 
   switch (command) {
+    case 'preview-launch': {
+      const channel = flags.get('channel');
+      if (channel && channel !== 'chrome' && channel !== 'msedge') {
+        throw new Error('INVALID_BROWSER_CHANNEL');
+      }
+      return {
+        command,
+        ...selector,
+        ...(flags.has('resolution') ? { resolution: readResolution(flags.get('resolution') ?? '') } : {}),
+        ...(channel ? { channel } : {})
+      };
+    }
     case 'state':
     case 'write-revision':
       return { command, ...selector };
@@ -362,6 +404,29 @@ function requireFlag(flags: Map<string, string>, name: string, errorCode: string
     throw new Error(errorCode);
   }
   return value;
+}
+
+/** 解析 `宽x高` 形式的分辨率参数（如 720x1280）。 */
+function readResolution(value: string): { width: number; height: number } {
+  const match = /^(\d+)x(\d+)$/.exec(value.trim().toLowerCase());
+  if (!match) {
+    throw new Error('INVALID_RESOLUTION');
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
+    throw new Error('INVALID_RESOLUTION');
+  }
+  return { width, height };
+}
+
+/** 解析非负整数参数（console 游标等）。 */
+function readNonNegativeInteger(value: string, errorCode: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(errorCode);
+  }
+  return parsed;
 }
 
 function requireRelativeJsonPath(value: string, errorCode: string): string {

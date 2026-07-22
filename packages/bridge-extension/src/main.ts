@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { BridgeClient } from './bridge-client';
 import { buildBridgeHello, probeEditorState } from './editor-state';
 import { debugEditorMessage } from './debug-editor-message';
+import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
 import { ProbeError } from './probe-errors';
 import { probeAssets } from './asset-probe';
 import { probeAssetIndex } from './asset-index';
@@ -15,7 +16,7 @@ import {
   type WriteTransactionRecord
 } from './transaction-manager';
 
-const BRIDGE_VERSION = '0.1.27';
+const BRIDGE_VERSION = '0.1.28';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 let client: BridgeClient | null = null;
@@ -98,6 +99,9 @@ export function load(): void {
       'probe.debugPrefabLifecycle': (payload) => forwardToScene('debugPrefabLifecycle', payload),
       'probe.debugPrefabFacade': (payload) => forwardToScene('debugPrefabFacade', payload),
       'probe.debugEditorMessage': (payload) => debugEditorMessage(payload as Record<string, unknown>),
+      'probe.previewOpen': () => openPreviewServer(editorPreviewMessageSource, nodeHttpPreviewProbe),
+      'probe.previewStatus': () => readPreviewStatus(editorPreviewMessageSource),
+      'probe.previewReload': () => reloadPreviewPages(editorPreviewMessageSource),
       ...Object.fromEntries(Object.entries(sceneMethods).map(([method, sceneMethod]) => [
         method,
         (payload: unknown) => forwardToScene(sceneMethod, payload)
