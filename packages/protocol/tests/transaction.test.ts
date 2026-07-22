@@ -329,6 +329,24 @@ describe('WriteTransactionResultSchema', () => {
       rollbackEvidence: null
     })).toBeTruthy();
   });
+
+  it('接受缺失 actual 的验证项（重读失败形态，Zod 4 下 explicit optional）', () => {
+    expect(WriteTransactionResultSchema.parse({
+      transactionId: 'tx-1',
+      status: 'manual-recovery-required',
+      executedOps: 2,
+      verification: {
+        passed: false,
+        verifiedAt: '2026-07-22T02:27:10.544Z',
+        items: [
+          { operationIndex: 0, description: '设置属性 fontSize', expected: 24, passed: false },
+          { operationIndex: 1, description: '设置引用 clickEvents[0].target', expected: 'uuid-x', actual: null, passed: false }
+        ]
+      },
+      failure: { code: 'WRITE_VERIFICATION_FAILED', message: '缺少通过的重读验证报告，禁止提交', operationIndex: null },
+      rollbackEvidence: { attempted: true, succeeded: false, verifiedClean: false }
+    })).toBeTruthy();
+  });
 });
 
 /**

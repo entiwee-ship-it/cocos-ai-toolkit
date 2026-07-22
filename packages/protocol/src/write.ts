@@ -76,12 +76,14 @@ export const WriteTransactionRequestSchema = z.object({
 /**
  * 重读验证的逐项明细。
  * 每个写操作对应至少一项，记录期望值与保存后重读到的实际值。
+ * expected/actual 显式 optional：重读失败时对应侧可能缺省（Zod 4 的 z.unknown() 默认非可选，
+ * 缺省会导致整个事务结果无法通过协议校验，把真实失败掩盖为 INVALID_WRITE_RESULT）。
  */
 export const WriteVerificationItemSchema = z.object({
   operationIndex: z.number().int().nonnegative(),
   description: z.string().min(1),
-  expected: z.unknown(),
-  actual: z.unknown(),
+  expected: z.unknown().optional(),
+  actual: z.unknown().optional(),
   passed: z.boolean()
 });
 
@@ -96,12 +98,12 @@ export const WriteVerificationReportSchema = z.object({
 
 /**
  * Revision 前置或 expectedOldValue 冲突的明细。
- * scope 标识冲突范围（document / hierarchy / 属性路径等），expected 与 actual 保留冲突双方取值。
+ * scope 标识冲突范围（document / hierarchy / 属性路径等），expected 与 actual 保留冲突双方取值（显式 optional）。
  */
 export const WriteConflictSchema = z.object({
   scope: z.string().min(1),
-  expected: z.unknown(),
-  actual: z.unknown()
+  expected: z.unknown().optional(),
+  actual: z.unknown().optional()
 });
 
 /**
