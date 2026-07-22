@@ -225,4 +225,5 @@ export type ConsoleEntry = z.infer<typeof ConsoleEntrySchema>;
 export type RuntimeCaptureOptions = z.infer<typeof RuntimeCaptureOptionsSchema>;
 export type RuntimeCaptureResult = z.infer<typeof RuntimeCaptureResultSchema>;
 export type ScenarioStep = z.infer<typeof ScenarioStepSchema>;
+export type ScenarioStepResult = z.infer<typeof ScenarioStepResultSchema>;
 export type ScenarioReport = z.infer<typeof ScenarioReportSchema>;

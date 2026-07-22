@@ -107,6 +107,7 @@ const HELP = `用法:
   cocos-ai-probe runtime-watch --session-id <id> --path <节点路径> --component-type <类型> --property <属性路径> [--timeout-ms <n>] [--interval-ms <n>] [--max-changes <n>]
   cocos-ai-probe runtime-input --session-id <id> --input-type tap|click|key [--x <画布x>] [--y <画布y>] [--key <按键名>]
   cocos-ai-probe runtime-capture --session-id <id> [--resolution <宽x高> | --resolutions <json数组>] [--crop <x,y,宽,高>] [--overlay-nodes <true|路径,逗号分隔>] [--overlay-anchors <true|路径,逗号分隔>]
+  cocos-ai-probe runtime-scenario --steps <json数组> [--session-id <id>] [--project-id <id> [--editor-instance-id <id>]]
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
@@ -1478,6 +1479,20 @@ export function toRequest(command: CliCommand): [string, unknown] {
             }
           }
         : {})
+    }];
+  }
+  if (command.command === 'runtime-scenario') {
+    return ['server.runtimeRunScenario', {
+      ...(command.sessionId ? { sessionId: command.sessionId } : {}),
+      ...(command.projectId
+        ? {
+            selector: {
+              projectId: command.projectId,
+              ...(command.editorInstanceId ? { editorInstanceId: command.editorInstanceId } : {})
+            }
+          }
+        : {}),
+      steps: command.steps
     }];
   }
 

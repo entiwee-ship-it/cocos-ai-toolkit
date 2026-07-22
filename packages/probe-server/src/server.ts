@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
-import { join } from 'node:path';
-import { resolveWebSocketMaxPayload, ResolutionSchema, RuntimeComponentSnapshotSchema } from '@cocos-ai/protocol';
-import { assembleRuntimeNodeSnapshot, buildRuntimeScript, RuntimeDriver, watchRuntimeProperty } from '@cocos-ai/core';
+import { join, resolve, sep } from 'node:path';
+import { resolveWebSocketMaxPayload, ResolutionSchema, RuntimeComponentSnapshotSchema, ScenarioStepSchema } from '@cocos-ai/protocol';
+import { assembleRuntimeNodeSnapshot, buildRuntimeScript, diffPng, runRuntimeScenario, RuntimeDriver, watchRuntimeProperty, type ScenarioRuntime } from '@cocos-ai/core';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { z } from 'zod';
 import { RequestRouter } from './request-router.js';
@@ -86,8 +86,26 @@ const RUNTIME_METHODS = new Set([
   'server.runtimeInvoke',
   'server.runtimeWatch',
   'server.runtimeDispatchInput',
-  'server.runtimeCapture'
+  'server.runtimeCapture',
+  'server.runtimeRunScenario'
 ]);
+
+const RuntimeRunScenarioPayloadSchema = z.object({
+  selector: z.object({
+    projectId: z.string().min(1),
+    editorInstanceId: z.string().min(1).optional()
+  }).optional(),
+  sessionId: z.string().min(1).optional(),
+  steps: z.array(ScenarioStepSchema).min(1)
+}).superRefine((value, context) => {
+  const hasLaunch = value.steps.some((step) => step.kind === 'launch');
+  if (hasLaunch && !value.sessionId && !value.selector) {
+    context.addIssue({ code: 'custom', message: 'launch 步骤需要 sessionId 或 selector' });
+  }
+  if (!hasLaunch && !value.sessionId) {
+    context.addIssue({ code: 'custom', message: '无 launch 步骤时必须提供 sessionId' });
+  }
+});
 
 const RuntimeDispatchInputPayloadSchema = z.object({
   sessionId: z.string().min(1),
@@ -374,18 +392,7 @@ export class ProbeServer {
     switch (method) {
       case 'server.previewLaunch': {
         const parsed = PreviewLaunchPayloadSchema.parse(payload);
-        // 先经 Bridge 确保 preview server 已启动并取回页面 URL，再自 launch 浏览器。
-        const opened = await this.request(parsed.selector, 'probe.previewOpen', {}) as { url?: unknown };
-        if (!opened || typeof opened.url !== 'string' || !opened.url) {
-          throw new Error('PREVIEW_URL_UNAVAILABLE');
-        }
-        return driver.launch({
-          projectId: parsed.selector.projectId,
-          ...(parsed.selector.editorInstanceId ? { editorInstanceId: parsed.selector.editorInstanceId } : {}),
-          url: opened.url,
-          ...(parsed.params?.resolution ? { resolution: parsed.params.resolution } : {}),
-          ...(parsed.params?.channel ? { channel: parsed.params.channel } : {})
-        });
+        return this.launchPreviewSession(driver, parsed.selector, parsed.params);
       }
       case 'server.previewStop': {
         const parsed = PreviewSessionPayloadSchema.parse(payload);
@@ -514,6 +521,14 @@ export class ProbeServer {
         }
         return { files, capturedAt: new Date().toISOString() };
       }
+      case 'server.runtimeRunScenario': {
+        const parsed = RuntimeRunScenarioPayloadSchema.parse(payload);
+        const runtime = this.assembleScenarioRuntime(driver, parsed.selector);
+        return runRuntimeScenario(parsed.steps, runtime, {
+          ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
+          ...(parsed.selector ? { projectId: parsed.selector.projectId } : {})
+        });
+      }
       default:
         throw new Error('METHOD_NOT_ALLOWED');
     }
@@ -522,6 +537,112 @@ export class ProbeServer {
   private async forwardClientRequest(method: string, payload: unknown): Promise<unknown> {
     const parsedPayload = ForwardRequestPayloadSchema.parse(payload);
     return this.request(parsedPayload.selector, method, parsedPayload.params);
+  }
+
+  /**
+   * 装配场景验证运行时：launch 复用 previewLaunch 通道，读取/输入/截图走 driver，
+   * 图像差异比较限定基准文件必须位于截图根目录内。
+   *
+   * @param driver 运行态页面驱动。
+   * @param selector launch 步骤新建会话所需的项目选择器。
+   * @returns 场景运行时操作集。
+   */
+  private assembleScenarioRuntime(
+    driver: RuntimeDriver,
+    selector?: { projectId: string; editorInstanceId?: string }
+  ): ScenarioRuntime {
+    return {
+      launch: async (input) => {
+        if (!selector) throw new Error('SCENARIO_SELECTOR_REQUIRED');
+        const session = await this.launchPreviewSession(driver, selector, {
+          ...(input.resolution ? { resolution: input.resolution } : {})
+        });
+        return { sessionId: session.sessionId };
+      },
+      waitNode: async (sessionId, path, timeoutMs) => {
+        const deadline = Date.now() + timeoutMs;
+        while (true) {
+          const result = await driver.evaluate(
+            sessionId,
+            buildRuntimeScript('readRuntimeNodeBounds', { paths: [path] })
+          ) as { entries?: Array<{ found?: boolean }> };
+          if (result.entries?.[0]?.found) return { found: true };
+          if (Date.now() >= deadline) return { found: false };
+          await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        }
+      },
+      readProperty: async (sessionId, path, componentType, property) => {
+        const result = await driver.evaluate(
+          sessionId,
+          buildRuntimeScript('readRuntimeProperty', { path, componentType, property })
+        ) as Record<string, unknown>;
+        if (result.found !== true) {
+          return { found: false, reason: typeof result.reason === 'string' ? result.reason : 'unknown' };
+        }
+        return { found: true, value: result.value };
+      },
+      dispatchInput: (sessionId, input) => driver.dispatchInput(sessionId, input as never),
+      readConsole: (sessionId, sinceSeq) => Promise.resolve(driver.readConsole(sessionId, { sinceSeq })),
+      capture: async (sessionId, options) => {
+        const overlay = options.overlay
+          ? await this.resolveCaptureOverlay(driver, sessionId, options.overlay)
+          : undefined;
+        const image = await driver.capture(sessionId, {
+          ...(options.resolution ? { resolution: options.resolution } : {}),
+          ...(options.crop ? { crop: options.crop } : {}),
+          ...(overlay ? { overlay } : {})
+        });
+        const filePath = await this.saveCaptureImage(sessionId, image.buffer, this.nextCaptureIndex());
+        return { path: filePath };
+      },
+      imageDiff: async (sessionId, baselinePath) => {
+        const root = resolve(this.options.captureRoot ?? join(process.cwd(), 'reports', 'runtime-captures'));
+        const resolvedBaseline = resolve(root, baselinePath);
+        if (!resolvedBaseline.startsWith(root + sep)) {
+          throw new Error('BASELINE_PATH_OUT_OF_ROOT');
+        }
+        const baselineBuffer = await readFile(resolvedBaseline);
+        const current = await driver.capture(sessionId, {});
+        const diff = diffPng(baselineBuffer, current.buffer);
+        const diffPngPath = await this.saveCaptureImage(sessionId, diff.diffPng, this.nextCaptureIndex());
+        return { diffRatio: diff.diffRatio, diffPngPath };
+      }
+    };
+  }
+
+  /** 截图文件名序号（防同毫秒撞名）。 */
+  private captureIndex = 0;
+
+  private nextCaptureIndex(): number {
+    this.captureIndex += 1;
+    return this.captureIndex;
+  }
+
+  /**
+   * 启动 Preview 会话（previewLaunch 与 scenario launch 步骤共用）：
+   * 先经 Bridge 确保 preview server 已启动并取回页面 URL，再自 launch 浏览器。
+   *
+   * @param driver 运行态页面驱动。
+   * @param selector 目标项目与可选 Editor 实例。
+   * @param params 可选分辨率与浏览器通道。
+   * @returns 就绪态会话。
+   */
+  private async launchPreviewSession(
+    driver: RuntimeDriver,
+    selector: { projectId: string; editorInstanceId?: string },
+    params?: { resolution?: { width: number; height: number }; channel?: string }
+  ) {
+    const opened = await this.request(selector, 'probe.previewOpen', {}) as { url?: unknown };
+    if (!opened || typeof opened.url !== 'string' || !opened.url) {
+      throw new Error('PREVIEW_URL_UNAVAILABLE');
+    }
+    return driver.launch({
+      projectId: selector.projectId,
+      ...(selector.editorInstanceId ? { editorInstanceId: selector.editorInstanceId } : {}),
+      url: opened.url,
+      ...(params?.resolution ? { resolution: params.resolution } : {}),
+      ...(params?.channel ? { channel: params.channel } : {})
+    });
   }
 
   /**

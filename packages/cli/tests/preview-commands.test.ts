@@ -106,6 +106,21 @@ describe('preview 命令解析（阶段五）', () => {
     expect(() => parseCommand(['runtime-capture', '--session-id', 's1', '--resolutions', '[]'])).toThrow('INVALID_RESOLUTIONS');
     expect(() => parseCommand(['runtime-capture', '--session-id', 's1', '--overlay-nodes', ''])).toThrow('INVALID_OVERLAY');
   });
+
+  it('runtime-scenario 解析目标与步骤 JSON', () => {
+    const steps = JSON.stringify([
+      { kind: 'launch' },
+      { kind: 'assert-property', path: 'Canvas/btn', property: 'cc.Button.interactable', expected: true }
+    ]);
+    expect(parseCommand(['runtime-scenario', '--session-id', 's1', '--steps', steps]))
+      .toMatchObject({ command: 'runtime-scenario', sessionId: 's1', steps: [{ kind: 'launch' }, { kind: 'assert-property' }] });
+    expect(parseCommand(['runtime-scenario', '--project-id', 'p1', '--editor-instance-id', 'e1', '--steps', steps]))
+      .toMatchObject({ projectId: 'p1', editorInstanceId: 'e1' });
+    expect(() => parseCommand(['runtime-scenario', '--steps', steps])).toThrow('SCENARIO_TARGET_REQUIRED');
+    expect(() => parseCommand(['runtime-scenario', '--session-id', 's1', '--steps', '{"kind":"launch"}'])).toThrow('INVALID_SCENARIO_STEPS');
+    expect(() => parseCommand(['runtime-scenario', '--session-id', 's1', '--steps', '[1'])).toThrow('INVALID_SCENARIO_STEPS_JSON');
+    expect(() => parseCommand(['runtime-scenario', '--session-id', 's1', '--steps', '[{"kind":"teleport"}]'])).toThrow('INVALID_SCENARIO_STEPS');
+  });
 });
 
 describe('preview 命令请求映射', () => {
@@ -172,6 +187,23 @@ describe('preview 命令请求映射', () => {
       resolution: { width: 720, height: 1280 },
       crop: { x: 0, y: 0, width: 100, height: 100 },
       overlay: { nodeBounds: ['Canvas/a'], anchors: true }
+    }]);
+  });
+
+  it('runtime-scenario 映射 server.runtimeRunScenario', () => {
+    expect(toRequest({
+      command: 'runtime-scenario',
+      sessionId: 's1',
+      steps: [{ kind: 'launch' }]
+    })).toEqual(['server.runtimeRunScenario', { sessionId: 's1', steps: [{ kind: 'launch' }] }]);
+    expect(toRequest({
+      command: 'runtime-scenario',
+      projectId: 'p1',
+      editorInstanceId: 'e1',
+      steps: [{ kind: 'launch' }]
+    })).toEqual(['server.runtimeRunScenario', {
+      selector: { projectId: 'p1', editorInstanceId: 'e1' },
+      steps: [{ kind: 'launch' }]
     }]);
   });
 });

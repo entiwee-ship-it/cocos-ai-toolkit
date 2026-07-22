@@ -1,11 +1,14 @@
 import {
   DesignTargetDocumentSchema,
   RevisionPreconditionSchema,
+  ScenarioStepSchema,
   WriteTransactionRequestSchema,
   type DesignTargetDocument,
   type RevisionPrecondition,
+  type ScenarioStep,
   type WriteTransactionRequest
 } from '@cocos-ai/protocol';
+import { z } from 'zod';
 
 export type CliCommand =
   | { command: 'editors' }
@@ -75,7 +78,8 @@ export type CliCommand =
       crop?: { x: number; y: number; width: number; height: number };
       overlayNodeBounds?: string[] | true;
       overlayAnchors?: string[] | true;
-    };
+    }
+  | { command: 'runtime-scenario'; sessionId?: string; projectId?: string; editorInstanceId?: string; steps: ScenarioStep[] };
 
 interface ParsedArguments {
   command: string;
@@ -129,7 +133,8 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'runtime-invoke': ['session-id', 'path', 'component-type', 'method', 'args'],
   'runtime-watch': ['session-id', 'path', 'component-type', 'property', 'timeout-ms', 'interval-ms', 'max-changes'],
   'runtime-input': ['session-id', 'input-type', 'x', 'y', 'key'],
-  'runtime-capture': ['session-id', 'resolution', 'resolutions', 'crop', 'overlay-nodes', 'overlay-anchors']
+  'runtime-capture': ['session-id', 'resolution', 'resolutions', 'crop', 'overlay-nodes', 'overlay-anchors'],
+  'runtime-scenario': ['session-id', 'project-id', 'editor-instance-id', 'steps']
 };
 
 /**
@@ -232,6 +237,20 @@ export function parseCommand(argv: string[]): CliCommand {
       ...(flags.has('crop') ? { crop: readCropRect(flags.get('crop') ?? '') } : {}),
       ...(flags.has('overlay-nodes') ? { overlayNodeBounds: readOverlayValue(flags.get('overlay-nodes') ?? '') } : {}),
       ...(flags.has('overlay-anchors') ? { overlayAnchors: readOverlayValue(flags.get('overlay-anchors') ?? '') } : {})
+    };
+  }
+  if (command === 'runtime-scenario') {
+    const sessionId = flags.get('session-id');
+    const projectId = flags.get('project-id');
+    if (!sessionId && !projectId) {
+      throw new Error('SCENARIO_TARGET_REQUIRED');
+    }
+    return {
+      command,
+      ...(sessionId ? { sessionId } : {}),
+      ...(projectId ? { projectId } : {}),
+      ...(flags.has('editor-instance-id') ? { editorInstanceId: flags.get('editor-instance-id') } : {}),
+      steps: readScenarioSteps(requireFlag(flags, 'steps', 'SCENARIO_STEPS_REQUIRED'))
     };
   }
 
@@ -593,6 +612,21 @@ function readOverlayValue(value: string): string[] | true {
     throw new Error('INVALID_OVERLAY');
   }
   return paths;
+}
+
+/** 解析并按协议校验场景步骤 JSON 数组。 */
+function readScenarioSteps(value: string): ScenarioStep[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('INVALID_SCENARIO_STEPS_JSON');
+  }
+  try {
+    return z.array(ScenarioStepSchema).min(1).parse(parsed);
+  } catch {
+    throw new Error('INVALID_SCENARIO_STEPS');
+  }
 }
 
 function requireRelativeJsonPath(value: string, errorCode: string): string {

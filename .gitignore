@@ -11,3 +11,4 @@ reports/*.png
 *.tsbuildinfo
 reports/write-journal/
 reports/*.txt
+reports/runtime-captures/

@@ -102,12 +102,21 @@ function createFakePage() {
         return { found: true, invoked: true, nodeUuid: 'u2', componentType: 'GameLogic', returnValue: 6 } as never;
       }
       if (script.includes('return readRuntimeProperty')) {
+        // scenario 断言用例：string 属性返回固定文本
+        if (script.includes('"property":"string"')) {
+          return { found: true, nodeUuid: 'u2', property: 'string', value: '确定退出？' } as never;
+        }
         // watch 序列：前两次 1，之后 2（第二次轮询即变化）
         state.propertyReads = (state.propertyReads ?? 0) + 1;
         return { found: true, nodeUuid: 'u2', property: 'state.hp', value: state.propertyReads > 2 ? 2 : 1 } as never;
       }
       if (script.includes('return readCanvasRect')) {
         return { x: 100, y: 50, width: 960, height: 640 } as never;
+      }
+      if (script.includes('return readRuntimeNodeBounds')) {
+        return {
+          entries: [{ path: 'Canvas/btn', found: true, hasBounds: true, rect: { x: 1, y: 1, width: 10, height: 10 }, anchor: { x: 5, y: 5 } }]
+        } as never;
       }
       return { ready: true, sceneName: 'main', childCount: 1, width: 960, height: 640 } as never;
     },
@@ -125,6 +134,8 @@ function createFakePage() {
     },
     async mouseClick(x: number, y: number) {
       state.clicks.push({ x, y });
+      // 点击副作用产生一条日志（scenario 的 dispatch-input → assert-console 链路验证）
+      state.consoleListeners.forEach((listener) => listener({ level: 'log', text: '登录成功' }));
     },
     async keyPress(key: string) {
       state.keys.push(key);
@@ -450,6 +461,56 @@ describe('ProbeServer 运行态方法', () => {
       resolutions: [{ width: 1280, height: 720 }]
     });
     expect(conflict.ok).toBe(false);
+
+    bridge.close();
+    await server.stop();
+  });
+
+  it('runtimeRunScenario 全链路步骤编排并产出报告', async () => {
+    const captureRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-scenario-'));
+    const { driver, pages } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver, captureRoot });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    // 基准图像：与 fake 截图同款的纯色 PNG（差异比例 0）
+    const baselinePath = join(captureRoot, 'baseline.png');
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(baselinePath, createSolidPng(960, 640, [10, 10, 10, 255]));
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+
+    const reply = await callServer(url, 'server.runtimeRunScenario', {
+      sessionId,
+      steps: [
+        { kind: 'launch' },
+        { kind: 'wait-node', path: 'Canvas/btn', timeoutMs: 500 },
+        { kind: 'assert-property', path: 'Canvas/btn', property: 'cc.Label.string', expected: '确定退出？' },
+        { kind: 'dispatch-input', inputType: 'tap', x: 100, y: 100 },
+        { kind: 'assert-console', pattern: '登录成功', timeoutMs: 500 },
+        { kind: 'capture' },
+        { kind: 'assert-image-diff', baselinePath: 'baseline.png', threshold: 0.01 }
+      ]
+    });
+    expect(reply.ok).toBe(true);
+    const report = reply.payload as { passed: boolean; steps: Array<{ kind: string; passed: boolean; evidence?: string }> };
+    expect(report.passed).toBe(true);
+    expect(report.steps.map((step) => step.kind)).toEqual([
+      'launch', 'wait-node', 'assert-property', 'dispatch-input', 'assert-console', 'capture', 'assert-image-diff'
+    ]);
+    expect(report.steps[5].evidence).toContain(captureRoot);
+    expect(report.steps[6].evidence).toContain(captureRoot);
+
+    // 逃逸截图根目录的基准路径必须被拒绝
+    const escape = await callServer(url, 'server.runtimeRunScenario', {
+      sessionId,
+      steps: [{ kind: 'assert-image-diff', baselinePath: '../../outside.png', threshold: 0.01 }]
+    });
+    const escapeReport = escape.payload as { passed: boolean; steps: Array<{ passed: boolean; error?: string }> };
+    expect(escapeReport.passed).toBe(false);
+    expect(escapeReport.steps[0].error).toContain('BASELINE_PATH_OUT_OF_ROOT');
 
     bridge.close();
     await server.stop();
