@@ -15,7 +15,7 @@ import {
 } from '../src/index.js';
 
 const validResponse = {
-  protocolVersion: '0.5.0',
+  protocolVersion: '0.6.0',
   creatorVersion: '3.8.8',
   editorInstanceId: 'editor-1',
   projectId: 'project-1',

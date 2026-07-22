@@ -7,6 +7,7 @@ export * from './identity.js';
 export * from './node.js';
 export * from './prefab.js';
 export * from './reference.js';
+export * from './runtime.js';
 export * from './scan.js';
 export * from './schema.js';
 export * from './transaction.js';

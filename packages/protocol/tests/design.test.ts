@@ -131,7 +131,7 @@ describe('DesignVerifyReportSchema', () => {
 });
 
 describe('协议版本', () => {
-  it('协议版本为 0.5.0', () => {
-    expect(PROTOCOL_VERSION).toBe('0.5.0');
+  it('协议版本为 0.6.0', () => {
+    expect(PROTOCOL_VERSION).toBe('0.6.0');
   });
 });
