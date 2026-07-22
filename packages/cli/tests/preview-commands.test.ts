@@ -41,6 +41,21 @@ describe('preview 命令解析（阶段五）', () => {
     expect(() => parseCommand(['runtime-console', '--session-id', 's1', '--since-seq', '-1'])).toThrow('INVALID_SINCE_SEQ');
     expect(() => parseCommand(['runtime-console', '--session-id', 's1', '--level', 'verbose'])).toThrow('INVALID_CONSOLE_LEVEL');
   });
+
+  it('runtime-hierarchy 解析会话与可选上限', () => {
+    expect(parseCommand(['runtime-hierarchy', '--session-id', 's1'])).toEqual({ command: 'runtime-hierarchy', sessionId: 's1' });
+    expect(parseCommand(['runtime-hierarchy', '--session-id', 's1', '--max-depth', '4', '--max-nodes', '500']))
+      .toEqual({ command: 'runtime-hierarchy', sessionId: 's1', maxDepth: 4, maxNodes: 500 });
+    expect(() => parseCommand(['runtime-hierarchy', '--session-id', 's1', '--max-depth', '0'])).toThrow('INVALID_MAX_DEPTH');
+    expect(() => parseCommand(['runtime-hierarchy', '--session-id', 's1', '--max-depth', '99'])).toThrow('INVALID_MAX_DEPTH');
+  });
+
+  it('runtime-component 解析路径与组件类型', () => {
+    expect(parseCommand(['runtime-component', '--session-id', 's1', '--path', 'Canvas/btn', '--component-type', 'cc.Button']))
+      .toEqual({ command: 'runtime-component', sessionId: 's1', path: 'Canvas/btn', componentType: 'cc.Button' });
+    expect(() => parseCommand(['runtime-component', '--session-id', 's1', '--component-type', 'cc.Button'])).toThrow('NODE_PATH_REQUIRED');
+    expect(() => parseCommand(['runtime-component', '--session-id', 's1', '--path', 'Canvas/btn'])).toThrow('COMPONENT_TYPE_REQUIRED');
+  });
 });
 
 describe('preview 命令请求映射', () => {
@@ -65,5 +80,14 @@ describe('preview 命令请求映射', () => {
       .toEqual(['server.previewSessions', {}]);
     expect(toRequest({ command: 'runtime-console', sessionId: 's1', sinceSeq: 5, level: 'error' }))
       .toEqual(['server.runtimeConsole', { sessionId: 's1', sinceSeq: 5, level: 'error' }]);
+  });
+
+  it('runtime-hierarchy / runtime-component 映射对应 server 方法', () => {
+    expect(toRequest({ command: 'runtime-hierarchy', sessionId: 's1', maxDepth: 4, maxNodes: 500 }))
+      .toEqual(['server.runtimeHierarchy', { sessionId: 's1', maxDepth: 4, maxNodes: 500 }]);
+    expect(toRequest({ command: 'runtime-hierarchy', sessionId: 's1' }))
+      .toEqual(['server.runtimeHierarchy', { sessionId: 's1' }]);
+    expect(toRequest({ command: 'runtime-component', sessionId: 's1', path: 'Canvas/btn', componentType: 'cc.Button' }))
+      .toEqual(['server.runtimeComponent', { sessionId: 's1', path: 'Canvas/btn', componentType: 'cc.Button' }]);
   });
 });

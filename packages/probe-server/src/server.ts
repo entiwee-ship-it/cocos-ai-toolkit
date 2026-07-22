@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
-import { resolveWebSocketMaxPayload, ResolutionSchema } from '@cocos-ai/protocol';
-import { RuntimeDriver } from '@cocos-ai/core';
+import { resolveWebSocketMaxPayload, ResolutionSchema, RuntimeComponentSnapshotSchema } from '@cocos-ai/protocol';
+import { assembleRuntimeNodeSnapshot, buildRuntimeScript, RuntimeDriver } from '@cocos-ai/core';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { z } from 'zod';
 import { RequestRouter } from './request-router.js';
@@ -78,8 +78,22 @@ const RUNTIME_METHODS = new Set([
   'server.previewStop',
   'server.previewSessions',
   'server.previewSession',
-  'server.runtimeConsole'
+  'server.runtimeConsole',
+  'server.runtimeHierarchy',
+  'server.runtimeComponent'
 ]);
+
+const RuntimeHierarchyPayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  maxDepth: z.number().int().positive().max(20).optional(),
+  maxNodes: z.number().int().positive().max(10_000).optional()
+});
+
+const RuntimeComponentPayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  path: z.string().min(1),
+  componentType: z.string().min(1)
+});
 
 export interface ProbeServerOptions {
   /** 仅允许使用的本机监听地址。 */
@@ -336,6 +350,41 @@ export class ProbeServer {
           ...(parsed.sinceSeq !== undefined ? { sinceSeq: parsed.sinceSeq } : {}),
           ...(parsed.level ? { level: parsed.level } : {})
         });
+      }
+      case 'server.runtimeHierarchy': {
+        const parsed = RuntimeHierarchyPayloadSchema.parse(payload);
+        const raw = await driver.evaluate(
+          parsed.sessionId,
+          buildRuntimeScript('readRuntimeHierarchy', {
+            ...(parsed.maxDepth !== undefined ? { maxDepth: parsed.maxDepth } : {}),
+            ...(parsed.maxNodes !== undefined ? { maxNodes: parsed.maxNodes } : {})
+          })
+        );
+        if (raw && typeof raw === 'object' && (raw as { found?: unknown }).found === false) {
+          throw new Error(`RUNTIME_HIERARCHY_UNAVAILABLE:${JSON.stringify(raw)}`);
+        }
+        return assembleRuntimeNodeSnapshot(raw, parsed.sessionId);
+      }
+      case 'server.runtimeComponent': {
+        const parsed = RuntimeComponentPayloadSchema.parse(payload);
+        const raw = await driver.evaluate(
+          parsed.sessionId,
+          buildRuntimeScript('readRuntimeComponent', { path: parsed.path, componentType: parsed.componentType })
+        ) as Record<string, unknown>;
+        if (!raw || raw.found !== true) {
+          return raw ?? { found: false, reason: 'empty-response' };
+        }
+        return {
+          ...RuntimeComponentSnapshotSchema.parse({
+            source: 'preview-runtime',
+            previewSessionId: parsed.sessionId,
+            nodeUuid: typeof raw.nodeUuid === 'string' && raw.nodeUuid ? raw.nodeUuid : 'unknown',
+            componentType: parsed.componentType,
+            properties: raw.properties ?? {},
+            capturedAt: new Date().toISOString()
+          }),
+          ...(Array.isArray(raw.skipped) ? { skipped: raw.skipped } : {})
+        };
       }
       default:
         throw new Error('METHOD_NOT_ALLOWED');

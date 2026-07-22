@@ -9,5 +9,6 @@ export * from './project-scanner.js';
 export * from './report-writer.js';
 export * from './runtime-driver.js';
 export * from './runtime-inject.js';
+export * from './runtime-read.js';
 export * from './scan-checkpoint.js';
 export * from './write-journal.js';

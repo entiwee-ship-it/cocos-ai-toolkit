@@ -42,6 +42,7 @@ export interface RuntimeNodeInput {
   dynamic: boolean;
   components: Array<z.infer<typeof RuntimeComponentSummarySchema>>;
   children?: RuntimeNodeInput[];
+  truncated?: boolean;
 }
 
 /** 运行时节点（递归）。 */
@@ -52,7 +53,9 @@ export const RuntimeNodeSchema: z.ZodType<RuntimeNodeInput> = z.lazy(() =>
     active: z.boolean(),
     dynamic: z.boolean(),
     components: z.array(RuntimeComponentSummarySchema),
-    children: z.array(RuntimeNodeSchema).optional()
+    children: z.array(RuntimeNodeSchema).optional(),
+    /** 子树被深度或节点数上限截断（读取不完整，AI 必须知晓）。 */
+    truncated: z.boolean().optional()
   })
 );
 
@@ -61,7 +64,11 @@ export const RuntimeNodeSnapshotSchema = z.object({
   source: z.literal('preview-runtime'),
   previewSessionId: z.string().min(1),
   capturedAt: z.string().min(1),
-  root: RuntimeNodeSchema
+  root: RuntimeNodeSchema,
+  /** 实际序列化的节点总数。 */
+  nodeCount: z.number().int().positive().optional(),
+  /** 整树被截断标记。 */
+  truncated: z.boolean().optional()
 });
 
 /** 运行时组件快照：单组件属性包。 */

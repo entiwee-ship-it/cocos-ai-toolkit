@@ -61,7 +61,9 @@ export type CliCommand =
   | { command: 'preview-launch'; projectId: string; editorInstanceId?: string; resolution?: { width: number; height: number }; channel?: string }
   | { command: 'preview-stop'; sessionId: string }
   | { command: 'preview-sessions'; projectId?: string }
-  | { command: 'runtime-console'; sessionId: string; sinceSeq?: number; level?: string };
+  | { command: 'runtime-console'; sessionId: string; sinceSeq?: number; level?: string }
+  | { command: 'runtime-hierarchy'; sessionId: string; maxDepth?: number; maxNodes?: number }
+  | { command: 'runtime-component'; sessionId: string; path: string; componentType: string };
 
 interface ParsedArguments {
   command: string;
@@ -109,7 +111,9 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'preview-launch': [...PROJECT_SELECTOR_FLAGS, 'resolution', 'channel'],
   'preview-stop': ['session-id'],
   'preview-sessions': ['project-id'],
-  'runtime-console': ['session-id', 'since-seq', 'level']
+  'runtime-console': ['session-id', 'since-seq', 'level'],
+  'runtime-hierarchy': ['session-id', 'max-depth', 'max-nodes'],
+  'runtime-component': ['session-id', 'path', 'component-type']
 };
 
 /**
@@ -144,6 +148,22 @@ export function parseCommand(argv: string[]): CliCommand {
     return {
       command,
       ...(flags.has('project-id') ? { projectId: flags.get('project-id') } : {})
+    };
+  }
+  if (command === 'runtime-hierarchy') {
+    return {
+      command,
+      sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
+      ...(flags.has('max-depth') ? { maxDepth: readBoundedPositiveInteger(flags.get('max-depth') ?? '', 20, 'INVALID_MAX_DEPTH') } : {}),
+      ...(flags.has('max-nodes') ? { maxNodes: readBoundedPositiveInteger(flags.get('max-nodes') ?? '', 10_000, 'INVALID_MAX_NODES') } : {})
+    };
+  }
+  if (command === 'runtime-component') {
+    return {
+      command,
+      sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
+      path: requireFlag(flags, 'path', 'NODE_PATH_REQUIRED'),
+      componentType: requireFlag(flags, 'component-type', 'COMPONENT_TYPE_REQUIRED')
     };
   }
 
@@ -424,6 +444,15 @@ function readResolution(value: string): { width: number; height: number } {
 function readNonNegativeInteger(value: string, errorCode: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(errorCode);
+  }
+  return parsed;
+}
+
+/** 解析带上限的正整数参数（读取上限类参数）。 */
+function readBoundedPositiveInteger(value: string, maximum: number, errorCode: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > maximum) {
     throw new Error(errorCode);
   }
   return parsed;

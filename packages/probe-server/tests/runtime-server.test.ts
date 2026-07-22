@@ -43,7 +43,7 @@ async function connectFakeBridge(options: {
   return socket;
 }
 
-/** 构造假浏览器页面（console 可编排触发）。 */
+/** 构造假浏览器页面（console 可编排触发；evaluate 按脚本内容分支返回）。 */
 function createFakePage() {
   const state = {
     gotoUrls: [] as string[],
@@ -55,7 +55,28 @@ function createFakePage() {
     async goto(url: string) {
       state.gotoUrls.push(url);
     },
-    async evaluate() {
+    async evaluate(fn) {
+      const script = typeof fn === 'string' ? fn : '';
+      if (script.includes('return readRuntimeHierarchy')) {
+        return {
+          uuid: 'u1',
+          name: 'Scene',
+          active: true,
+          dynamic: false,
+          components: [{ type: 'cc.Scene' }],
+          children: [{ uuid: 'u2', name: 'toast', active: true, dynamic: true, components: [], children: [] }],
+          nodeCount: 2
+        } as never;
+      }
+      if (script.includes('return readRuntimeComponent')) {
+        return {
+          found: true,
+          nodeUuid: 'u2',
+          componentType: 'cc.Label',
+          properties: { string: '确定退出？', fontSize: 28 },
+          skipped: ['onClick']
+        } as never;
+      }
       return { ready: true, sceneName: 'main', childCount: 1, width: 960, height: 640 } as never;
     },
     onConsole(listener) {
@@ -222,6 +243,61 @@ describe('ProbeServer 运行态方法', () => {
     expect(reply.ok).toBe(false);
     expect(JSON.stringify(reply.payload)).toContain('RUNTIME_DRIVER_UNAVAILABLE');
 
+    await server.stop();
+  });
+
+  it('runtimeHierarchy 返回协议化快照（source/dynamic 标注齐全）', async () => {
+    const { driver } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+
+    const reply = await callServer(url, 'server.runtimeHierarchy', { sessionId, maxDepth: 4 });
+    expect(reply.ok).toBe(true);
+    const snapshot = reply.payload as {
+      source: string;
+      previewSessionId: string;
+      root: { name: string; children: Array<{ name: string; dynamic: boolean }> };
+      nodeCount?: number;
+    };
+    expect(snapshot.source).toBe('preview-runtime');
+    expect(snapshot.previewSessionId).toBe(sessionId);
+    expect(snapshot.root.name).toBe('Scene');
+    expect(snapshot.root.children[0]).toMatchObject({ name: 'toast', dynamic: true });
+    expect(snapshot.nodeCount).toBe(2);
+
+    bridge.close();
+    await server.stop();
+  });
+
+  it('runtimeComponent 返回协议化组件快照并保留 skipped', async () => {
+    const { driver } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+
+    const reply = await callServer(url, 'server.runtimeComponent', { sessionId, path: 'Scene/toast', componentType: 'cc.Label' });
+    expect(reply.ok).toBe(true);
+    const snapshot = reply.payload as {
+      source: string;
+      nodeUuid: string;
+      properties: Record<string, unknown>;
+      skipped?: string[];
+    };
+    expect(snapshot.source).toBe('preview-runtime');
+    expect(snapshot.nodeUuid).toBe('u2');
+    expect(snapshot.properties).toMatchObject({ string: '确定退出？', fontSize: 28 });
+    expect(snapshot.skipped).toEqual(['onClick']);
+
+    bridge.close();
     await server.stop();
   });
 });

@@ -9,7 +9,7 @@ import { ConsoleEntrySchema, PreviewSessionSchema, ResolutionSchema, type Consol
 /** 页面侧抽象：与 playwright Page 的最小对齐子集。 */
 export interface RuntimeBrowserPage {
   goto(url: string): Promise<void>;
-  evaluate<R>(fn: (...args: never[]) => R | Promise<R>, arg?: unknown): Promise<R>;
+  evaluate<R>(fn: ((...args: never[]) => R | Promise<R>) | string, arg?: unknown): Promise<R>;
   onConsole(listener: (entry: { level: string; text: string; stack?: string }) => void): void;
   onPageError(listener: (error: { message: string; stack?: string }) => void): void;
   close(): Promise<void>;
@@ -247,14 +247,14 @@ export class RuntimeDriver {
   }
 
   /**
-   * 页面 evaluate 通道：把自包含函数注入页面执行。
+   * 页面 evaluate 通道：把自包含函数或打包脚本注入页面执行。
    *
    * @param sessionId 目标会话。
-   * @param fn 页面内执行的函数（不得引用 Node 侧闭包）。
-   * @param arg 传给函数的唯一参数。
-   * @returns 函数在页面内的返回值。
+   * @param fn 页面内执行的函数（不得引用 Node 侧闭包）或 buildRuntimeScript 产物。
+   * @param arg 传给函数的唯一参数（字符串脚本时忽略）。
+   * @returns 函数或脚本在页面内的返回值。
    */
-  async evaluate<R>(sessionId: string, fn: (...args: never[]) => R | Promise<R>, arg?: unknown): Promise<R> {
+  async evaluate<R>(sessionId: string, fn: ((...args: never[]) => R | Promise<R>) | string, arg?: unknown): Promise<R> {
     const managed = this.requireSession(sessionId);
     if (managed.session.state === 'closed') {
       throw new Error('PREVIEW_SESSION_CLOSED');
