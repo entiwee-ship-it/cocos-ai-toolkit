@@ -82,8 +82,17 @@ const RUNTIME_METHODS = new Set([
   'server.runtimeHierarchy',
   'server.runtimeComponent',
   'server.runtimeInvoke',
-  'server.runtimeWatch'
+  'server.runtimeWatch',
+  'server.runtimeDispatchInput'
 ]);
+
+const RuntimeDispatchInputPayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  inputType: z.enum(['tap', 'click', 'key']),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  key: z.string().min(1).optional()
+});
 
 const RuntimeHierarchyPayloadSchema = z.object({
   sessionId: z.string().min(1),
@@ -442,6 +451,15 @@ export class ProbeServer {
             ...(parsed.maxChanges !== undefined ? { maxChanges: parsed.maxChanges } : {})
           }
         );
+      }
+      case 'server.runtimeDispatchInput': {
+        const parsed = RuntimeDispatchInputPayloadSchema.parse(payload);
+        return driver.dispatchInput(parsed.sessionId, {
+          inputType: parsed.inputType,
+          ...(parsed.x !== undefined ? { x: parsed.x } : {}),
+          ...(parsed.y !== undefined ? { y: parsed.y } : {}),
+          ...(parsed.key !== undefined ? { key: parsed.key } : {})
+        });
       }
       default:
         throw new Error('METHOD_NOT_ALLOWED');

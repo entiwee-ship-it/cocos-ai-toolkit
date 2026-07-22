@@ -101,6 +101,22 @@ export async function readRuntimeResolution(): Promise<{ width: number; height: 
   return { width: Math.round(size.width), height: Math.round(size.height) };
 }
 
+/**
+ * 读取 GameCanvas 元素的页面包围盒（CSS 像素，左上角原点）。
+ * 输入模拟的坐标换算基础：画布内坐标 + 包围盒偏移 = 页面坐标。
+ *
+ * @returns 包围盒；画布缺失时返回 null。
+ */
+export async function readCanvasRect(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  const globalObject = globalThis as {
+    document?: { getElementById?: (id: string) => { getBoundingClientRect?: () => { left: number; top: number; width: number; height: number } } | null };
+  };
+  const canvas = globalObject.document?.getElementById?.('GameCanvas');
+  if (!canvas?.getBoundingClientRect) return null;
+  const rect = canvas.getBoundingClientRect();
+  return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+}
+
 /** 读取组件类型名（兼容压缩/自定义组件）。 */
 function readRuntimeComponentType(component: unknown): string {
   const record = component as { __typename__?: unknown; constructor?: { name?: unknown } };
@@ -455,5 +471,6 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   isRuntimeArgsSafe,
   listRuntimeMethods,
   invokeRuntimeComponentMethod,
-  readRuntimeProperty
+  readRuntimeProperty,
+  readCanvasRect
 ];

@@ -52,7 +52,9 @@ function createFakePage(options: {
     },
     isClosed() {
       return state.closed;
-    }
+    },
+    async mouseClick() {},
+    async keyPress() {}
   };
   return { page, state };
 }

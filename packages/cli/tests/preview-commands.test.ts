@@ -72,6 +72,16 @@ describe('preview 命令解析（阶段五）', () => {
     expect(() => parseCommand(['runtime-watch', '--session-id', 's1', '--path', 'p', '--component-type', 'T'])).toThrow('PROPERTY_REQUIRED');
     expect(() => parseCommand(['runtime-watch', '--session-id', 's1', '--path', 'p', '--component-type', 'T', '--property', 'x', '--timeout-ms', '60000'])).toThrow('INVALID_TIMEOUT_MS');
   });
+
+  it('runtime-input 解析输入类型、坐标与按键', () => {
+    expect(parseCommand(['runtime-input', '--session-id', 's1', '--input-type', 'tap', '--x', '480', '--y', '320.5']))
+      .toEqual({ command: 'runtime-input', sessionId: 's1', inputType: 'tap', x: 480, y: 320.5 });
+    expect(parseCommand(['runtime-input', '--session-id', 's1', '--input-type', 'key', '--key', 'Escape']))
+      .toEqual({ command: 'runtime-input', sessionId: 's1', inputType: 'key', key: 'Escape' });
+    expect(() => parseCommand(['runtime-input', '--session-id', 's1', '--input-type', 'hover'])).toThrow('INVALID_INPUT_TYPE');
+    expect(() => parseCommand(['runtime-input', '--session-id', 's1', '--input-type', 'tap', '--x', '-1'])).toThrow('INVALID_COORDINATE');
+    expect(() => parseCommand(['runtime-input', '--session-id', 's1'])).toThrow('INPUT_TYPE_REQUIRED');
+  });
 });
 
 describe('preview 命令请求映射', () => {
@@ -114,5 +124,12 @@ describe('preview 命令请求映射', () => {
       .toEqual(['server.runtimeInvoke', { sessionId: 's1', path: 'p', componentType: 'T', method: 'm' }]);
     expect(toRequest({ command: 'runtime-watch', sessionId: 's1', path: 'p', componentType: 'T', property: 'a.b', timeoutMs: 5000 }))
       .toEqual(['server.runtimeWatch', { sessionId: 's1', path: 'p', componentType: 'T', property: 'a.b', timeoutMs: 5000 }]);
+  });
+
+  it('runtime-input 映射 server.runtimeDispatchInput', () => {
+    expect(toRequest({ command: 'runtime-input', sessionId: 's1', inputType: 'tap', x: 480, y: 320 }))
+      .toEqual(['server.runtimeDispatchInput', { sessionId: 's1', inputType: 'tap', x: 480, y: 320 }]);
+    expect(toRequest({ command: 'runtime-input', sessionId: 's1', inputType: 'key', key: 'Enter' }))
+      .toEqual(['server.runtimeDispatchInput', { sessionId: 's1', inputType: 'key', key: 'Enter' }]);
   });
 });

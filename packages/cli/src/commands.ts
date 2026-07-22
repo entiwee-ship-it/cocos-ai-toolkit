@@ -65,7 +65,8 @@ export type CliCommand =
   | { command: 'runtime-hierarchy'; sessionId: string; maxDepth?: number; maxNodes?: number }
   | { command: 'runtime-component'; sessionId: string; path: string; componentType: string }
   | { command: 'runtime-invoke'; sessionId: string; path: string; componentType: string; method: string; args?: unknown[] }
-  | { command: 'runtime-watch'; sessionId: string; path: string; componentType: string; property: string; timeoutMs?: number; intervalMs?: number; maxChanges?: number };
+  | { command: 'runtime-watch'; sessionId: string; path: string; componentType: string; property: string; timeoutMs?: number; intervalMs?: number; maxChanges?: number }
+  | { command: 'runtime-input'; sessionId: string; inputType: 'tap' | 'click' | 'key'; x?: number; y?: number; key?: string };
 
 interface ParsedArguments {
   command: string;
@@ -117,7 +118,8 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'runtime-hierarchy': ['session-id', 'max-depth', 'max-nodes'],
   'runtime-component': ['session-id', 'path', 'component-type'],
   'runtime-invoke': ['session-id', 'path', 'component-type', 'method', 'args'],
-  'runtime-watch': ['session-id', 'path', 'component-type', 'property', 'timeout-ms', 'interval-ms', 'max-changes']
+  'runtime-watch': ['session-id', 'path', 'component-type', 'property', 'timeout-ms', 'interval-ms', 'max-changes'],
+  'runtime-input': ['session-id', 'input-type', 'x', 'y', 'key']
 };
 
 /**
@@ -190,6 +192,20 @@ export function parseCommand(argv: string[]): CliCommand {
       ...(flags.has('timeout-ms') ? { timeoutMs: readBoundedPositiveInteger(flags.get('timeout-ms') ?? '', 55_000, 'INVALID_TIMEOUT_MS') } : {}),
       ...(flags.has('interval-ms') ? { intervalMs: readBoundedPositiveInteger(flags.get('interval-ms') ?? '', 10_000, 'INVALID_INTERVAL_MS') } : {}),
       ...(flags.has('max-changes') ? { maxChanges: readBoundedPositiveInteger(flags.get('max-changes') ?? '', 100, 'INVALID_MAX_CHANGES') } : {})
+    };
+  }
+  if (command === 'runtime-input') {
+    const inputType = requireFlag(flags, 'input-type', 'INPUT_TYPE_REQUIRED');
+    if (inputType !== 'tap' && inputType !== 'click' && inputType !== 'key') {
+      throw new Error('INVALID_INPUT_TYPE');
+    }
+    return {
+      command,
+      sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
+      inputType,
+      ...(flags.has('x') ? { x: readCoordinate(flags.get('x') ?? '') } : {}),
+      ...(flags.has('y') ? { y: readCoordinate(flags.get('y') ?? '') } : {}),
+      ...(flags.has('key') ? { key: flags.get('key') } : {})
     };
   }
 
@@ -494,6 +510,15 @@ function readInvokeArgs(value: string): unknown[] {
   }
   if (!Array.isArray(parsed)) {
     throw new Error('INVALID_INVOKE_ARGS');
+  }
+  return parsed;
+}
+
+/** 解析画布坐标（CSS 像素，允许浮点）。 */
+function readCoordinate(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error('INVALID_COORDINATE');
   }
   return parsed;
 }

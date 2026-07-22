@@ -53,6 +53,12 @@ function wrapPage(page: Page): RuntimeBrowserPage {
     },
     isClosed(): boolean {
       return page.isClosed();
+    },
+    async mouseClick(x: number, y: number): Promise<void> {
+      await page.mouse.click(x, y);
+    },
+    async keyPress(key: string): Promise<void> {
+      await page.keyboard.press(key);
     }
   };
 }

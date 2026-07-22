@@ -49,6 +49,8 @@ function createFakePage() {
     gotoUrls: [] as string[],
     closed: false,
     propertyReads: 0,
+    clicks: [] as Array<{ x: number; y: number }>,
+    keys: [] as string[],
     consoleListeners: [] as Array<(entry: { level: string; text: string; stack?: string }) => void>,
     pageErrorListeners: [] as Array<(error: { message: string; stack?: string }) => void>
   };
@@ -86,6 +88,9 @@ function createFakePage() {
         state.propertyReads = (state.propertyReads ?? 0) + 1;
         return { found: true, nodeUuid: 'u2', property: 'state.hp', value: state.propertyReads > 2 ? 2 : 1 } as never;
       }
+      if (script.includes('return readCanvasRect')) {
+        return { x: 100, y: 50, width: 960, height: 640 } as never;
+      }
       return { ready: true, sceneName: 'main', childCount: 1, width: 960, height: 640 } as never;
     },
     onConsole(listener) {
@@ -99,6 +104,12 @@ function createFakePage() {
     },
     isClosed() {
       return state.closed;
+    },
+    async mouseClick(x: number, y: number) {
+      state.clicks.push({ x, y });
+    },
+    async keyPress(key: string) {
+      state.keys.push(key);
     }
   };
   return { page, state };
@@ -350,6 +361,29 @@ describe('ProbeServer 运行态方法', () => {
     expect(result.initialValue).toBe(1);
     expect(result.changes).toHaveLength(1);
     expect(result.changes[0]).toMatchObject({ from: 1, to: 2 });
+
+    bridge.close();
+    await server.stop();
+  });
+
+  it('runtimeDispatchInput 按画布偏移派发点击并直接派发按键', async () => {
+    const { driver, pages } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+
+    const tapReply = await callServer(url, 'server.runtimeDispatchInput', { sessionId, inputType: 'tap', x: 480, y: 320 });
+    expect(tapReply.ok).toBe(true);
+    expect(tapReply.payload).toMatchObject({ dispatched: true, pageX: 580, pageY: 370 });
+    expect(pages[0].state.clicks).toEqual([{ x: 580, y: 370 }]);
+
+    const keyReply = await callServer(url, 'server.runtimeDispatchInput', { sessionId, inputType: 'key', key: 'Escape' });
+    expect(keyReply.ok).toBe(true);
+    expect(pages[0].state.keys).toEqual(['Escape']);
 
     bridge.close();
     await server.stop();

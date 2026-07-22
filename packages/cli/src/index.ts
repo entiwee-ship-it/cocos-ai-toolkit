@@ -105,6 +105,7 @@ const HELP = `用法:
   cocos-ai-probe runtime-component --session-id <id> --path <节点路径> --component-type <类型>
   cocos-ai-probe runtime-invoke --session-id <id> --path <节点路径> --component-type <类型> --method <方法名> [--args <json数组>]
   cocos-ai-probe runtime-watch --session-id <id> --path <节点路径> --component-type <类型> --property <属性路径> [--timeout-ms <n>] [--interval-ms <n>] [--max-changes <n>]
+  cocos-ai-probe runtime-input --session-id <id> --input-type tap|click|key [--x <画布x>] [--y <画布y>] [--key <按键名>]
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
@@ -1451,6 +1452,15 @@ export function toRequest(command: CliCommand): [string, unknown] {
       ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
       ...(command.intervalMs !== undefined ? { intervalMs: command.intervalMs } : {}),
       ...(command.maxChanges !== undefined ? { maxChanges: command.maxChanges } : {})
+    }];
+  }
+  if (command.command === 'runtime-input') {
+    return ['server.runtimeDispatchInput', {
+      sessionId: command.sessionId,
+      inputType: command.inputType,
+      ...(command.x !== undefined ? { x: command.x } : {}),
+      ...(command.y !== undefined ? { y: command.y } : {}),
+      ...(command.key !== undefined ? { key: command.key } : {})
     }];
   }
 

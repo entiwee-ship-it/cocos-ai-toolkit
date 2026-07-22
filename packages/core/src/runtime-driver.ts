@@ -14,6 +14,10 @@ export interface RuntimeBrowserPage {
   onPageError(listener: (error: { message: string; stack?: string }) => void): void;
   close(): Promise<void>;
   isClosed(): boolean;
+  /** 页面坐标点击（CSS 像素，viewport 坐标系）。 */
+  mouseClick(x: number, y: number): Promise<void>;
+  /** 按键派发（playwright key 名，如 Enter/Escape/a）。 */
+  keyPress(key: string): Promise<void>;
 }
 
 /** 浏览器实例抽象。 */
@@ -44,6 +48,25 @@ export interface RuntimeLaunchOptions {
   url: string;
   resolution?: Resolution;
   channel?: string;
+}
+
+/** 输入描述：tap/click 为画布内坐标点击，key 为按键。 */
+export interface RuntimeDispatchInput {
+  inputType: 'tap' | 'click' | 'key';
+  x?: number;
+  y?: number;
+  key?: string;
+}
+
+/** 输入派发回执。 */
+export interface RuntimeDispatchReceipt {
+  dispatched: true;
+  inputType: string;
+  x?: number;
+  y?: number;
+  pageX?: number;
+  pageY?: number;
+  key?: string;
 }
 
 interface ManagedSession {
@@ -277,6 +300,42 @@ export class RuntimeDriver {
   readConsole(sessionId: string, filter: { sinceSeq?: number; level?: ConsoleEntry['level'] }): { entries: ConsoleEntry[]; nextSeq: number } {
     const managed = this.requireSession(sessionId);
     return managed.consoleBuffer.read(filter);
+  }
+
+  /**
+   * 输入模拟：坐标语义为**画布内 CSS 像素**（左上角原点），driver 按画布包围盒
+   * 换算为页面坐标后经浏览器真实输入管道派发；按键直接派发。
+   * 回执只证明事件已派发，游戏是否响应须由后续断言验证，不谎报。
+   *
+   * @param sessionId 目标会话。
+   * @param input 输入描述（tap/click 需 x/y；key 需 key）。
+   * @returns 派发回执（含换算后的页面坐标）。
+   */
+  async dispatchInput(sessionId: string, input: RuntimeDispatchInput): Promise<RuntimeDispatchReceipt> {
+    const managed = this.requireSession(sessionId);
+    if (managed.session.state === 'closed') {
+      throw new Error('PREVIEW_SESSION_CLOSED');
+    }
+    if (this.syncLostState(managed)) {
+      throw new Error('PREVIEW_SESSION_LOST');
+    }
+    if (input.inputType === 'key') {
+      if (!input.key) throw new Error('INPUT_KEY_REQUIRED');
+      await managed.page.keyPress(input.key);
+      return { dispatched: true, inputType: 'key', key: input.key };
+    }
+    if (typeof input.x !== 'number' || typeof input.y !== 'number') {
+      throw new Error('INPUT_COORDINATES_REQUIRED');
+    }
+    const { buildRuntimeScript } = await import('./runtime-inject.js');
+    const rect = await managed.page.evaluate(buildRuntimeScript('readCanvasRect')) as { x: number; y: number } | null;
+    if (!rect) {
+      throw new Error('GAME_CANVAS_NOT_FOUND');
+    }
+    const pageX = rect.x + input.x;
+    const pageY = rect.y + input.y;
+    await managed.page.mouseClick(pageX, pageY);
+    return { dispatched: true, inputType: input.inputType, x: input.x, y: input.y, pageX, pageY };
   }
 
   /** 关闭全部会话与浏览器。 */
