@@ -233,12 +233,12 @@ function findRuntimeNodeByPath(
 }
 
 /**
- * 按节点路径与组件类型读取运行时组件属性包。
+ * 共用定位：按节点路径与组件类型定位运行时组件（含 cc. 前缀兼容匹配）。
  *
- * @param options path 节点路径（如 Canvas/panel/btn）；componentType 组件类型（如 cc.Label）。
- * @returns found 命中标记、节点 uuid、序列化属性与被跳过的字段清单。
+ * @param options path 节点路径；componentType 组件类型。
+ * @returns found 命中时携带 node/component/actualComponentType；未命中时携带 reason 与候选清单。
  */
-async function readRuntimeComponent(options: { path: string; componentType: string }): Promise<Record<string, unknown>> {
+async function locateRuntimeComponent(options: { path: string; componentType: string }): Promise<Record<string, unknown>> {
   const globalObject = globalThis as {
     System?: { import?: (name: string) => Promise<Record<string, unknown>> };
   };
@@ -276,6 +276,25 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
       availableComponents: components.map((item) => readRuntimeComponentType(item))
     };
   }
+  return {
+    found: true,
+    node,
+    component,
+    actualComponentType,
+    nodeUuid: typeof node.uuid === 'string' ? node.uuid : ''
+  };
+}
+
+/**
+ * 按节点路径与组件类型读取运行时组件属性包。
+ *
+ * @param options path 节点路径（如 Canvas/panel/btn）；componentType 组件类型（如 cc.Label）。
+ * @returns found 命中标记、节点 uuid、序列化属性与被跳过的字段清单。
+ */
+async function readRuntimeComponent(options: { path: string; componentType: string }): Promise<Record<string, unknown>> {
+  const located = await locateRuntimeComponent(options);
+  if (located.found !== true) return located;
+  const component = located.component as Record<string, unknown>;
 
   const skipped: string[] = [];
   const seen = new Set<unknown>([component]);
@@ -297,10 +316,128 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
   }
   return {
     found: true,
-    nodeUuid: typeof node.uuid === 'string' ? node.uuid : '',
-    componentType: actualComponentType,
+    nodeUuid: located.nodeUuid,
+    componentType: located.actualComponentType,
     properties,
     skipped
+  };
+}
+
+/** 校验 invoke 参数 JSON 安全：拒绝函数/undefined/Symbol/bigint 与携带 __type 标记的对象。 */
+function isRuntimeArgsSafe(value: unknown, depth: number): boolean {
+  if (value === null) return true;
+  const valueType = typeof value;
+  if (valueType === 'string' || valueType === 'number' || valueType === 'boolean') return true;
+  if (valueType !== 'object') return false;
+  if (depth > 6) return false;
+  if (Array.isArray(value)) return value.every((item) => isRuntimeArgsSafe(item, depth + 1));
+  const keys = Object.keys(value as Record<string, unknown>);
+  if (keys.includes('__type')) return false;
+  return keys.every((key) => isRuntimeArgsSafe((value as Record<string, unknown>)[key], depth + 1));
+}
+
+/** 沿原型链收集组件全部方法名（class 方法在原型上，不可枚举）。 */
+function listRuntimeMethods(component: unknown): string[] {
+  const methods = new Set<string>();
+  let cursor = component as Record<string, unknown> | null;
+  while (cursor && cursor !== Object.prototype) {
+    for (const key of Object.getOwnPropertyNames(cursor)) {
+      if (key === 'constructor' || key.startsWith('__')) continue;
+      try {
+        if (typeof cursor[key] === 'function') methods.add(key);
+      } catch {
+        // 读取失败的键忽略
+      }
+    }
+    cursor = Object.getPrototypeOf(cursor) as Record<string, unknown> | null;
+  }
+  return [...methods];
+}
+
+/**
+ * 调用运行时组件方法：白名单参数、黑名单方法、返回值序列化回传。
+ *
+ * @param options path 节点路径；componentType 组件类型；method 方法名；args 位置参数。
+ * @returns invoked 调用标记、序列化返回值或失败原因。
+ */
+async function invokeRuntimeComponentMethod(options: {
+  path: string;
+  componentType: string;
+  method: string;
+  args?: unknown[];
+}): Promise<Record<string, unknown>> {
+  // 生命周期与危险方法黑名单（内联字面量：模块级常量在打包脚本作用域中不存在）。
+  const blocklist = [
+    'onLoad', 'start', 'update', 'lateUpdate', 'onEnable', 'onDisable', 'onDestroy',
+    'onFocusInEditor', 'onLostFocusInEditor', 'resetInEditor',
+    'eval', 'Function', 'constructor'
+  ];
+  if (blocklist.includes(options.method)) {
+    return { invoked: false, reason: 'method-not-allowed' };
+  }
+  const args = Array.isArray(options.args) ? options.args : [];
+  if (!args.every((arg) => isRuntimeArgsSafe(arg, 1))) {
+    return { invoked: false, reason: 'invalid-args' };
+  }
+  const located = await locateRuntimeComponent({ path: options.path, componentType: options.componentType });
+  if (located.found !== true) return located;
+  const component = located.component as Record<string, unknown>;
+  const method = component[options.method];
+  if (typeof method !== 'function') {
+    return {
+      found: false,
+      reason: 'method-not-found',
+      nodeUuid: located.nodeUuid,
+      availableMethods: listRuntimeMethods(component)
+    };
+  }
+  try {
+    const returnValue = await (method as (...rest: unknown[]) => unknown).apply(component, args);
+    return {
+      found: true,
+      invoked: true,
+      nodeUuid: located.nodeUuid,
+      componentType: located.actualComponentType,
+      returnValue: serializeRuntimeValue(returnValue, 1, new Set())
+    };
+  } catch (error) {
+    return {
+      found: true,
+      invoked: false,
+      reason: 'method-threw',
+      nodeUuid: located.nodeUuid,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+/**
+ * 读取运行时组件属性（支持 `a.b.c` 点路径），用于属性监听与断言。
+ *
+ * @param options path 节点路径；componentType 组件类型；property 属性路径。
+ * @returns found 命中标记与序列化属性值。
+ */
+async function readRuntimeProperty(options: { path: string; componentType: string; property: string }): Promise<Record<string, unknown>> {
+  const located = await locateRuntimeComponent({ path: options.path, componentType: options.componentType });
+  if (located.found !== true) return located;
+  const component = located.component as Record<string, unknown>;
+  const segments = options.property.split('.').filter((segment) => segment.length > 0);
+  let value: unknown = component;
+  for (const segment of segments) {
+    if (value === null || value === undefined || typeof value !== 'object') {
+      return { found: false, reason: 'property-not-found', nodeUuid: located.nodeUuid, property: options.property };
+    }
+    value = (value as Record<string, unknown>)[segment];
+  }
+  if (value === undefined) {
+    return { found: false, reason: 'property-not-found', nodeUuid: located.nodeUuid, property: options.property };
+  }
+  return {
+    found: true,
+    nodeUuid: located.nodeUuid,
+    componentType: located.actualComponentType,
+    property: options.property,
+    value: serializeRuntimeValue(value, 1, new Set([component]))
   };
 }
 
@@ -313,5 +450,10 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   serializeRuntimeValue,
   readRuntimeHierarchy,
   findRuntimeNodeByPath,
-  readRuntimeComponent
+  readRuntimeComponent,
+  locateRuntimeComponent,
+  isRuntimeArgsSafe,
+  listRuntimeMethods,
+  invokeRuntimeComponentMethod,
+  readRuntimeProperty
 ];

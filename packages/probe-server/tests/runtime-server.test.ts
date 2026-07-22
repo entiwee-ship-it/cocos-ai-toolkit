@@ -48,6 +48,7 @@ function createFakePage() {
   const state = {
     gotoUrls: [] as string[],
     closed: false,
+    propertyReads: 0,
     consoleListeners: [] as Array<(entry: { level: string; text: string; stack?: string }) => void>,
     pageErrorListeners: [] as Array<(error: { message: string; stack?: string }) => void>
   };
@@ -76,6 +77,14 @@ function createFakePage() {
           properties: { string: '确定退出？', fontSize: 28 },
           skipped: ['onClick']
         } as never;
+      }
+      if (script.includes('return invokeRuntimeComponentMethod')) {
+        return { found: true, invoked: true, nodeUuid: 'u2', componentType: 'GameLogic', returnValue: 6 } as never;
+      }
+      if (script.includes('return readRuntimeProperty')) {
+        // watch 序列：前两次 1，之后 2（第二次轮询即变化）
+        state.propertyReads = (state.propertyReads ?? 0) + 1;
+        return { found: true, nodeUuid: 'u2', property: 'state.hp', value: state.propertyReads > 2 ? 2 : 1 } as never;
       }
       return { ready: true, sceneName: 'main', childCount: 1, width: 960, height: 640 } as never;
     },
@@ -296,6 +305,51 @@ describe('ProbeServer 运行态方法', () => {
     expect(snapshot.nodeUuid).toBe('u2');
     expect(snapshot.properties).toMatchObject({ string: '确定退出？', fontSize: 28 });
     expect(snapshot.skipped).toEqual(['onClick']);
+
+    bridge.close();
+    await server.stop();
+  });
+
+  it('runtimeInvoke 透传方法调用结果', async () => {
+    const { driver } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+
+    const reply = await callServer(url, 'server.runtimeInvoke', {
+      sessionId, path: 'Scene/panel', componentType: 'GameLogic', method: 'add', args: [2, 3]
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.payload).toMatchObject({ invoked: true, returnValue: 6 });
+
+    bridge.close();
+    await server.stop();
+  });
+
+  it('runtimeWatch 在属性变化时返回变化记录', async () => {
+    const { driver } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+
+    const reply = await callServer(url, 'server.runtimeWatch', {
+      sessionId, path: 'Scene/panel', componentType: 'GameLogic', property: 'state.hp',
+      intervalMs: 1, timeoutMs: 5_000
+    });
+    expect(reply.ok).toBe(true);
+    const result = reply.payload as { timedOut: boolean; initialValue: unknown; changes: Array<{ from: unknown; to: unknown }> };
+    expect(result.timedOut).toBe(false);
+    expect(result.initialValue).toBe(1);
+    expect(result.changes).toHaveLength(1);
+    expect(result.changes[0]).toMatchObject({ from: 1, to: 2 });
 
     bridge.close();
     await server.stop();

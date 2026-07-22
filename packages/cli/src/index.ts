@@ -103,6 +103,8 @@ const HELP = `用法:
   cocos-ai-probe runtime-console --session-id <id> [--since-seq <n>] [--level log|info|warn|error|debug]
   cocos-ai-probe runtime-hierarchy --session-id <id> [--max-depth <n>] [--max-nodes <n>]
   cocos-ai-probe runtime-component --session-id <id> --path <节点路径> --component-type <类型>
+  cocos-ai-probe runtime-invoke --session-id <id> --path <节点路径> --component-type <类型> --method <方法名> [--args <json数组>]
+  cocos-ai-probe runtime-watch --session-id <id> --path <节点路径> --component-type <类型> --property <属性路径> [--timeout-ms <n>] [--interval-ms <n>] [--max-changes <n>]
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
@@ -1429,6 +1431,26 @@ export function toRequest(command: CliCommand): [string, unknown] {
       sessionId: command.sessionId,
       path: command.path,
       componentType: command.componentType
+    }];
+  }
+  if (command.command === 'runtime-invoke') {
+    return ['server.runtimeInvoke', {
+      sessionId: command.sessionId,
+      path: command.path,
+      componentType: command.componentType,
+      method: command.method,
+      ...(command.args ? { args: command.args } : {})
+    }];
+  }
+  if (command.command === 'runtime-watch') {
+    return ['server.runtimeWatch', {
+      sessionId: command.sessionId,
+      path: command.path,
+      componentType: command.componentType,
+      property: command.property,
+      ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
+      ...(command.intervalMs !== undefined ? { intervalMs: command.intervalMs } : {}),
+      ...(command.maxChanges !== undefined ? { maxChanges: command.maxChanges } : {})
     }];
   }
 

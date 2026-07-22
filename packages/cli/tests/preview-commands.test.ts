@@ -56,6 +56,22 @@ describe('preview 命令解析（阶段五）', () => {
     expect(() => parseCommand(['runtime-component', '--session-id', 's1', '--component-type', 'cc.Button'])).toThrow('NODE_PATH_REQUIRED');
     expect(() => parseCommand(['runtime-component', '--session-id', 's1', '--path', 'Canvas/btn'])).toThrow('COMPONENT_TYPE_REQUIRED');
   });
+
+  it('runtime-invoke 解析方法名与 JSON 参数数组', () => {
+    expect(parseCommand(['runtime-invoke', '--session-id', 's1', '--path', 'Canvas/panel', '--component-type', 'GameLogic', '--method', 'add', '--args', '[2,3]']))
+      .toEqual({ command: 'runtime-invoke', sessionId: 's1', path: 'Canvas/panel', componentType: 'GameLogic', method: 'add', args: [2, 3] });
+    expect(parseCommand(['runtime-invoke', '--session-id', 's1', '--path', 'p', '--component-type', 'T', '--method', 'm']))
+      .toEqual({ command: 'runtime-invoke', sessionId: 's1', path: 'p', componentType: 'T', method: 'm' });
+    expect(() => parseCommand(['runtime-invoke', '--session-id', 's1', '--path', 'p', '--component-type', 'T', '--method', 'm', '--args', '{"a":1}'])).toThrow('INVALID_INVOKE_ARGS');
+    expect(() => parseCommand(['runtime-invoke', '--session-id', 's1', '--path', 'p', '--component-type', 'T', '--method', 'm', '--args', '[1'])).toThrow('INVALID_INVOKE_ARGS_JSON');
+  });
+
+  it('runtime-watch 解析属性与轮询参数', () => {
+    expect(parseCommand(['runtime-watch', '--session-id', 's1', '--path', 'Canvas/panel', '--component-type', 'GameLogic', '--property', 'state.hp', '--timeout-ms', '5000', '--interval-ms', '100', '--max-changes', '3']))
+      .toEqual({ command: 'runtime-watch', sessionId: 's1', path: 'Canvas/panel', componentType: 'GameLogic', property: 'state.hp', timeoutMs: 5000, intervalMs: 100, maxChanges: 3 });
+    expect(() => parseCommand(['runtime-watch', '--session-id', 's1', '--path', 'p', '--component-type', 'T'])).toThrow('PROPERTY_REQUIRED');
+    expect(() => parseCommand(['runtime-watch', '--session-id', 's1', '--path', 'p', '--component-type', 'T', '--property', 'x', '--timeout-ms', '60000'])).toThrow('INVALID_TIMEOUT_MS');
+  });
 });
 
 describe('preview 命令请求映射', () => {
@@ -89,5 +105,14 @@ describe('preview 命令请求映射', () => {
       .toEqual(['server.runtimeHierarchy', { sessionId: 's1' }]);
     expect(toRequest({ command: 'runtime-component', sessionId: 's1', path: 'Canvas/btn', componentType: 'cc.Button' }))
       .toEqual(['server.runtimeComponent', { sessionId: 's1', path: 'Canvas/btn', componentType: 'cc.Button' }]);
+  });
+
+  it('runtime-invoke / runtime-watch 映射对应 server 方法', () => {
+    expect(toRequest({ command: 'runtime-invoke', sessionId: 's1', path: 'p', componentType: 'T', method: 'add', args: [1, 2] }))
+      .toEqual(['server.runtimeInvoke', { sessionId: 's1', path: 'p', componentType: 'T', method: 'add', args: [1, 2] }]);
+    expect(toRequest({ command: 'runtime-invoke', sessionId: 's1', path: 'p', componentType: 'T', method: 'm' }))
+      .toEqual(['server.runtimeInvoke', { sessionId: 's1', path: 'p', componentType: 'T', method: 'm' }]);
+    expect(toRequest({ command: 'runtime-watch', sessionId: 's1', path: 'p', componentType: 'T', property: 'a.b', timeoutMs: 5000 }))
+      .toEqual(['server.runtimeWatch', { sessionId: 's1', path: 'p', componentType: 'T', property: 'a.b', timeoutMs: 5000 }]);
   });
 });

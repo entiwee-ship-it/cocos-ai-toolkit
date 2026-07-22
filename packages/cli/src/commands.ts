@@ -63,7 +63,9 @@ export type CliCommand =
   | { command: 'preview-sessions'; projectId?: string }
   | { command: 'runtime-console'; sessionId: string; sinceSeq?: number; level?: string }
   | { command: 'runtime-hierarchy'; sessionId: string; maxDepth?: number; maxNodes?: number }
-  | { command: 'runtime-component'; sessionId: string; path: string; componentType: string };
+  | { command: 'runtime-component'; sessionId: string; path: string; componentType: string }
+  | { command: 'runtime-invoke'; sessionId: string; path: string; componentType: string; method: string; args?: unknown[] }
+  | { command: 'runtime-watch'; sessionId: string; path: string; componentType: string; property: string; timeoutMs?: number; intervalMs?: number; maxChanges?: number };
 
 interface ParsedArguments {
   command: string;
@@ -113,7 +115,9 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'preview-sessions': ['project-id'],
   'runtime-console': ['session-id', 'since-seq', 'level'],
   'runtime-hierarchy': ['session-id', 'max-depth', 'max-nodes'],
-  'runtime-component': ['session-id', 'path', 'component-type']
+  'runtime-component': ['session-id', 'path', 'component-type'],
+  'runtime-invoke': ['session-id', 'path', 'component-type', 'method', 'args'],
+  'runtime-watch': ['session-id', 'path', 'component-type', 'property', 'timeout-ms', 'interval-ms', 'max-changes']
 };
 
 /**
@@ -164,6 +168,28 @@ export function parseCommand(argv: string[]): CliCommand {
       sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
       path: requireFlag(flags, 'path', 'NODE_PATH_REQUIRED'),
       componentType: requireFlag(flags, 'component-type', 'COMPONENT_TYPE_REQUIRED')
+    };
+  }
+  if (command === 'runtime-invoke') {
+    return {
+      command,
+      sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
+      path: requireFlag(flags, 'path', 'NODE_PATH_REQUIRED'),
+      componentType: requireFlag(flags, 'component-type', 'COMPONENT_TYPE_REQUIRED'),
+      method: requireFlag(flags, 'method', 'METHOD_REQUIRED'),
+      ...(flags.has('args') ? { args: readInvokeArgs(flags.get('args') ?? '') } : {})
+    };
+  }
+  if (command === 'runtime-watch') {
+    return {
+      command,
+      sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
+      path: requireFlag(flags, 'path', 'NODE_PATH_REQUIRED'),
+      componentType: requireFlag(flags, 'component-type', 'COMPONENT_TYPE_REQUIRED'),
+      property: requireFlag(flags, 'property', 'PROPERTY_REQUIRED'),
+      ...(flags.has('timeout-ms') ? { timeoutMs: readBoundedPositiveInteger(flags.get('timeout-ms') ?? '', 55_000, 'INVALID_TIMEOUT_MS') } : {}),
+      ...(flags.has('interval-ms') ? { intervalMs: readBoundedPositiveInteger(flags.get('interval-ms') ?? '', 10_000, 'INVALID_INTERVAL_MS') } : {}),
+      ...(flags.has('max-changes') ? { maxChanges: readBoundedPositiveInteger(flags.get('max-changes') ?? '', 100, 'INVALID_MAX_CHANGES') } : {})
     };
   }
 
@@ -454,6 +480,20 @@ function readBoundedPositiveInteger(value: string, maximum: number, errorCode: s
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > maximum) {
     throw new Error(errorCode);
+  }
+  return parsed;
+}
+
+/** 解析 invoke 位置参数 JSON 数组。 */
+function readInvokeArgs(value: string): unknown[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('INVALID_INVOKE_ARGS_JSON');
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error('INVALID_INVOKE_ARGS');
   }
   return parsed;
 }

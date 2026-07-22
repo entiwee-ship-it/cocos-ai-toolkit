@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { resolveWebSocketMaxPayload, ResolutionSchema, RuntimeComponentSnapshotSchema } from '@cocos-ai/protocol';
-import { assembleRuntimeNodeSnapshot, buildRuntimeScript, RuntimeDriver } from '@cocos-ai/core';
+import { assembleRuntimeNodeSnapshot, buildRuntimeScript, RuntimeDriver, watchRuntimeProperty } from '@cocos-ai/core';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { z } from 'zod';
 import { RequestRouter } from './request-router.js';
@@ -80,7 +80,9 @@ const RUNTIME_METHODS = new Set([
   'server.previewSession',
   'server.runtimeConsole',
   'server.runtimeHierarchy',
-  'server.runtimeComponent'
+  'server.runtimeComponent',
+  'server.runtimeInvoke',
+  'server.runtimeWatch'
 ]);
 
 const RuntimeHierarchyPayloadSchema = z.object({
@@ -93,6 +95,25 @@ const RuntimeComponentPayloadSchema = z.object({
   sessionId: z.string().min(1),
   path: z.string().min(1),
   componentType: z.string().min(1)
+});
+
+const RuntimeInvokePayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  path: z.string().min(1),
+  componentType: z.string().min(1),
+  method: z.string().min(1),
+  args: z.array(z.unknown()).optional()
+});
+
+const RuntimeWatchPayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  path: z.string().min(1),
+  componentType: z.string().min(1),
+  property: z.string().min(1),
+  // watch 最长 55s：必须低于 CLI 客户端默认超时（60s），避免结果未知。
+  timeoutMs: z.number().int().positive().max(55_000).optional(),
+  intervalMs: z.number().int().positive().max(10_000).optional(),
+  maxChanges: z.number().int().positive().max(100).optional()
 });
 
 export interface ProbeServerOptions {
@@ -385,6 +406,42 @@ export class ProbeServer {
           }),
           ...(Array.isArray(raw.skipped) ? { skipped: raw.skipped } : {})
         };
+      }
+      case 'server.runtimeInvoke': {
+        const parsed = RuntimeInvokePayloadSchema.parse(payload);
+        return driver.evaluate(
+          parsed.sessionId,
+          buildRuntimeScript('invokeRuntimeComponentMethod', {
+            path: parsed.path,
+            componentType: parsed.componentType,
+            method: parsed.method,
+            args: parsed.args ?? []
+          })
+        );
+      }
+      case 'server.runtimeWatch': {
+        const parsed = RuntimeWatchPayloadSchema.parse(payload);
+        return watchRuntimeProperty(
+          async () => {
+            const result = await driver.evaluate(
+              parsed.sessionId,
+              buildRuntimeScript('readRuntimeProperty', {
+                path: parsed.path,
+                componentType: parsed.componentType,
+                property: parsed.property
+              })
+            ) as Record<string, unknown>;
+            if (!result || result.found !== true) {
+              throw new Error(`RUNTIME_PROPERTY_UNAVAILABLE:${JSON.stringify(result)}`);
+            }
+            return result.value;
+          },
+          {
+            ...(parsed.intervalMs !== undefined ? { intervalMs: parsed.intervalMs } : {}),
+            ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
+            ...(parsed.maxChanges !== undefined ? { maxChanges: parsed.maxChanges } : {})
+          }
+        );
       }
       default:
         throw new Error('METHOD_NOT_ALLOWED');
