@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PNG } from 'pngjs';
 import WebSocket from 'ws';
 import { RuntimeDriver, type RuntimeBrowser, type RuntimeBrowserPage } from '@cocos-ai/core';
 import { ProbeServer } from '../src/server.js';
+
+/** 构造纯色 PNG。 */
+function createSolidPng(width: number, height: number, rgba: [number, number, number, number]): Buffer {
+  const png = new PNG({ width, height });
+  for (let index = 0; index < width * height; index += 1) {
+    png.data[index * 4] = rgba[0];
+    png.data[index * 4 + 1] = rgba[1];
+    png.data[index * 4 + 2] = rgba[2];
+    png.data[index * 4 + 3] = rgba[3];
+  }
+  return PNG.sync.write(png);
+}
 
 /** 构造一个注册即应答 probe.previewOpen 的假 Bridge。 */
 async function connectFakeBridge(options: {
@@ -51,6 +67,8 @@ function createFakePage() {
     propertyReads: 0,
     clicks: [] as Array<{ x: number; y: number }>,
     keys: [] as string[],
+    viewport: null as null | { width: number; height: number },
+    screenshots: 0,
     consoleListeners: [] as Array<(entry: { level: string; text: string; stack?: string }) => void>,
     pageErrorListeners: [] as Array<(error: { message: string; stack?: string }) => void>
   };
@@ -110,6 +128,13 @@ function createFakePage() {
     },
     async keyPress(key: string) {
       state.keys.push(key);
+    },
+    async setViewportSize(size: { width: number; height: number }) {
+      state.viewport = size;
+    },
+    async screenshotElement() {
+      state.screenshots += 1;
+      return createSolidPng(960, 640, [10, 10, 10, 255]);
     }
   };
   return { page, state };
@@ -384,6 +409,47 @@ describe('ProbeServer 运行态方法', () => {
     const keyReply = await callServer(url, 'server.runtimeDispatchInput', { sessionId, inputType: 'key', key: 'Escape' });
     expect(keyReply.ok).toBe(true);
     expect(pages[0].state.keys).toEqual(['Escape']);
+
+    bridge.close();
+    await server.stop();
+  });
+
+  it('runtimeCapture 截图落盘并返回协议化产物（单张与多分辨率）', async () => {
+    const captureRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-captures-'));
+    const { driver, pages } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver, captureRoot });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+
+    const single = await callServer(url, 'server.runtimeCapture', { sessionId });
+    expect(single.ok).toBe(true);
+    const singleResult = single.payload as { files: Array<{ path: string; width: number; height: number; cropped: boolean }> };
+    expect(singleResult.files).toHaveLength(1);
+    expect(singleResult.files[0]).toMatchObject({ width: 960, height: 640, cropped: false });
+    const saved = await readFile(singleResult.files[0].path);
+    expect(saved.subarray(1, 4).toString()).toBe('PNG');
+    expect(singleResult.files[0].path).toContain(captureRoot);
+
+    const multi = await callServer(url, 'server.runtimeCapture', {
+      sessionId,
+      resolutions: [{ width: 720, height: 1280 }, { width: 1280, height: 720 }]
+    });
+    const multiResult = multi.payload as { files: Array<{ requestedResolution?: { width: number }; actualResolution?: { width: number } }> };
+    expect(multiResult.files).toHaveLength(2);
+    expect(multiResult.files[0].requestedResolution).toEqual({ width: 720, height: 1280 });
+    expect(pages[0].state.screenshots).toBe(3);
+    expect(pages[0].state.viewport).toEqual({ width: 1480, height: 920 });
+
+    const conflict = await callServer(url, 'server.runtimeCapture', {
+      sessionId,
+      resolution: { width: 720, height: 1280 },
+      resolutions: [{ width: 1280, height: 720 }]
+    });
+    expect(conflict.ok).toBe(false);
 
     bridge.close();
     await server.stop();

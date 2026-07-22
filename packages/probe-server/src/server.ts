@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 import { resolveWebSocketMaxPayload, ResolutionSchema, RuntimeComponentSnapshotSchema } from '@cocos-ai/protocol';
 import { assembleRuntimeNodeSnapshot, buildRuntimeScript, RuntimeDriver, watchRuntimeProperty } from '@cocos-ai/core';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
@@ -83,7 +85,8 @@ const RUNTIME_METHODS = new Set([
   'server.runtimeComponent',
   'server.runtimeInvoke',
   'server.runtimeWatch',
-  'server.runtimeDispatchInput'
+  'server.runtimeDispatchInput',
+  'server.runtimeCapture'
 ]);
 
 const RuntimeDispatchInputPayloadSchema = z.object({
@@ -92,6 +95,26 @@ const RuntimeDispatchInputPayloadSchema = z.object({
   x: z.number().optional(),
   y: z.number().optional(),
   key: z.string().min(1).optional()
+});
+
+const RuntimeCapturePayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  resolution: ResolutionSchema.optional(),
+  resolutions: z.array(ResolutionSchema).min(1).max(8).optional(),
+  crop: z.object({
+    x: z.number().int().nonnegative(),
+    y: z.number().int().nonnegative(),
+    width: z.number().int().positive(),
+    height: z.number().int().positive()
+  }).optional(),
+  overlay: z.object({
+    nodeBounds: z.union([z.boolean(), z.array(z.string().min(1))]).optional(),
+    anchors: z.union([z.boolean(), z.array(z.string().min(1))]).optional()
+  }).optional()
+}).superRefine((value, context) => {
+  if (value.resolution && value.resolutions) {
+    context.addIssue({ code: 'custom', message: 'resolution 与 resolutions 只能二选一' });
+  }
 });
 
 const RuntimeHierarchyPayloadSchema = z.object({
@@ -136,6 +159,8 @@ export interface ProbeServerOptions {
   maxPayload?: number;
   /** 运行态页面驱动（阶段五）；未装配时运行态方法返回 RUNTIME_DRIVER_UNAVAILABLE。 */
   runtimeDriver?: RuntimeDriver;
+  /** 截图落盘根目录（默认 `<cwd>/reports/runtime-captures`）。 */
+  captureRoot?: string;
 }
 
 export interface ProbeServerAddress {
@@ -461,6 +486,34 @@ export class ProbeServer {
           ...(parsed.key !== undefined ? { key: parsed.key } : {})
         });
       }
+      case 'server.runtimeCapture': {
+        const parsed = RuntimeCapturePayloadSchema.parse(payload);
+        const overlay = await this.resolveCaptureOverlay(driver, parsed.sessionId, parsed.overlay);
+        const resolutions: Array<{ width: number; height: number } | undefined> = parsed.resolutions
+          ?? (parsed.resolution ? [parsed.resolution] : [undefined]);
+        const files: Array<Record<string, unknown>> = [];
+        for (const [index, resolution] of resolutions.entries()) {
+          const image = await driver.capture(parsed.sessionId, {
+            ...(resolution ? { resolution } : {}),
+            ...(parsed.crop ? { crop: parsed.crop } : {}),
+            ...(overlay ? { overlay } : {})
+          });
+          const filePath = await this.saveCaptureImage(parsed.sessionId, image.buffer, index);
+          files.push({
+            path: filePath,
+            width: image.width,
+            height: image.height,
+            ...(resolution ? { requestedResolution: resolution } : {}),
+            actualResolution: image.actualResolution,
+            cropped: Boolean(parsed.crop),
+            overlays: {
+              nodeBounds: Boolean(overlay?.nodeBounds.length),
+              anchors: Boolean(overlay?.anchors.length)
+            }
+          });
+        }
+        return { files, capturedAt: new Date().toISOString() };
+      }
       default:
         throw new Error('METHOD_NOT_ALLOWED');
     }
@@ -469,6 +522,65 @@ export class ProbeServer {
   private async forwardClientRequest(method: string, payload: unknown): Promise<unknown> {
     const parsedPayload = ForwardRequestPayloadSchema.parse(payload);
     return this.request(parsedPayload.selector, method, parsedPayload.params);
+  }
+
+  /**
+   * 解析截图叠加开关：布尔 true 表示全量节点（经运行时层级提取，限 50 个防爆）；
+   * 字符串数组为指定节点路径；未开启时返回 undefined。
+   *
+   * @param driver 运行态页面驱动。
+   * @param sessionId 目标会话。
+   * @param overlay 协议叠加开关。
+   * @returns 节点边界与锚点的路径列表。
+   */
+  private async resolveCaptureOverlay(
+    driver: RuntimeDriver,
+    sessionId: string,
+    overlay: { nodeBounds?: boolean | string[]; anchors?: boolean | string[] } | undefined
+  ): Promise<{ nodeBounds: string[]; anchors: string[] } | undefined> {
+    if (!overlay || (overlay.nodeBounds === undefined && overlay.anchors === undefined)) {
+      return undefined;
+    }
+    const resolvePaths = async (value: boolean | string[] | undefined): Promise<string[]> => {
+      if (value === undefined || value === false) return [];
+      if (Array.isArray(value)) return value;
+      const hierarchy = await driver.evaluate(sessionId, buildRuntimeScript('readRuntimeHierarchy', { maxDepth: 8 })) as Record<string, unknown>;
+      const paths: string[] = [];
+      const walk = (node: Record<string, unknown>, prefix: string): void => {
+        if (paths.length >= 50) return;
+        const name = typeof node.name === 'string' ? node.name : '';
+        const path = prefix ? `${prefix}/${name}` : name;
+        paths.push(path);
+        for (const child of (Array.isArray(node.children) ? node.children : []) as Array<Record<string, unknown>>) {
+          walk(child, path);
+        }
+      };
+      walk(hierarchy, '');
+      return paths;
+    };
+    return {
+      nodeBounds: await resolvePaths(overlay.nodeBounds),
+      anchors: await resolvePaths(overlay.anchors)
+    };
+  }
+
+  /**
+   * 截图落盘：固定根目录 + 会话子目录 + 服务端生成文件名（不接受外部路径）。
+   *
+   * @param sessionId 来源会话（消毒后作目录名）。
+   * @param buffer PNG 图像字节。
+   * @param index 本次请求内的序号。
+   * @returns 落盘后的绝对路径。
+   */
+  private async saveCaptureImage(sessionId: string, buffer: Buffer, index: number): Promise<string> {
+    const root = this.options.captureRoot ?? join(process.cwd(), 'reports', 'runtime-captures');
+    const safeSession = sessionId.replace(/[^a-zA-Z0-9-]/g, '_');
+    const directory = join(root, safeSession);
+    await mkdir(directory, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[^0-9]/g, '');
+    const filePath = join(directory, `${timestamp}-${index}.png`);
+    await writeFile(filePath, buffer);
+    return filePath;
   }
 
   private parseMessage(raw: RawData): unknown | null {

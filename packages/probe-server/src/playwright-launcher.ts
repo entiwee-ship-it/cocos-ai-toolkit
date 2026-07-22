@@ -59,6 +59,16 @@ function wrapPage(page: Page): RuntimeBrowserPage {
     },
     async keyPress(key: string): Promise<void> {
       await page.keyboard.press(key);
+    },
+    async setViewportSize(size: { width: number; height: number }): Promise<void> {
+      await page.setViewportSize(size);
+    },
+    async screenshotElement(selector: string): Promise<Buffer> {
+      const element = await page.waitForSelector(selector, { timeout: 5_000 });
+      if (!element) {
+        throw new Error('GAME_CANVAS_NOT_FOUND');
+      }
+      return element.screenshot({ type: 'png' }) as Promise<Buffer>;
     }
   };
 }

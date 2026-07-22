@@ -106,6 +106,7 @@ const HELP = `用法:
   cocos-ai-probe runtime-invoke --session-id <id> --path <节点路径> --component-type <类型> --method <方法名> [--args <json数组>]
   cocos-ai-probe runtime-watch --session-id <id> --path <节点路径> --component-type <类型> --property <属性路径> [--timeout-ms <n>] [--interval-ms <n>] [--max-changes <n>]
   cocos-ai-probe runtime-input --session-id <id> --input-type tap|click|key [--x <画布x>] [--y <画布y>] [--key <按键名>]
+  cocos-ai-probe runtime-capture --session-id <id> [--resolution <宽x高> | --resolutions <json数组>] [--crop <x,y,宽,高>] [--overlay-nodes <true|路径,逗号分隔>] [--overlay-anchors <true|路径,逗号分隔>]
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
@@ -1461,6 +1462,22 @@ export function toRequest(command: CliCommand): [string, unknown] {
       ...(command.x !== undefined ? { x: command.x } : {}),
       ...(command.y !== undefined ? { y: command.y } : {}),
       ...(command.key !== undefined ? { key: command.key } : {})
+    }];
+  }
+  if (command.command === 'runtime-capture') {
+    return ['server.runtimeCapture', {
+      sessionId: command.sessionId,
+      ...(command.resolution ? { resolution: command.resolution } : {}),
+      ...(command.resolutions ? { resolutions: command.resolutions } : {}),
+      ...(command.crop ? { crop: command.crop } : {}),
+      ...(command.overlayNodeBounds !== undefined || command.overlayAnchors !== undefined
+        ? {
+            overlay: {
+              ...(command.overlayNodeBounds !== undefined ? { nodeBounds: command.overlayNodeBounds } : {}),
+              ...(command.overlayAnchors !== undefined ? { anchors: command.overlayAnchors } : {})
+            }
+          }
+        : {})
     }];
   }
 

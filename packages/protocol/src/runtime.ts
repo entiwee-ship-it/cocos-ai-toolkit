@@ -98,10 +98,10 @@ export const CaptureCropSchema = z.object({
   height: z.number().int().positive()
 });
 
-/** 叠加绘制开关：节点边界与锚点。 */
+/** 叠加绘制开关：true 为全量节点（限 50 个防爆），字符串数组为指定节点路径。 */
 export const CaptureOverlaySchema = z.object({
-  nodeBounds: z.boolean().optional(),
-  anchors: z.boolean().optional()
+  nodeBounds: z.union([z.boolean(), z.array(z.string().min(1))]).optional(),
+  anchors: z.union([z.boolean(), z.array(z.string().min(1))]).optional()
 });
 
 /** 截图选项：阶段五仅 Game 视图（Scene 视图为已知限制）。 */

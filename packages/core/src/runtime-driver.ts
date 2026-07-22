@@ -18,6 +18,10 @@ export interface RuntimeBrowserPage {
   mouseClick(x: number, y: number): Promise<void>;
   /** 按键派发（playwright key 名，如 Enter/Escape/a）。 */
   keyPress(key: string): Promise<void>;
+  /** 设置视口尺寸（截图前保证画布完整可见）。 */
+  setViewportSize(size: { width: number; height: number }): Promise<void>;
+  /** 截取指定元素（CSS 选择器）的 PNG 图像。 */
+  screenshotElement(selector: string): Promise<Buffer>;
 }
 
 /** 浏览器实例抽象。 */
@@ -67,6 +71,24 @@ export interface RuntimeDispatchReceipt {
   pageX?: number;
   pageY?: number;
   key?: string;
+}
+
+/** 截图请求：可选分辨率切换、区域裁剪与节点边界/锚点叠加（画布 CSS 像素坐标系）。 */
+export interface RuntimeCaptureRequest {
+  resolution?: Resolution;
+  crop?: { x: number; y: number; width: number; height: number };
+  overlay?: {
+    nodeBounds?: string[];
+    anchors?: string[];
+  };
+}
+
+/** 截图产物。 */
+export interface RuntimeCaptureImage {
+  buffer: Buffer;
+  width: number;
+  height: number;
+  actualResolution: Resolution;
 }
 
 interface ManagedSession {
@@ -336,6 +358,79 @@ export class RuntimeDriver {
     const pageY = rect.y + input.y;
     await managed.page.mouseClick(pageX, pageY);
     return { dispatched: true, inputType: input.inputType, x: input.x, y: input.y, pageX, pageY };
+  }
+
+  /**
+   * 截图管线：可选分辨率切换（先放大视口保证画布完整）→ 节点边界读取 →
+   * GameCanvas 元素截图 → 裁剪（叠加坐标同步偏移）→ 边界/锚点叠加。
+   *
+   * @param sessionId 目标会话。
+   * @param request 截图选项。
+   * @returns PNG 图像字节与实际生效分辨率。
+   */
+  async capture(sessionId: string, request: RuntimeCaptureRequest): Promise<RuntimeCaptureImage> {
+    const managed = this.requireSession(sessionId);
+    if (managed.session.state === 'closed') {
+      throw new Error('PREVIEW_SESSION_CLOSED');
+    }
+    if (this.syncLostState(managed)) {
+      throw new Error('PREVIEW_SESSION_LOST');
+    }
+    const { buildRuntimeScript } = await import('./runtime-inject.js');
+    const { cropPng, decodePng, drawOverlay } = await import('./runtime-capture.js');
+
+    let actualResolution: Resolution;
+    if (request.resolution) {
+      // 视口留余量容纳预览页工具栏，避免画布被容器约束压缩
+      await managed.page.setViewportSize({
+        width: request.resolution.width + 200,
+        height: request.resolution.height + 200
+      });
+      actualResolution = ResolutionSchema.parse(
+        await managed.page.evaluate(buildRuntimeScript('setRuntimeResolution', request.resolution))
+      );
+    } else {
+      actualResolution = ResolutionSchema.parse(
+        await managed.page.evaluate(buildRuntimeScript('readRuntimeResolution'))
+      );
+    }
+
+    const boundsPaths = [...new Set([...request.overlay?.nodeBounds ?? [], ...request.overlay?.anchors ?? []])];
+    const boundsEntries = boundsPaths.length > 0
+      ? ((await managed.page.evaluate(buildRuntimeScript('readRuntimeNodeBounds', { paths: boundsPaths }))) as {
+          entries: Array<{ path: string; found: boolean; hasBounds?: boolean; rect?: { x: number; y: number; width: number; height: number }; anchor?: { x: number; y: number } }>;
+        }).entries
+      : [];
+
+    let buffer = await managed.page.screenshotElement('#GameCanvas');
+
+    const cropOffset = request.crop ? { x: request.crop.x, y: request.crop.y } : { x: 0, y: 0 };
+    if (request.crop) {
+      buffer = cropPng(buffer, request.crop);
+    }
+
+    if (request.overlay) {
+      const shiftRect = (rect: { x: number; y: number; width: number; height: number }) => ({
+        x: rect.x - cropOffset.x,
+        y: rect.y - cropOffset.y,
+        width: rect.width,
+        height: rect.height
+      });
+      const rects = (request.overlay.nodeBounds ?? [])
+        .map((path) => boundsEntries.find((entry) => entry.path === path && entry.found && entry.hasBounds)?.rect)
+        .filter((rect): rect is { x: number; y: number; width: number; height: number } => Boolean(rect))
+        .map(shiftRect);
+      const anchors = (request.overlay.anchors ?? [])
+        .map((path) => boundsEntries.find((entry) => entry.path === path && entry.found && entry.hasBounds)?.anchor)
+        .filter((anchor): anchor is { x: number; y: number } => Boolean(anchor))
+        .map((anchor) => ({ x: anchor.x - cropOffset.x, y: anchor.y - cropOffset.y }));
+      if (rects.length > 0 || anchors.length > 0) {
+        buffer = drawOverlay(buffer, { rects, anchors });
+      }
+    }
+
+    const decoded = decodePng(buffer);
+    return { buffer, width: decoded.width, height: decoded.height, actualResolution };
   }
 
   /** 关闭全部会话与浏览器。 */

@@ -82,6 +82,30 @@ describe('preview 命令解析（阶段五）', () => {
     expect(() => parseCommand(['runtime-input', '--session-id', 's1', '--input-type', 'tap', '--x', '-1'])).toThrow('INVALID_COORDINATE');
     expect(() => parseCommand(['runtime-input', '--session-id', 's1'])).toThrow('INPUT_TYPE_REQUIRED');
   });
+
+  it('runtime-capture 解析分辨率、裁剪与叠加', () => {
+    expect(parseCommand(['runtime-capture', '--session-id', 's1'])).toEqual({ command: 'runtime-capture', sessionId: 's1' });
+    expect(parseCommand([
+      'runtime-capture', '--session-id', 's1',
+      '--resolution', '720x1280',
+      '--crop', '0,10,200,300',
+      '--overlay-nodes', 'Canvas/a,Canvas/b',
+      '--overlay-anchors', 'true'
+    ])).toEqual({
+      command: 'runtime-capture',
+      sessionId: 's1',
+      resolution: { width: 720, height: 1280 },
+      crop: { x: 0, y: 10, width: 200, height: 300 },
+      overlayNodeBounds: ['Canvas/a', 'Canvas/b'],
+      overlayAnchors: true
+    });
+    expect(parseCommand(['runtime-capture', '--session-id', 's1', '--resolutions', '[{"width":720,"height":1280},{"width":1280,"height":720}]']))
+      .toMatchObject({ resolutions: [{ width: 720, height: 1280 }, { width: 1280, height: 720 }] });
+    expect(() => parseCommand(['runtime-capture', '--session-id', 's1', '--resolution', '720x1280', '--resolutions', '[{"width":1,"height":1}]'])).toThrow('CAPTURE_RESOLUTION_CONFLICT');
+    expect(() => parseCommand(['runtime-capture', '--session-id', 's1', '--crop', '1,2,3'])).toThrow('INVALID_CROP');
+    expect(() => parseCommand(['runtime-capture', '--session-id', 's1', '--resolutions', '[]'])).toThrow('INVALID_RESOLUTIONS');
+    expect(() => parseCommand(['runtime-capture', '--session-id', 's1', '--overlay-nodes', ''])).toThrow('INVALID_OVERLAY');
+  });
 });
 
 describe('preview 命令请求映射', () => {
@@ -131,5 +155,23 @@ describe('preview 命令请求映射', () => {
       .toEqual(['server.runtimeDispatchInput', { sessionId: 's1', inputType: 'tap', x: 480, y: 320 }]);
     expect(toRequest({ command: 'runtime-input', sessionId: 's1', inputType: 'key', key: 'Enter' }))
       .toEqual(['server.runtimeDispatchInput', { sessionId: 's1', inputType: 'key', key: 'Enter' }]);
+  });
+
+  it('runtime-capture 映射 server.runtimeCapture', () => {
+    expect(toRequest({ command: 'runtime-capture', sessionId: 's1' }))
+      .toEqual(['server.runtimeCapture', { sessionId: 's1' }]);
+    expect(toRequest({
+      command: 'runtime-capture',
+      sessionId: 's1',
+      resolution: { width: 720, height: 1280 },
+      crop: { x: 0, y: 0, width: 100, height: 100 },
+      overlayNodeBounds: ['Canvas/a'],
+      overlayAnchors: true
+    })).toEqual(['server.runtimeCapture', {
+      sessionId: 's1',
+      resolution: { width: 720, height: 1280 },
+      crop: { x: 0, y: 0, width: 100, height: 100 },
+      overlay: { nodeBounds: ['Canvas/a'], anchors: true }
+    }]);
   });
 });

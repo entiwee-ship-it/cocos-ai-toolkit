@@ -66,7 +66,16 @@ export type CliCommand =
   | { command: 'runtime-component'; sessionId: string; path: string; componentType: string }
   | { command: 'runtime-invoke'; sessionId: string; path: string; componentType: string; method: string; args?: unknown[] }
   | { command: 'runtime-watch'; sessionId: string; path: string; componentType: string; property: string; timeoutMs?: number; intervalMs?: number; maxChanges?: number }
-  | { command: 'runtime-input'; sessionId: string; inputType: 'tap' | 'click' | 'key'; x?: number; y?: number; key?: string };
+  | { command: 'runtime-input'; sessionId: string; inputType: 'tap' | 'click' | 'key'; x?: number; y?: number; key?: string }
+  | {
+      command: 'runtime-capture';
+      sessionId: string;
+      resolution?: { width: number; height: number };
+      resolutions?: Array<{ width: number; height: number }>;
+      crop?: { x: number; y: number; width: number; height: number };
+      overlayNodeBounds?: string[] | true;
+      overlayAnchors?: string[] | true;
+    };
 
 interface ParsedArguments {
   command: string;
@@ -119,7 +128,8 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'runtime-component': ['session-id', 'path', 'component-type'],
   'runtime-invoke': ['session-id', 'path', 'component-type', 'method', 'args'],
   'runtime-watch': ['session-id', 'path', 'component-type', 'property', 'timeout-ms', 'interval-ms', 'max-changes'],
-  'runtime-input': ['session-id', 'input-type', 'x', 'y', 'key']
+  'runtime-input': ['session-id', 'input-type', 'x', 'y', 'key'],
+  'runtime-capture': ['session-id', 'resolution', 'resolutions', 'crop', 'overlay-nodes', 'overlay-anchors']
 };
 
 /**
@@ -206,6 +216,22 @@ export function parseCommand(argv: string[]): CliCommand {
       ...(flags.has('x') ? { x: readCoordinate(flags.get('x') ?? '') } : {}),
       ...(flags.has('y') ? { y: readCoordinate(flags.get('y') ?? '') } : {}),
       ...(flags.has('key') ? { key: flags.get('key') } : {})
+    };
+  }
+  if (command === 'runtime-capture') {
+    const resolution = flags.has('resolution') ? readResolution(flags.get('resolution') ?? '') : undefined;
+    const resolutions = flags.has('resolutions') ? readResolutionList(flags.get('resolutions') ?? '') : undefined;
+    if (resolution && resolutions) {
+      throw new Error('CAPTURE_RESOLUTION_CONFLICT');
+    }
+    return {
+      command,
+      sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
+      ...(resolution ? { resolution } : {}),
+      ...(resolutions ? { resolutions } : {}),
+      ...(flags.has('crop') ? { crop: readCropRect(flags.get('crop') ?? '') } : {}),
+      ...(flags.has('overlay-nodes') ? { overlayNodeBounds: readOverlayValue(flags.get('overlay-nodes') ?? '') } : {}),
+      ...(flags.has('overlay-anchors') ? { overlayAnchors: readOverlayValue(flags.get('overlay-anchors') ?? '') } : {})
     };
   }
 
@@ -521,6 +547,52 @@ function readCoordinate(value: string): number {
     throw new Error('INVALID_COORDINATE');
   }
   return parsed;
+}
+
+/** 解析多分辨率 JSON 数组（如 `[{"width":720,"height":1280}]`）。 */
+function readResolutionList(value: string): Array<{ width: number; height: number }> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('INVALID_RESOLUTIONS_JSON');
+  }
+  if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 8) {
+    throw new Error('INVALID_RESOLUTIONS');
+  }
+  return parsed.map((entry) => {
+    const item = entry && typeof entry === 'object' ? entry as { width?: unknown; height?: unknown } : {};
+    if (
+      typeof item.width !== 'number' || !Number.isInteger(item.width) || item.width < 1
+      || typeof item.height !== 'number' || !Number.isInteger(item.height) || item.height < 1
+    ) {
+      throw new Error('INVALID_RESOLUTIONS');
+    }
+    return { width: item.width, height: item.height };
+  });
+}
+
+/** 解析裁剪区域（`x,y,宽,高`）。 */
+function readCropRect(value: string): { x: number; y: number; width: number; height: number } {
+  const parts = value.split(',').map((part) => Number(part.trim()));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    throw new Error('INVALID_CROP');
+  }
+  const [x, y, width, height] = parts;
+  if (x! < 0 || y! < 0 || width! < 1 || height! < 1) {
+    throw new Error('INVALID_CROP');
+  }
+  return { x: x!, y: y!, width: width!, height: height! };
+}
+
+/** 解析叠加开关：`true` 全量，或逗号分隔的节点路径列表。 */
+function readOverlayValue(value: string): string[] | true {
+  if (value.trim() === 'true') return true;
+  const paths = value.split(',').map((part) => part.trim()).filter((part) => part.length > 0);
+  if (paths.length === 0) {
+    throw new Error('INVALID_OVERLAY');
+  }
+  return paths;
 }
 
 function requireRelativeJsonPath(value: string, errorCode: string): string {

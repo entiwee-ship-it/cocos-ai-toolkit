@@ -117,6 +117,68 @@ export async function readCanvasRect(): Promise<{ x: number; y: number; width: n
   return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
 }
 
+/**
+ * 读取指定节点路径的边界矩形与锚点（画布 CSS 像素坐标系）。
+ * 世界坐标（原点屏幕中心、Y 向上）经 cc.screen.windowSize 与画布 CSS 尺寸换算。
+ *
+ * @param options paths 节点路径列表。
+ * @returns 逐项 found/rect/anchor；无 UITransform 的节点标注 hasBounds:false。
+ */
+export async function readRuntimeNodeBounds(options: { paths: string[] }): Promise<Record<string, unknown>> {
+  const globalObject = globalThis as {
+    System?: { import?: (name: string) => Promise<Record<string, unknown>> };
+    document?: { getElementById?: (id: string) => { getBoundingClientRect?: () => { width: number; height: number } } | null };
+  };
+  if (!globalObject.System?.import) return { entries: [] };
+  const cc = await globalObject.System.import('cc') as {
+    director?: { getScene?: () => Record<string, unknown> | null };
+    screen: { windowSize: { width: number; height: number } };
+    UITransform?: unknown;
+  };
+  const scene = cc?.director?.getScene?.();
+  if (!scene) return { entries: [] };
+  const canvasRect = globalObject.document?.getElementById?.('GameCanvas')?.getBoundingClientRect?.();
+  const winSize = cc.screen.windowSize;
+  const scaleX = canvasRect && winSize.width > 0 ? canvasRect.width / winSize.width : 1;
+  const scaleY = canvasRect && winSize.height > 0 ? canvasRect.height / winSize.height : 1;
+  const toCss = (worldX: number, worldY: number): { x: number; y: number } => ({
+    x: (worldX + winSize.width / 2) * scaleX,
+    y: (winSize.height - (worldY + winSize.height / 2)) * scaleY
+  });
+
+  const entries: Array<Record<string, unknown>> = [];
+  for (const path of options.paths ?? []) {
+    const located = findRuntimeNodeByPath(scene, path);
+    if (!located.node) {
+      entries.push({ path, found: false });
+      continue;
+    }
+    const node = located.node as {
+      getComponent?: (type: unknown) => { getBoundingBoxToWorld?: () => { x: number; y: number; width: number; height: number } } | null;
+      worldPosition?: { x: number; y: number };
+    };
+    const ui = typeof node.getComponent === 'function' ? node.getComponent(cc.UITransform) : null;
+    if (!ui || typeof ui.getBoundingBoxToWorld !== 'function') {
+      entries.push({ path, found: true, hasBounds: false });
+      continue;
+    }
+    const box = ui.getBoundingBoxToWorld();
+    const topLeft = toCss(box.x, box.y + box.height);
+    const bottomRight = toCss(box.x + box.width, box.y);
+    const entry: Record<string, unknown> = {
+      path,
+      found: true,
+      hasBounds: true,
+      rect: { x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y }
+    };
+    if (node.worldPosition) {
+      entry.anchor = toCss(node.worldPosition.x, node.worldPosition.y);
+    }
+    entries.push(entry);
+  }
+  return { entries };
+}
+
 /** 读取组件类型名（兼容压缩/自定义组件）。 */
 function readRuntimeComponentType(component: unknown): string {
   const record = component as { __typename__?: unknown; constructor?: { name?: unknown } };
@@ -472,5 +534,6 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   listRuntimeMethods,
   invokeRuntimeComponentMethod,
   readRuntimeProperty,
-  readCanvasRect
+  readCanvasRect,
+  readRuntimeNodeBounds
 ];
