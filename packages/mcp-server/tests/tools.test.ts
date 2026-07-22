@@ -83,7 +83,13 @@ describe('Cocos readonly MCP tools', () => {
       ['cocos_project_scan', ['projectId']],
       ['cocos_design_inspect', ['projectId']],
       ['cocos_design_plan', ['projectId', 'target']],
-      ['cocos_design_preview', ['projectId', 'target']]
+      ['cocos_design_preview', ['projectId', 'target']],
+      ['cocos_preview_sessions', []],
+      ['cocos_runtime_get_hierarchy', ['sessionId']],
+      ['cocos_runtime_inspect_component', ['sessionId', 'path', 'componentType']],
+      ['cocos_runtime_get_console', ['sessionId']],
+      ['cocos_runtime_watch_property', ['sessionId', 'path', 'componentType', 'property']],
+      ['cocos_runtime_capture', ['sessionId']]
     ]));
     expect(result.tools.every((tool) => tool.outputSchema?.type === 'object')).toBe(true);
     const projectScanSchema = result.tools.find((tool) =>

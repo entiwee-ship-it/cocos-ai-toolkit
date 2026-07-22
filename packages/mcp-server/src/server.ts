@@ -9,6 +9,11 @@ import {
   registerCocosWriteTools,
   type CocosReadonlyToolServiceOptions
 } from './tools.js';
+import {
+  CocosRuntimeToolService,
+  registerCocosRuntimeGatedTools,
+  registerCocosRuntimeReadonlyTools
+} from './runtime-tools.js';
 
 export const COCOS_READONLY_TOOL_NAMES = [
   'cocos_editor_list',
@@ -21,7 +26,13 @@ export const COCOS_READONLY_TOOL_NAMES = [
   'cocos_project_scan',
   'cocos_design_inspect',
   'cocos_design_plan',
-  'cocos_design_preview'
+  'cocos_design_preview',
+  'cocos_preview_sessions',
+  'cocos_runtime_get_hierarchy',
+  'cocos_runtime_inspect_component',
+  'cocos_runtime_get_console',
+  'cocos_runtime_watch_property',
+  'cocos_runtime_capture'
 ] as const;
 
 export const COCOS_WRITE_TOOL_NAMES = [
@@ -30,6 +41,11 @@ export const COCOS_WRITE_TOOL_NAMES = [
   'cocos_transaction_status',
   'cocos_transaction_list',
   'cocos_transaction_rollback',
+  'cocos_preview_launch',
+  'cocos_preview_stop',
+  'cocos_runtime_invoke_method',
+  'cocos_runtime_dispatch_input',
+  'cocos_runtime_run_scenario',
   'cocos_design_apply'
 ] as const;
 
@@ -64,9 +80,11 @@ export function createCocosMcpServer(
   const readonlyService = new CocosReadonlyToolService(options);
   registerCocosReadonlyTools(server, readonlyService);
   registerCocosDesignReadonlyTools(server, new CocosDesignToolService(options, readonlyService));
+  registerCocosRuntimeReadonlyTools(server, new CocosRuntimeToolService(options, readonlyService));
   if (runtime.enableWrites === true) {
     const writeService = new CocosWriteToolService(options, readonlyService);
     registerCocosWriteTools(server, writeService);
+    registerCocosRuntimeGatedTools(server, new CocosRuntimeToolService(options, readonlyService));
     registerCocosDesignGatedTools(
       server,
       new CocosDesignToolService(options, readonlyService, writeService)
