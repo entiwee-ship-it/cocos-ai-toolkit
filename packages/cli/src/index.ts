@@ -64,7 +64,9 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
 const DEFAULT_SERVER_URL = process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:32188';
-const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+// 真实项目（xy-client 规模）下单次请求实测可能超过 10 秒，默认 60 秒；
+// 需要更短超时时用 COCOS_AI_PROBE_TIMEOUT_MS 显式调小。
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const DESIGN_DOCUMENT_READY_TIMEOUT_MS = 10_000;
 const DESIGN_DOCUMENT_READY_POLL_MS = 50;
 
@@ -98,7 +100,7 @@ const HELP = `用法:
 
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
-  COCOS_AI_PROBE_TIMEOUT_MS  单次请求等待毫秒数，默认 10000
+  COCOS_AI_PROBE_TIMEOUT_MS  单次请求等待毫秒数，默认 60000
   COCOS_AI_REPORT_ROOT       写事务审计落盘根目录，默认 reports`;
 
 export async function runCli(

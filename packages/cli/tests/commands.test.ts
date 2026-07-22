@@ -759,7 +759,7 @@ describe('local readonly commands', () => {
       };
       expect(runtime.readRequestTimeoutMs).toBeTypeOf('function');
       if (!runtime.readRequestTimeoutMs) throw new Error('READ_REQUEST_TIMEOUT_NOT_EXPORTED');
-      expect(runtime.readRequestTimeoutMs(value)).toBe(10_000);
+      expect(runtime.readRequestTimeoutMs(value)).toBe(60_000);
     }
   );
 });
