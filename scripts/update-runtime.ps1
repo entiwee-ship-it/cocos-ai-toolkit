@@ -42,14 +42,22 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Invoke-Git {
-    param([string[]]$GitArgs, [switch]$AllowFail)
-    $output = & git -C $script:Worktree @GitArgs 2>&1
+function Invoke-Native {
+    # 调用外部进程。函数作用域内把 EAP 降为 Continue，
+    # 避免外部进程向 stderr 写正常信息（如 git/npm 的提示）被当成终止错误。
+    param([string]$FilePath, [string[]]$NativeArgs, [switch]$AllowFail)
+    $ErrorActionPreference = 'Continue'
+    $output = & $FilePath @NativeArgs 2>&1
     $code = $LASTEXITCODE
     if (-not $AllowFail -and $code -ne 0) {
-        throw "git $($GitArgs -join ' ') 失败（退出码 $code）：`n$output"
+        throw "$FilePath $($NativeArgs -join ' ') 失败（退出码 $code）：`n$($output | Out-String)"
     }
-    return @{ Output = $output; ExitCode = $code }
+    return @{ Output = @($output | ForEach-Object { "$_" }); ExitCode = $code }
+}
+
+function Invoke-Git {
+    param([string[]]$GitArgs, [switch]$AllowFail)
+    return Invoke-Native -FilePath 'git' -NativeArgs (@('-C', $script:Worktree) + $GitArgs) -AllowFail:$AllowFail
 }
 
 # ---------- 1. 校验运行时 Worktree ----------
@@ -98,13 +106,11 @@ $distMissing = -not (Test-Path -LiteralPath $mcpEntry -PathType Leaf) -or -not (
 
 if ($Force -or $nodeModulesMissing -or $manifestChanged) {
     Write-Output '==> 安装依赖（npm install）'
-    & npm --prefix $script:Worktree install
-    if ($LASTEXITCODE -ne 0) { throw 'npm install 失败' }
+    Invoke-Native -FilePath 'npm' -NativeArgs @('--prefix', $script:Worktree, 'install') | Out-Null
 }
 if ($Force -or $codeChanged -or $distMissing -or $manifestChanged) {
     Write-Output '==> 构建全部 workspace（npm run build）'
-    & npm --prefix $script:Worktree run build
-    if ($LASTEXITCODE -ne 0) { throw 'npm run build 失败' }
+    Invoke-Native -FilePath 'npm' -NativeArgs @('--prefix', $script:Worktree, 'run', 'build') | Out-Null
 } else {
     Write-Output '==> 构建产物已是最新，跳过构建'
 }
@@ -123,7 +129,7 @@ if (-not $SkipProbeRestart) {
             Start-Sleep -Milliseconds 500
             Write-Output "    已停止旧进程 PID $procId"
         } else {
-            throw "端口 $Port 被非 Probe Server 进程占用（PID $procId: $cmd），已中止"
+            throw "端口 $Port 被非 Probe Server 进程占用（PID ${procId}: $cmd），已中止"
         }
     }
 
