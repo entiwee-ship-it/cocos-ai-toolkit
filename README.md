@@ -113,6 +113,18 @@ AI 客户端配置 MCP 命令时，应直接执行 `node <工具仓库绝对路�
 
 安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目。默认附加 `--enable-writes`；传 `-Readonly` 才关闭写工具。健康检查会核对安装模式、Probe 端口、实际启动 stdio MCP、列出工具并调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
 
+## 更新运行时到最新代码
+
+AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0`）下的构建产物，入口路径不变。日常保持最新只需要在主仓库检出执行一次：
+
+```powershell
+& E:/xile-workspace/cocos-ai-toolkit/scripts/update-runtime.ps1
+```
+
+脚本会依次完成：fetch 远程并把运行时 Worktree 的本地 `runtime` 分支重置到 `origin/master`、依赖清单变化时执行 `npm install`、代码变化或产物缺失时执行全量 `npm run build`、重启 Probe Server 并等待端口就绪。运行时 Worktree 存在未提交的 tracked 改动时会中止，避免覆盖手工修改。
+
+执行完后按提示生效：MCP Server 是 AI 客户端在会话启动时拉起的 stdio 进程，需要重启 Kimi Code / Codex 会话加载新构建；若 Bridge Extension 有变更，还需要在 Cocos Creator 中刷新/重启扩展。常用参数：`-SkipProbeRestart` 只同步代码和构建不重启 Probe，`-Force` 强制重新安装依赖和构建，`-TargetRef` 可指定同步到其它远程引用。
+
 MCP 默认注册以下十七个只读工具：
 
 | 工具 | 用途 |
