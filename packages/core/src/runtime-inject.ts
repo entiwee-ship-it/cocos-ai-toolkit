@@ -519,6 +519,70 @@ async function readRuntimeProperty(options: { path: string; componentType: strin
   };
 }
 
+/**
+ * 运行时实例化 Prefab 并挂到指定节点（仅运行时，不写工程文件）。
+ * 用于 UI 效果的快速预览验证。
+ *
+ * @param options assetUuid Prefab 资产 UUID；parentPath 父节点路径；x/y 可选放置坐标。
+ * @returns done 完成标记与实例节点路径；失败带 reason。
+ */
+async function instantiateRuntimePrefab(options: {
+  assetUuid: string;
+  parentPath: string;
+  x?: number;
+  y?: number;
+}): Promise<Record<string, unknown>> {
+  const globalObject = globalThis as {
+    System?: { import?: (name: string) => Promise<Record<string, unknown>> };
+  };
+  if (!globalObject.System?.import) return { done: false, reason: 'system-missing' };
+  const cc = await globalObject.System.import('cc') as {
+    assetManager?: { loadAny?: (request: unknown, callback: (error: unknown, asset: unknown) => void) => void };
+    instantiate?: (prefab: unknown) => Record<string, unknown>;
+    director?: { getScene?: () => Record<string, unknown> | null };
+  };
+  const scene = cc?.director?.getScene?.();
+  if (!scene) return { done: false, reason: 'scene-missing' };
+  const located = findRuntimeNodeByPath(scene, options.parentPath);
+  if (!located.node) return { done: false, reason: 'parent-not-found' };
+  const parent = located.node as { addChild?: (child: unknown) => void };
+  if (typeof parent.addChild !== 'function') return { done: false, reason: 'parent-invalid' };
+  const loadAny = cc.assetManager?.loadAny;
+  if (typeof loadAny !== 'function') {
+    return { done: false, reason: 'asset-manager-missing' };
+  }
+  const instantiate = cc.instantiate;
+  if (typeof instantiate !== 'function') {
+    return { done: false, reason: 'instantiate-missing' };
+  }
+
+  const prefab = await new Promise<unknown>((resolve, reject) => {
+    loadAny(options.assetUuid, (error: unknown, asset: unknown) => {
+      if (error) reject(error);
+      else resolve(asset);
+    });
+  }).catch((error: unknown) => ({ __loadError: error instanceof Error ? error.message : String(error) }));
+  if (prefab && typeof prefab === 'object' && (prefab as Record<string, unknown>).__loadError) {
+    return { done: false, reason: 'prefab-load-failed', error: (prefab as Record<string, unknown>).__loadError };
+  }
+  const instance = instantiate(prefab) as Record<string, unknown> & {
+    name?: string;
+    setPosition?: (x: number, y: number, z?: number) => void;
+  };
+  parent.addChild(instance);
+  if (typeof options.x === 'number' && typeof options.y === 'number' && typeof instance.setPosition === 'function') {
+    instance.setPosition(options.x, options.y);
+  }
+  const parentName = typeof (located.node as Record<string, unknown>).name === 'string'
+    ? (located.node as Record<string, unknown>).name as string
+    : '';
+  return {
+    done: true,
+    nodePath: `${options.parentPath}/${typeof instance.name === 'string' && instance.name ? instance.name : 'prefab-instance'}`,
+    parentName
+  };
+}
+
 /** 注入函数注册表：buildRuntimeScript 全量打包（顺序无关，函数声明提升）。 */
 const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   probeGameReady,
@@ -535,5 +599,6 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   invokeRuntimeComponentMethod,
   readRuntimeProperty,
   readCanvasRect,
-  readRuntimeNodeBounds
+  readRuntimeNodeBounds,
+  instantiateRuntimePrefab
 ];

@@ -70,6 +70,7 @@ export type CliCommand =
   | { command: 'runtime-invoke'; sessionId: string; path: string; componentType: string; method: string; args?: unknown[] }
   | { command: 'runtime-watch'; sessionId: string; path: string; componentType: string; property: string; timeoutMs?: number; intervalMs?: number; maxChanges?: number }
   | { command: 'runtime-input'; sessionId: string; inputType: 'tap' | 'click' | 'key'; x?: number; y?: number; key?: string }
+  | { command: 'runtime-instantiate'; sessionId: string; assetUuid: string; parentPath: string; x?: number; y?: number }
   | {
       command: 'runtime-capture';
       sessionId: string;
@@ -133,6 +134,7 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'runtime-invoke': ['session-id', 'path', 'component-type', 'method', 'args'],
   'runtime-watch': ['session-id', 'path', 'component-type', 'property', 'timeout-ms', 'interval-ms', 'max-changes'],
   'runtime-input': ['session-id', 'input-type', 'x', 'y', 'key'],
+  'runtime-instantiate': ['session-id', 'asset-uuid', 'parent-path', 'x', 'y'],
   'runtime-capture': ['session-id', 'resolution', 'resolutions', 'crop', 'overlay-nodes', 'overlay-anchors'],
   'runtime-scenario': ['session-id', 'project-id', 'editor-instance-id', 'steps']
 };
@@ -221,6 +223,16 @@ export function parseCommand(argv: string[]): CliCommand {
       ...(flags.has('x') ? { x: readCoordinate(flags.get('x') ?? '') } : {}),
       ...(flags.has('y') ? { y: readCoordinate(flags.get('y') ?? '') } : {}),
       ...(flags.has('key') ? { key: flags.get('key') } : {})
+    };
+  }
+  if (command === 'runtime-instantiate') {
+    return {
+      command,
+      sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
+      assetUuid: requireFlag(flags, 'asset-uuid', 'ASSET_UUID_REQUIRED'),
+      parentPath: requireFlag(flags, 'parent-path', 'PARENT_PATH_REQUIRED'),
+      ...(flags.has('x') ? { x: readSignedCoordinate(flags.get('x') ?? '') } : {}),
+      ...(flags.has('y') ? { y: readSignedCoordinate(flags.get('y') ?? '') } : {})
     };
   }
   if (command === 'runtime-capture') {
@@ -563,6 +575,15 @@ function readInvokeArgs(value: string): unknown[] {
 function readCoordinate(value: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error('INVALID_COORDINATE');
+  }
+  return parsed;
+}
+
+/** 解析节点坐标（允许负数，锚点居中语义下负坐标合法）。 */
+function readSignedCoordinate(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
     throw new Error('INVALID_COORDINATE');
   }
   return parsed;

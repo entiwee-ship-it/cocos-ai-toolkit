@@ -48,6 +48,70 @@ async function startTestServer(
 }
 
 describe('ProbeClient shared behavior', () => {
+  it('首次握手后断线会自动重连，并让新请求等待新握手完成', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    let connectionCount = 0;
+    server.on('connection', (socket) => {
+      connectionCount += 1;
+      socket.on('message', (raw) => {
+        const message = JSON.parse(raw.toString()) as ClientMessage;
+        if (message.method === 'client.hello') {
+          socket.send(JSON.stringify({
+            type: 'response', correlationId: 'client.hello', ok: true, payload: {}
+          }));
+          return;
+        }
+        if (message.method === 'server.disconnect-once') {
+          socket.close();
+          return;
+        }
+        socket.send(JSON.stringify({
+          type: 'response',
+          correlationId: message.requestId,
+          ok: true,
+          payload: { connectionCount }
+        }));
+      });
+    });
+    const port = (server.address() as AddressInfo).port;
+    const client = new ProbeClient(`ws://127.0.0.1:${port}`, 1000, undefined, 5, 5);
+
+    try {
+      await client.connect();
+      await expect(client.request('server.disconnect-once', {})).rejects.toThrow(
+        'SERVER_CONNECTION_CLOSED'
+      );
+      await expect(client.request('server.editors', {})).resolves.toEqual({ connectionCount: 2 });
+    } finally {
+      await client.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('关闭客户端会立即终止正在等待重连的请求', async () => {
+    const server = await startTestServer((socket) => socket.close());
+    const client = new ProbeClient(server.url, 1000, undefined, 5000, 5000);
+
+    try {
+      await client.connect();
+      await expect(client.request('server.disconnect-once', {})).rejects.toThrow(
+        'SERVER_CONNECTION_CLOSED'
+      );
+      const pendingRequest = client.request('server.editors', {});
+      await client.close();
+      await expect(Promise.race([
+        pendingRequest,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('RECONNECT_WAIT_NOT_CANCELLED')), 100);
+        })
+      ])).rejects.toThrow('CLIENT_NOT_CONNECTED');
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('按显式 maxPayload 拒绝超大服务端响应', async () => {
     const server = await startTestServer((socket, message) => {
       socket.send(JSON.stringify({

@@ -142,6 +142,7 @@ async function captureWriteRevision(): Promise<WriteRevisionCapture> {
   const documentSha256 = createHash('sha256').update(content).digest('hex');
   return {
     documentId: identity.documentId,
+    dirty: identity.dirty,
     fingerprint: {
       document: `sha256:${documentSha256}`,
       hierarchy: `sha256:${identity.hierarchySha256}`,

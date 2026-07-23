@@ -61,6 +61,9 @@ function createRuntimeRespond(overrides: Record<string, unknown> = {}) {
     if (method === 'server.runtimeInvoke') {
       return { found: true, invoked: true, returnValue: 6 };
     }
+    if (method === 'server.runtimeInstantiate') {
+      return { done: true, nodePath: 'Canvas/LayerUI/Dialog', parentName: 'LayerUI' };
+    }
     if (method === 'server.runtimeRunScenario') {
       return {
         steps: [{ index: 0, kind: 'launch', passed: true }],
@@ -120,6 +123,7 @@ describe('运行态 MCP 工具（阶段五）', () => {
       'cocos_preview_stop',
       'cocos_runtime_invoke_method',
       'cocos_runtime_dispatch_input',
+      'cocos_runtime_instantiate_prefab',
       'cocos_runtime_run_scenario'
     ]) {
       expect(names).not.toContain(gated);
@@ -133,6 +137,7 @@ describe('运行态 MCP 工具（阶段五）', () => {
       'cocos_preview_stop',
       'cocos_runtime_invoke_method',
       'cocos_runtime_dispatch_input',
+      'cocos_runtime_instantiate_prefab',
       'cocos_runtime_run_scenario'
     ]) {
       expect(writeNames).toContain(gated);
@@ -212,6 +217,44 @@ describe('运行态 MCP 工具（阶段五）', () => {
       method: 'server.runtimeInvoke',
       payload: { sessionId: 'preview-1', path: 'Canvas/panel', componentType: 'GameLogic', method: 'add', args: [2, 3] }
     });
+  });
+
+  it('cocos_runtime_instantiate_prefab 仅在门控开启后转发并拒绝空父路径', async () => {
+    const probeClient = new RecordingProbeClient(createRuntimeRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_runtime_instantiate_prefab',
+      arguments: {
+        sessionId: 'preview-1',
+        assetUuid: 'asset-1',
+        parentPath: 'Canvas/LayerUI',
+        x: 0,
+        y: -10
+      }
+    });
+    expect(result.structuredContent).toMatchObject({
+      done: true,
+      nodePath: 'Canvas/LayerUI/Dialog'
+    });
+    expect(probeClient.requests.at(-1)).toEqual({
+      method: 'server.runtimeInstantiate',
+      payload: {
+        sessionId: 'preview-1',
+        assetUuid: 'asset-1',
+        parentPath: 'Canvas/LayerUI',
+        x: 0,
+        y: -10
+      }
+    });
+
+    const requestCount = probeClient.requests.length;
+    const invalid = await client.callTool({
+      name: 'cocos_runtime_instantiate_prefab',
+      arguments: { sessionId: 'preview-1', assetUuid: 'asset-1', parentPath: '   ' }
+    });
+    expect(invalid.isError).toBe(true);
+    expect(probeClient.requests).toHaveLength(requestCount);
   });
 
   it('cocos_runtime_run_scenario 校验步骤并返回报告', async () => {

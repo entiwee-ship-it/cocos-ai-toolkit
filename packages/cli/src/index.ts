@@ -106,6 +106,7 @@ const HELP = `用法:
   cocos-ai-probe runtime-invoke --session-id <id> --path <节点路径> --component-type <类型> --method <方法名> [--args <json数组>]
   cocos-ai-probe runtime-watch --session-id <id> --path <节点路径> --component-type <类型> --property <属性路径> [--timeout-ms <n>] [--interval-ms <n>] [--max-changes <n>]
   cocos-ai-probe runtime-input --session-id <id> --input-type tap|click|key [--x <画布x>] [--y <画布y>] [--key <按键名>]
+  cocos-ai-probe runtime-instantiate --session-id <id> --asset-uuid <prefab-uuid> --parent-path <节点路径> [--x <x>] [--y <y>]
   cocos-ai-probe runtime-capture --session-id <id> [--resolution <宽x高> | --resolutions <json数组>] [--crop <x,y,宽,高>] [--overlay-nodes <true|路径,逗号分隔>] [--overlay-anchors <true|路径,逗号分隔>]
   cocos-ai-probe runtime-scenario --steps <json数组> [--session-id <id>] [--project-id <id> [--editor-instance-id <id>]]
 
@@ -1463,6 +1464,15 @@ export function toRequest(command: CliCommand): [string, unknown] {
       ...(command.x !== undefined ? { x: command.x } : {}),
       ...(command.y !== undefined ? { y: command.y } : {}),
       ...(command.key !== undefined ? { key: command.key } : {})
+    }];
+  }
+  if (command.command === 'runtime-instantiate') {
+    return ['server.runtimeInstantiate', {
+      sessionId: command.sessionId,
+      assetUuid: command.assetUuid,
+      parentPath: command.parentPath,
+      ...(command.x !== undefined ? { x: command.x } : {}),
+      ...(command.y !== undefined ? { y: command.y } : {})
     }];
   }
   if (command.command === 'runtime-capture') {

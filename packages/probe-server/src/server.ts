@@ -87,8 +87,17 @@ const RUNTIME_METHODS = new Set([
   'server.runtimeWatch',
   'server.runtimeDispatchInput',
   'server.runtimeCapture',
-  'server.runtimeRunScenario'
+  'server.runtimeRunScenario',
+  'server.runtimeInstantiate'
 ]);
+
+const RuntimeInstantiatePayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  assetUuid: z.string().min(1),
+  parentPath: z.string().min(1),
+  x: z.number().optional(),
+  y: z.number().optional()
+});
 
 const RuntimeRunScenarioPayloadSchema = z.object({
   selector: z.object({
@@ -492,6 +501,18 @@ export class ProbeServer {
           ...(parsed.y !== undefined ? { y: parsed.y } : {}),
           ...(parsed.key !== undefined ? { key: parsed.key } : {})
         });
+      }
+      case 'server.runtimeInstantiate': {
+        const parsed = RuntimeInstantiatePayloadSchema.parse(payload);
+        return driver.evaluate(
+          parsed.sessionId,
+          buildRuntimeScript('instantiateRuntimePrefab', {
+            assetUuid: parsed.assetUuid,
+            parentPath: parsed.parentPath,
+            ...(parsed.x !== undefined ? { x: parsed.x } : {}),
+            ...(parsed.y !== undefined ? { y: parsed.y } : {})
+          })
+        );
       }
       case 'server.runtimeCapture': {
         const parsed = RuntimeCapturePayloadSchema.parse(payload);

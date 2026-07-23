@@ -136,6 +136,98 @@ describe('readRuntimeProperty（页面注入：属性读取）', () => {
   });
 });
 
+describe('instantiateRuntimePrefab（页面注入：运行时实例化预览）', () => {
+  it('加载 Prefab 并挂到目标父节点', async () => {
+    const added: unknown[] = [];
+    const guiNode = {
+      name: 'LayerUI',
+      uuid: 'uuid-gui',
+      _id: 'f2',
+      active: true,
+      children: [],
+      components: [],
+      addChild(child: unknown) {
+        added.push(child);
+        (this.children as unknown[]).push(child);
+      }
+    };
+    const scene = {
+      name: 'root',
+      uuid: 'uuid-root',
+      _id: 'f1',
+      active: true,
+      children: [{ name: 'gui', uuid: 'uuid-guiroot', _id: 'f3', active: true, children: [guiNode], components: [] }],
+      components: []
+    };
+    const fakePrefab = { __prefabAsset: true };
+    const fakeInstance = { name: 'inputDialog', setPosition(x: number, y: number) {
+      (fakeInstance as Record<string, unknown>).pos = { x, y };
+    } };
+    vi.stubGlobal('System', {
+      import: async () => ({
+        director: { getScene: () => scene },
+        assetManager: {
+          loadAny: (request: unknown, callback: (error: unknown, asset: unknown) => void) => callback(null, fakePrefab)
+        },
+        instantiate: () => fakeInstance
+      })
+    });
+    const result = await runScript('instantiateRuntimePrefab', {
+      assetUuid: 'asset-1',
+      parentPath: 'root/gui/LayerUI',
+      x: 0,
+      y: 0
+    }) as { done: boolean; nodePath?: string };
+    expect(result.done).toBe(true);
+    expect(result.nodePath).toBe('root/gui/LayerUI/inputDialog');
+    expect(added).toEqual([fakeInstance]);
+  });
+
+  it('父节点不存在时返回明确原因', async () => {
+    vi.stubGlobal('System', {
+      import: async () => ({
+        director: { getScene: () => ({ name: 'root', children: [], components: [] }) },
+        assetManager: { loadAny: (_r: unknown, cb: (e: unknown, a: unknown) => void) => cb(null, {}) },
+        instantiate: () => ({})
+      })
+    });
+    const result = await runScript('instantiateRuntimePrefab', { assetUuid: 'a', parentPath: 'root/missing' }) as { done: boolean; reason?: string };
+    expect(result.done).toBe(false);
+    expect(result.reason).toBe('parent-not-found');
+  });
+
+  it('资产加载失败时返回失败原因', async () => {
+    vi.stubGlobal('System', {
+      import: async () => ({
+        director: { getScene: () => ({ name: 'root', children: [{ name: 'gui', children: [], components: [], addChild() {} }], components: [] }) },
+        assetManager: { loadAny: (_r: unknown, cb: (e: unknown, a: unknown) => void) => cb(new Error('404'), null) },
+        instantiate: () => ({})
+      })
+    });
+    const result = await runScript('instantiateRuntimePrefab', { assetUuid: 'missing', parentPath: 'root/gui' }) as { done: boolean; reason?: string; error?: string };
+    expect(result.done).toBe(false);
+    expect(result.reason).toBe('prefab-load-failed');
+    expect(result.error).toBe('404');
+  });
+
+  it.each([
+    ['asset-manager-missing', { instantiate: () => ({}) }],
+    ['instantiate-missing', { assetManager: { loadAny: () => undefined } }]
+  ])('运行时 API 缺失时返回 %s', async (reason, runtimeApi) => {
+    vi.stubGlobal('System', {
+      import: async () => ({
+        director: { getScene: () => ({ name: 'root', children: [{ name: 'gui', children: [], components: [], addChild() {} }], components: [] }) },
+        ...runtimeApi
+      })
+    });
+    const result = await runScript('instantiateRuntimePrefab', {
+      assetUuid: 'asset-1',
+      parentPath: 'root/gui'
+    }) as { done: boolean; reason?: string };
+    expect(result).toEqual({ done: false, reason });
+  });
+});
+
 describe('watchRuntimeProperty（core：属性监听轮询）', () => {
   it('值变化时立即返回变化记录', async () => {
     const values = [1, 1, 2, 3];

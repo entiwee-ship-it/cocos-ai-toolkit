@@ -41,7 +41,7 @@ npm run build
 
 ## 创建隔离游戏项目
 
-禁止把 Bridge 安装到真实 `E:/xile-workspace/qyProject/xy-client`。先创建隔离 Worktree：
+日常开发和首次写入验证优先使用隔离 Worktree：
 
 ```powershell
 & scripts/create-xy-client-worktree.ps1 `
@@ -68,7 +68,7 @@ Bridge 使用 Junction 指向本工具的 `packages/bridge-extension`，不会�
   --can-show-upgrade-dialog false
 ```
 
-真实项目 Creator 实例可以继续运行，但不能安装 Bridge，也不能作为写探针目标。
+真实项目只有在项目负责人明确授权、已记录 Git/文档/事务基线且具备回滚方案时，才可临时安装 Bridge 并作为受控写探针目标。任何 `outcome-unknown` 或 `manual-recovery-required` 都必须立即停止自动操作并保留证据。
 
 ## 启动 Probe Server
 
@@ -100,7 +100,16 @@ node packages/mcp-server/dist/run.js
 
 AI 客户端配置 MCP 命令时，应直接执行 `node <工具仓库绝对路径>/packages/mcp-server/dist/run.js`，并通过环境变量固定上述地址和报告根。stdout 专用于 MCP 协议；启动和关闭错误只写 stderr。
 
-MCP 默认注册以下十一个只读工具：
+本机 Codex 可以用仓库脚本重复安装默认只读配置：
+
+```powershell
+& scripts/install-codex-mcp.ps1 -SkipBuild
+& scripts/check-codex-mcp.ps1
+```
+
+安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目，并且绝不附加 `--enable-writes`。健康检查会验证 Probe 端口、实际启动 stdio MCP、列出工具并调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
+
+MCP 默认注册以下十七个只读工具：
 
 | 工具 | 用途 |
 | --- | --- |
@@ -115,18 +124,24 @@ MCP 默认注册以下十一个只读工具：
 | `cocos_design_inspect` | 读取当前文档或指定子树的声明式结构、组件、Override 和风险摘要 |
 | `cocos_design_plan` | 对比当前文档与目标文档，生成最小差异和有序计划 |
 | `cocos_design_preview` | 渲染逐项操作、Override、影响面和风险，零执行 |
+| `cocos_preview_sessions` | 列出工具管理的 Preview 页面会话 |
+| `cocos_runtime_get_hierarchy` | 读取 Preview 运行时节点树 |
+| `cocos_runtime_inspect_component` | 读取运行时组件属性包 |
+| `cocos_runtime_get_console` | 按游标和级别读取运行时 Console |
+| `cocos_runtime_watch_property` | 有界监听运行时属性变化 |
+| `cocos_runtime_capture` | 截图、裁剪及节点边界/锚点叠加 |
 
 除 `cocos_editor_list` 外，所有工具都必须传 `projectId`。同一项目连接多个 Creator 实例时还必须传 `editorInstanceId`，工具不会按“最近连接”隐式选择。
 
 `cocos_project_scan` 和 `cocos_prefab_graph` 的完整报告与 checkpoint 只会写入 `COCOS_AI_MCP_REPORT_ROOT`。AI 只能传相对 `.json` 路径；绝对路径、盘符、UNC、完整 `..` 分段、目录、符号链接和越界 Junction 都会在任何 Creator 请求前被拒绝。MCP 响应只包含摘要、有界页和不透明 cursor，不会把完整项目报告一次塞进 AI 上下文。cursor 翻页读取已落盘报告，不会重新打开 Creator 资产。
 
-`cocos_design_apply`、`cocos_design_verify`、`cocos_design_export` 默认不注册，仅在启动命令显式携带 `--enable-writes` 时开放：
+事务写工具、Preview 启停、运行时动作和 `cocos_design_apply/verify/export` 默认不注册，仅在启动命令显式携带 `--enable-writes` 时开放：
 
 ```powershell
 node packages/mcp-server/dist/run.js --enable-writes
 ```
 
-其中 apply 标注为破坏性写工具；verify/export 虽然只读，但与 apply 共用阶段四门控。六个 `cocos_design_*` 调用都会写入 `COCOS_AI_MCP_REPORT_ROOT/write-journal` 审计。
+门控运行时工具包括 `cocos_preview_launch`、`cocos_preview_stop`、`cocos_runtime_invoke_method`、`cocos_runtime_dispatch_input`、`cocos_runtime_instantiate_prefab` 和 `cocos_runtime_run_scenario`。当前 Preview 通道由 Probe Server 自行启动外部 Chrome/Edge 页面；运行时 Prefab 实例化只改页面内存，不写工程文件。apply 与运行时动作标注为破坏性；verify/export 虽然只读，但与 apply 共用门控。声明式与运行时 MCP 调用都会写入报告根下的审计日志。
 
 ## 选择编辑器和准备样本
 
@@ -198,6 +213,16 @@ node packages/cli/dist/index.js design-preview --project-id <project-id> --targe
 node packages/cli/dist/index.js design-apply --project-id <project-id> --target '<target-json>' [--execution-id <id>] [--revision '<revision-json>']
 node packages/cli/dist/index.js design-verify --project-id <project-id> --target '<target-json>'
 node packages/cli/dist/index.js design-export --project-id <project-id> [--root-uuid <node-uuid>] [--scope current-document|source-prefab|apply-to-source] [--asset-uuid <uuid>]
+
+# 阶段五 Preview 与运行时读取/动作
+node packages/cli/dist/index.js preview-launch --project-id <project-id> [--resolution 720x1280]
+node packages/cli/dist/index.js preview-sessions [--project-id <project-id>]
+node packages/cli/dist/index.js runtime-hierarchy --session-id <session-id>
+node packages/cli/dist/index.js runtime-component --session-id <session-id> --path <node-path> --component-type <type>
+node packages/cli/dist/index.js runtime-console --session-id <session-id>
+node packages/cli/dist/index.js runtime-capture --session-id <session-id>
+node packages/cli/dist/index.js runtime-instantiate --session-id <session-id> --asset-uuid <prefab-uuid> --parent-path <node-path> [--x 0 --y 0]
+node packages/cli/dist/index.js preview-stop --session-id <session-id>
 ```
 
 CLI 只允许预定义命令，不提供任意 JavaScript 执行入口。
@@ -297,8 +322,8 @@ pwsh -NoProfile -File scripts/run-phase-2-write-validation.ps1 `
 
 - Bridge 仅连接 `127.0.0.1`。
 - 不允许执行任意 JavaScript。
-- MCP Server 默认只暴露十一个只读工具；写事务和阶段四门控工具只有命令行显式 `--enable-writes` 才注册，环境变量不能绕过。
-- 真实项目只允许通过不进入 Git 状态的方式（如被 `.gitignore` 覆盖的 `extensions/` Junction）加载只读 Bridge，且加载前后必须逐字对比 `git status`；不允许在真实项目运行写探针或调用任何写方法。
+- MCP Server 默认只暴露十七个只读工具；写事务、Preview/运行时动作和声明式门控工具只有命令行显式 `--enable-writes` 才注册，环境变量不能绕过。
+- 真实项目默认只读。只有项目负责人明确授权时才允许受控写入；必须先记录 Git、当前文档、Revision 和未完成事务，执行单一可逆操作，保存/重开/重读后回滚，并逐字比较前后 Git 状态。
 - 外部进程不得直接写 `.prefab`、`.scene` 或 `.meta`。
 - Scene、Undo、保存和恢复全部由 Creator 执行；外部只读磁盘计算指纹。
 - `prepare` 拒绝 Dirty 文档、已有同名探针和错误项目路径。

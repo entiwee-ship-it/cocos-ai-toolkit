@@ -1,4 +1,14 @@
-import { ASSET_DATA_KEYS, normalizeAssetInfo } from './asset-probe';
+import { normalizeAssetInfo } from './asset-probe';
+
+/**
+ * 全量资产索引查询的精简字段集：只取 buildAssetIndex 实际消费的字段。
+ * 完整 ASSET_DATA_KEYS 里的 meta/depends/dependeds/subAssets 等重字段
+ * 会让大项目的 query-assets 超过 Probe Server 10s 转发超时。
+ */
+const ASSET_INDEX_DATA_KEYS = [
+  'name', 'displayName', 'source', 'path', 'url', 'file', 'uuid', 'importer',
+  'imported', 'invalid', 'type', 'isDirectory', 'isBundle', 'visible', 'readonly'
+] as const;
 
 export interface AssetIndexInput {
   uuid?: string | null;
@@ -192,7 +202,7 @@ export async function probeAssetIndex(): Promise<unknown> {
     'asset-db',
     'query-assets',
     undefined,
-    ASSET_DATA_KEYS as never
+    ASSET_INDEX_DATA_KEYS as never
   );
   const assetValues: unknown[] = Array.isArray(rawAssets) ? rawAssets : [];
   const values = assetValues

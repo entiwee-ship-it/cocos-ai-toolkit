@@ -83,6 +83,13 @@ describe('preview 命令解析（阶段五）', () => {
     expect(() => parseCommand(['runtime-input', '--session-id', 's1'])).toThrow('INPUT_TYPE_REQUIRED');
   });
 
+  it('runtime-instantiate 解析资产与父路径，坐标允许负数', () => {
+    expect(parseCommand(['runtime-instantiate', '--session-id', 's1', '--asset-uuid', 'abc-123', '--parent-path', 'root/gui/LayerUI', '--x', '-50', '--y', '120']))
+      .toEqual({ command: 'runtime-instantiate', sessionId: 's1', assetUuid: 'abc-123', parentPath: 'root/gui/LayerUI', x: -50, y: 120 });
+    expect(() => parseCommand(['runtime-instantiate', '--session-id', 's1', '--parent-path', 'p'])).toThrow('ASSET_UUID_REQUIRED');
+    expect(() => parseCommand(['runtime-instantiate', '--session-id', 's1', '--asset-uuid', 'a'])).toThrow('PARENT_PATH_REQUIRED');
+  });
+
   it('runtime-capture 解析分辨率、裁剪与叠加', () => {
     expect(parseCommand(['runtime-capture', '--session-id', 's1'])).toEqual({ command: 'runtime-capture', sessionId: 's1' });
     expect(parseCommand([
@@ -170,6 +177,11 @@ describe('preview 命令请求映射', () => {
       .toEqual(['server.runtimeDispatchInput', { sessionId: 's1', inputType: 'tap', x: 480, y: 320 }]);
     expect(toRequest({ command: 'runtime-input', sessionId: 's1', inputType: 'key', key: 'Enter' }))
       .toEqual(['server.runtimeDispatchInput', { sessionId: 's1', inputType: 'key', key: 'Enter' }]);
+  });
+
+  it('runtime-instantiate 映射 server.runtimeInstantiate', () => {
+    expect(toRequest({ command: 'runtime-instantiate', sessionId: 's1', assetUuid: 'abc', parentPath: 'root/gui', x: 0, y: -10 }))
+      .toEqual(['server.runtimeInstantiate', { sessionId: 's1', assetUuid: 'abc', parentPath: 'root/gui', x: 0, y: -10 }]);
   });
 
   it('runtime-capture 映射 server.runtimeCapture', () => {

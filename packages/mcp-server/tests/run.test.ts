@@ -80,13 +80,22 @@ describe('Cocos MCP stdio runtime', () => {
     })).toEqual({
       serverUrl: 'ws://127.0.0.1:40000',
       reportRoot: resolve('E:/reports/cocos'),
-      enableWrites: false
+      enableWrites: false,
+      requestTimeoutMs: 60000
     });
     expect(readMcpRuntimeConfig({})).toEqual({
       serverUrl: 'ws://127.0.0.1:32188',
       reportRoot: resolve('reports'),
-      enableWrites: false
+      enableWrites: false,
+      requestTimeoutMs: 60000
     });
+  });
+
+  it('仅接受正整数 Probe 超时，非法值回退默认值', () => {
+    expect(readMcpRuntimeConfig({ COCOS_AI_PROBE_TIMEOUT_MS: '120000' }).requestTimeoutMs).toBe(120000);
+    for (const value of ['0', '-1', '1.5', 'not-a-number']) {
+      expect(readMcpRuntimeConfig({ COCOS_AI_PROBE_TIMEOUT_MS: value }).requestTimeoutMs).toBe(60000);
+    }
   });
 
   it('写工具仅当显式 --enable-writes 启动参数存在时开放', () => {

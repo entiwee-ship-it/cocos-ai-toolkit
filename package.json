@@ -12,7 +12,9 @@
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "codex:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-codex-mcp.ps1",
+    "codex:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-codex-mcp.ps1"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

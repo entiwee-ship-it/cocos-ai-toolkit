@@ -8,6 +8,8 @@ import { createCocosMcpServer } from './server.js';
 
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 const DEFAULT_REPORT_ROOT = 'reports';
+/** 与 CLI 默认一致的单次请求等待超时毫秒数。 */
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 interface RuntimeProbeClient {
   connect(): Promise<void>;
@@ -27,11 +29,13 @@ export interface McpRuntimeConfig {
   serverUrl: string;
   reportRoot: string;
   enableWrites: boolean;
+  requestTimeoutMs: number;
 }
 
 /**
  * 从进程环境和启动参数读取 Probe Server 地址、MCP 服务端授权报告根和写能力开关。
  * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力。
+ * 请求超时经 COCOS_AI_PROBE_TIMEOUT_MS 配置，与 CLI 共用同一环境变量。
  *
  * @param environment 环境变量键值；缺失值使用本机默认配置。
  * @param argv 启动参数（不含 node 和入口脚本路径）。
@@ -44,8 +48,15 @@ export function readMcpRuntimeConfig(
   return {
     serverUrl: environment.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL,
     reportRoot: resolve(environment.COCOS_AI_MCP_REPORT_ROOT ?? DEFAULT_REPORT_ROOT),
-    enableWrites: argv.includes('--enable-writes')
+    enableWrites: argv.includes('--enable-writes'),
+    requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_PROBE_TIMEOUT_MS)
   };
+}
+
+/** 解析有限的正整数毫秒超时，缺省或非法时回退默认值。 */
+function readRequestTimeoutMs(rawValue: string | undefined): number {
+  const timeoutMs = Number(rawValue);
+  return Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 /**
@@ -90,13 +101,60 @@ export async function runMcpServer(
   argv: readonly string[] = process.argv.slice(2)
 ): Promise<McpRuntime> {
   const config = readMcpRuntimeConfig(environment, argv);
-  const probeClient = new ProbeClient(config.serverUrl);
+  const probeClient = new ProbeClient(config.serverUrl, config.requestTimeoutMs);
   const server = createCocosMcpServer(
     { probeClient, reportRoot: config.reportRoot },
     { enableWrites: config.enableWrites }
   );
   const transport = new StdioServerTransport();
+  patchTransportSchemaRefs(transport);
   return startMcpRuntime({ probeClient, server, transport });
+}
+
+/**
+ * 递归改写 JSON Schema：把 draft-7 风格的 definitions 容器和 #/definitions/ 引用
+ * 转换为 #/$defs/ 形式。Moonshot(Kimi) 模型端只接受以 #/$defs/ 开头的 $ref，
+ * 而 MCP SDK 默认按 draft-7 生成 #/definitions/ 引用，会导致模型端 400 拒绝请求。
+ *
+ * @param value 任意 JSON Schema 片段。
+ * @returns 改写后的 JSON Schema 片段。
+ */
+function normalizeJsonSchemaRefs(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeJsonSchemaRefs(item));
+  }
+  if (value && typeof value === 'object') {
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (key === '$ref' && typeof item === 'string') {
+        output[key] = item.replace(/^#\/definitions\//, '#/$defs/');
+      } else {
+        output[key === 'definitions' ? '$defs' : key] = normalizeJsonSchemaRefs(item);
+      }
+    }
+    return output;
+  }
+  return value;
+}
+
+/**
+ * 包装 stdio Transport 的 send，拦截 tools/list 响应并改写其中的
+ * inputSchema/outputSchema 引用路径，对协议其余消息保持透明。
+ *
+ * @param transport 当前 MCP stdio Transport。
+ */
+function patchTransportSchemaRefs(transport: StdioServerTransport): void {
+  const originalSend = transport.send.bind(transport);
+  transport.send = async (message: Parameters<StdioServerTransport['send']>[0]) => {
+    const tools = (message as { result?: { tools?: Array<Record<string, unknown>> } })?.result?.tools;
+    if (Array.isArray(tools)) {
+      for (const tool of tools) {
+        if (tool.inputSchema) tool.inputSchema = normalizeJsonSchemaRefs(tool.inputSchema);
+        if (tool.outputSchema) tool.outputSchema = normalizeJsonSchemaRefs(tool.outputSchema);
+      }
+    }
+    return originalSend(message);
+  };
 }
 
 /**

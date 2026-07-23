@@ -206,6 +206,11 @@ const AssetInspectOutputSchema = z.object({
   unresolved: z.array(z.object({ path: z.string(), reason: z.string() }))
 });
 
+const OpenAssetResponseSchema = z.object({
+  opened: z.literal(true),
+  uuid: z.string().min(1)
+});
+
 const ComponentProbeResponseSchema = z.object({
   schema: ComponentTypeSchemaSchema,
   raw: z.unknown()
@@ -1164,10 +1169,11 @@ export class CocosDesignToolService {
   /** 重新打开影响扫描前的文档，等待 Scene/AssetDB 可读并核对文档身份。 */
   private async restoreDesignDocument(editor: EditorSession, documentId: string): Promise<void> {
     assertCapability(editor, 'probe.openAsset');
-    await this.options.probeClient.request('probe.openAsset', {
+    const opened = OpenAssetResponseSchema.parse(await this.options.probeClient.request('probe.openAsset', {
       selector: toSelector(editor),
       params: { uuid: documentId }
-    });
+    }));
+    if (opened.uuid !== documentId) throw new Error('DESIGN_WRITE_DOCUMENT_CHANGED');
     const deadline = Date.now() + DESIGN_DOCUMENT_READY_TIMEOUT_MS;
     while (true) {
       const state = await this.options.probeClient.request('probe.editorState', {

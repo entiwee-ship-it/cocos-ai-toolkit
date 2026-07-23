@@ -121,6 +121,8 @@ export interface WriteTransactionRecord {
 export interface WriteRevisionCapture {
   documentId: string;
   fingerprint: RevisionFingerprint;
+  /** Creator 当前文档脏状态；true 时禁止开始或确认事务。 */
+  dirty?: boolean | null;
 }
 
 /**
@@ -302,6 +304,7 @@ export class WriteTransactionManager {
     }
 
     const capture = await this.options.captureRevision(request);
+    assertDocumentClean(capture);
     checkRevisionPrecondition(request.revision, capture.fingerprint);
     this.acquireDocumentLock(capture.documentId, request.transactionId);
 
@@ -351,6 +354,7 @@ export class WriteTransactionManager {
     }
 
     const capture = await this.options.captureRevision(record.request);
+    assertDocumentClean(capture);
     checkRevisionPrecondition(record.request.revision, capture.fingerprint);
 
     record = this.transition(record, 'locked', 'confirm');
@@ -685,7 +689,14 @@ export function validateTransactionIdRequest(value: unknown): { transactionId: s
   return { transactionId: readRequiredString(request.transactionId, 'TRANSACTION_ID_REQUIRED') };
 }
 
-function checkRevisionPrecondition(expected: RevisionFingerprint, actual: RevisionFingerprint): void {  const conflicts: WriteConflict[] = [];
+function assertDocumentClean(capture: WriteRevisionCapture): void {
+  if (capture.dirty === true) {
+    throw new ProbeError('DIRTY_DOCUMENT', { documentId: capture.documentId });
+  }
+}
+
+function checkRevisionPrecondition(expected: RevisionFingerprint, actual: RevisionFingerprint): void {
+  const conflicts: WriteConflict[] = [];
   for (const scope of REVISION_SCOPES) {
     const expectedValue = expected[scope];
     if (expectedValue === null || expectedValue === undefined) continue;

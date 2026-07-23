@@ -110,6 +110,24 @@ describe('WriteTransactionManager 幂等', () => {
 });
 
 describe('WriteTransactionManager Revision 前置', () => {
+  it('prepare 与 confirm 都拒绝 Creator 标记为 dirty 的文档', async () => {
+    const prepareManager = createManager({
+      captureRevision: async () => revisionCapture({ dirty: true })
+    });
+    await expect(prepareManager.prepare(writeRequest())).rejects.toThrow('DIRTY_DOCUMENT');
+
+    const execute = vi.fn(async () => successOutcome());
+    const captureRevision = vi.fn()
+      .mockResolvedValueOnce(revisionCapture({ dirty: false }))
+      .mockResolvedValueOnce(revisionCapture({ dirty: true }));
+    const confirmManager = createManager({ captureRevision, execute });
+    const prepared = await confirmManager.prepare(writeRequest());
+
+    await expect(confirmManager.confirm({ transactionId: prepared.transactionId }))
+      .rejects.toThrow('DIRTY_DOCUMENT');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('Revision 前置不一致时拒绝执行并返回冲突范围、旧值和当前值', async () => {
     const execute = vi.fn(async () => successOutcome());
     // prepare 时指纹一致，confirm 前文档指纹被人工修改

@@ -231,6 +231,32 @@ export class CocosRuntimeToolService {
     return output;
   }
 
+  /** 在 Preview 运行时实例化 Prefab（仅改变运行时场景，不写工程文件）。 */
+  async instantiateRuntimePrefab(input: {
+    sessionId: string;
+    assetUuid: string;
+    parentPath: string;
+    x?: number;
+    y?: number;
+  }) {
+    const result = await this.options.probeClient.request('server.runtimeInstantiate', {
+      sessionId: input.sessionId,
+      assetUuid: input.assetUuid,
+      parentPath: input.parentPath,
+      ...(input.x !== undefined ? { x: input.x } : {}),
+      ...(input.y !== undefined ? { y: input.y } : {})
+    });
+    const output = zod.object({
+      done: zod.boolean(),
+      nodePath: zod.string().optional(),
+      parentName: zod.string().optional(),
+      reason: zod.string().optional(),
+      error: zod.string().optional()
+    }).parse(result);
+    await this.audit('cocos_runtime_instantiate_prefab', input, output);
+    return output;
+  }
+
   /** 截图与视觉验证（单张/多分辨率/裁剪/边界锚点叠加，产物落盘返回路径）。 */
   async captureRuntime(input: {
     sessionId: string;
@@ -424,6 +450,19 @@ export function registerCocosRuntimeGatedTools(
     outputSchema: RuntimeRecordOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.dispatchRuntimeInput(input)));
+
+  server.registerTool('cocos_runtime_instantiate_prefab', {
+    description: '在 Preview 运行时加载并实例化 Prefab，挂到指定节点；只影响运行时，不写工程文件。',
+    inputSchema: {
+      ...SessionIdInput,
+      assetUuid: zod.string().trim().min(1),
+      parentPath: zod.string().trim().min(1),
+      x: zod.number().optional(),
+      y: zod.number().optional()
+    },
+    outputSchema: RuntimeRecordOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.instantiateRuntimePrefab(input)));
 
   server.registerTool('cocos_runtime_run_scenario', {
     description: '执行自动场景验证：launch/wait-node/assert-property/dispatch-input/assert-console/capture/assert-image-diff 步骤编排，产出逐项证据报告。',
