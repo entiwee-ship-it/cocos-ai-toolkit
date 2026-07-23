@@ -23,7 +23,7 @@ function createHttpProbe(sequence: boolean[]): PreviewHttpProbe & { calls: numbe
     calls: 0,
     isReady: async () => {
       probe.calls += 1;
-      return sequence.length > 0 ? sequence.shift()! : true;
+      return sequence.length > 0 ? sequence.shift()! : false;
     }
   };
   return probe;
@@ -44,7 +44,7 @@ describe('openPreviewServer', () => {
 
   it('HTTP 持续未就绪时抛出明确错误', async () => {
     const { source } = createSource(() => 'http://192.168.1.23:7457');
-    const http = createHttpProbe([false, false, false, false, false]);
+    const http = createHttpProbe([]);
     await expect(openPreviewServer(source, http, { readyPollMs: 1, readyTimeoutMs: 5 }))
       .rejects.toThrow('PREVIEW_SERVER_NOT_READY');
   });

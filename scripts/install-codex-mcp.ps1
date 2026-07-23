@@ -4,7 +4,8 @@ param(
     [string]$ProbeUrl = 'ws://127.0.0.1:32188',
     [string]$ReportRoot = '',
     [string]$NodePath = '',
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Readonly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,18 +49,22 @@ if (Test-Path -LiteralPath $configPath -PathType Leaf) {
     Copy-Item -LiteralPath $configPath -Destination $backupPath -Force
 }
 
-if (-not $PSCmdlet.ShouldProcess('Codex MCP 配置', '移除旧 cocos_ai 并添加默认只读配置')) { return }
+if (-not $PSCmdlet.ShouldProcess('Codex MCP 配置', '移除旧 cocos_ai 并添加 MCP 配置')) { return }
 & $codexCommand mcp remove cocos_ai 2>$null
 # remove 在条目不存在时会返回非零；这是幂等安装的正常情况。
+$serverArgs = @($entry)
+if (-not $Readonly) { $serverArgs += '--enable-writes' }
 & $codexCommand mcp add cocos_ai `
     --env "COCOS_AI_PROBE_SERVER_URL=$ProbeUrl" `
     --env "COCOS_AI_MCP_REPORT_ROOT=$ReportRoot" `
-    -- $NodePath $entry
+    -- $NodePath @serverArgs
 if ($LASTEXITCODE -ne 0) { throw 'Codex MCP 配置写入失败' }
 
-Write-Output "已安装 cocos_ai（默认只读）"
+Write-Output $(if ($Readonly) { '已安装 cocos_ai（只读模式）' } else { '已安装 cocos_ai（默认写入）' })
 Write-Output "Probe: $ProbeUrl"
 Write-Output "报告根: $ReportRoot"
 Write-Output "入口: $NodePath $entry"
+if (-not $Readonly) { Write-Output '写工具: 已开启（--enable-writes）' }
+if ($Readonly) { Write-Output '写工具: 已关闭（只读模式）' }
 if ($backupPath) { Write-Output "配置备份: $backupPath" }
 Write-Output '请重启 Codex 或新建会话后运行 scripts/check-codex-mcp.ps1。'

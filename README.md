@@ -22,7 +22,7 @@ AI / Codex
 - Cocos Creator `3.8.8`。其它 `3.8.x` 小版本尚未完成兼容认证。
 - Node.js `>=20.19 <26`；最终验证使用 `v25.9.0`。
 - npm；最终验证使用 `11.4.1`。
-- Git，且真实项目与写探针项目必须分离为不同工作区。
+- Git；建议在写入前记录当前状态，隔离 Worktree 为可选调试手段，不是日常使用前置条件。
 
 Creator 3.8.x 的内部 API 可能随小版本变化。任何不是 3.8.8 的版本都必须先运行 `scripts/run-phase-0-validation.ps1`，不能只凭版本号判断兼容。
 
@@ -39,9 +39,9 @@ npm run build
 
 构建会生成 MCP Server、CLI、Probe Server、协议包、Core 扫描器和 Bridge Extension 的 `dist/`。
 
-## 创建隔离游戏项目
+## 可选：创建隔离游戏项目
 
-日常开发和首次写入验证优先使用隔离 Worktree：
+需要做破坏性实验、批量回归或验证新写能力时，可以创建隔离 Worktree：
 
 ```powershell
 & scripts/create-xy-client-worktree.ps1 `
@@ -68,7 +68,7 @@ Bridge 使用 Junction 指向本工具的 `packages/bridge-extension`，不会�
   --can-show-upgrade-dialog false
 ```
 
-真实项目只有在项目负责人明确授权、已记录 Git/文档/事务基线且具备回滚方案时，才可临时安装 Bridge 并作为受控写探针目标。任何 `outcome-unknown` 或 `manual-recovery-required` 都必须立即停止自动操作并保留证据。
+日常开发可以直接给真实项目安装 Bridge 并执行事务写入。Revision、重读验证和回滚由工具内部负责；只有出现 `outcome-unknown` 或 `manual-recovery-required` 时才停止后续写入并保留证据。
 
 ## 启动 Probe Server
 
@@ -100,14 +100,18 @@ node packages/mcp-server/dist/run.js
 
 AI 客户端配置 MCP 命令时，应直接执行 `node <工具仓库绝对路径>/packages/mcp-server/dist/run.js`，并通过环境变量固定上述地址和报告根。stdout 专用于 MCP 协议；启动和关闭错误只写 stderr。
 
-本机 Codex 可以用仓库脚本重复安装默认只读配置：
+本机 Codex 可以用仓库脚本重复安装。默认直接开放写工具：
 
 ```powershell
 & scripts/install-codex-mcp.ps1 -SkipBuild
 & scripts/check-codex-mcp.ps1
+
+# 只有明确需要只读会话时才传：
+& scripts/install-codex-mcp.ps1 -SkipBuild -Readonly
+& scripts/check-codex-mcp.ps1 -Readonly
 ```
 
-安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目，并且绝不附加 `--enable-writes`。健康检查会验证 Probe 端口、实际启动 stdio MCP、列出工具并调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
+安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目。默认附加 `--enable-writes`；传 `-Readonly` 才关闭写工具。健康检查会核对安装模式、Probe 端口、实际启动 stdio MCP、列出工具并调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
 
 MCP 默认注册以下十七个只读工具：
 
@@ -135,7 +139,7 @@ MCP 默认注册以下十七个只读工具：
 
 `cocos_project_scan` 和 `cocos_prefab_graph` 的完整报告与 checkpoint 只会写入 `COCOS_AI_MCP_REPORT_ROOT`。AI 只能传相对 `.json` 路径；绝对路径、盘符、UNC、完整 `..` 分段、目录、符号链接和越界 Junction 都会在任何 Creator 请求前被拒绝。MCP 响应只包含摘要、有界页和不透明 cursor，不会把完整项目报告一次塞进 AI 上下文。cursor 翻页读取已落盘报告，不会重新打开 Creator 资产。
 
-事务写工具、Preview 启停、运行时动作和 `cocos_design_apply/verify/export` 默认不注册，仅在启动命令显式携带 `--enable-writes` 时开放：
+MCP Server 裸启动仍保持只读；Codex 安装脚本默认为开发环境附加 `--enable-writes`。事务写工具、Preview 启停、运行时动作和 `cocos_design_apply/verify/export` 在该参数存在时注册：
 
 ```powershell
 node packages/mcp-server/dist/run.js --enable-writes
@@ -151,7 +155,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 node packages/cli/dist/index.js editors
 ```
 
-记录隔离实例返回的 `projectId` 和 `editorInstanceId`。目标实例的 `projectPath` 必须等于隔离 Worktree。
+记录目标实例返回的 `projectId` 和 `editorInstanceId`，并核对 `projectPath` 是本次准备操作的真实项目或可选 Worktree。
 
 统一验证前，在 Creator 中打开目标 Prefab。也可以先确认目标 UUID 已被 AssetDB 识别，再调用：
 
@@ -322,8 +326,8 @@ pwsh -NoProfile -File scripts/run-phase-2-write-validation.ps1 `
 
 - Bridge 仅连接 `127.0.0.1`。
 - 不允许执行任意 JavaScript。
-- MCP Server 默认只暴露十七个只读工具；写事务、Preview/运行时动作和声明式门控工具只有命令行显式 `--enable-writes` 才注册，环境变量不能绕过。
-- 真实项目默认只读。只有项目负责人明确授权时才允许受控写入；必须先记录 Git、当前文档、Revision 和未完成事务，执行单一可逆操作，保存/重开/重读后回滚，并逐字比较前后 Git 状态。
+- MCP Server 裸启动只暴露十七个只读工具；Codex 安装脚本默认显式传入 `--enable-writes`，`-Readonly` 可切回只读。
+- 真实项目可直接写入，不强制隔离 Worktree。Revision、事务状态、保存重读和回滚验证仍保留，避免把失败或未知结局当成成功。
 - 外部进程不得直接写 `.prefab`、`.scene` 或 `.meta`。
 - Scene、Undo、保存和恢复全部由 Creator 执行；外部只读磁盘计算指纹。
 - `prepare` 拒绝 Dirty 文档、已有同名探针和错误项目路径。
@@ -335,7 +339,7 @@ pwsh -NoProfile -File scripts/run-phase-2-write-validation.ps1 `
 ## 清理顺序
 
 1. 如果启动过事务，先用 `probe-undo-save-status` 确认不是 `executing`、`outcome-unknown` 或 `manual-recovery-required`。
-2. 保存或关闭隔离 Creator 中需要保留的人工内容，然后停止**隔离项目** Creator；不要关闭真实项目 Creator。
+2. 保存或关闭本次 Creator 中需要保留的人工内容；如果使用了隔离 Worktree，再停止对应 Creator。
 3. 停止 Probe Server。
 4. 移除 Bridge Junction：
 

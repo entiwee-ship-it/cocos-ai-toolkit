@@ -2,7 +2,8 @@
 param(
     [string]$ToolkitPath = '',
     [string]$ProbeUrl = 'ws://127.0.0.1:32188',
-    [string]$ReportRoot = ''
+    [string]$ReportRoot = '',
+    [switch]$Readonly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,13 @@ if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
 $codex = (Get-Command codex -ErrorAction Stop).Source
 $config = & $codex mcp get cocos_ai 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Codex 未配置 cocos_ai: $config" }
+$configText = $config | Out-String
+if (-not $Readonly -and $configText -notmatch '--enable-writes') {
+    throw 'Codex cocos_ai 未启用写工具；如需只读检查请显式传 -Readonly'
+}
+if ($Readonly -and $configText -match '--enable-writes') {
+    throw 'Codex cocos_ai 当前启用了写工具，不能按只读模式检查'
+}
 $uri = [Uri]$ProbeUrl
 $client = [Net.Sockets.TcpClient]::new()
 try {
@@ -28,5 +36,6 @@ if (-not $ReportRoot) { $ReportRoot = Join-Path $ToolkitPath 'reports' }
 $env:COCOS_AI_MCP_ENTRY = $entry
 $env:COCOS_AI_PROBE_SERVER_URL = $ProbeUrl
 $env:COCOS_AI_MCP_REPORT_ROOT = [IO.Path]::GetFullPath($ReportRoot)
+$env:COCOS_AI_MCP_ENABLE_WRITES = if ($Readonly) { 'false' } else { 'true' }
 node (Join-Path $PSScriptRoot 'check-codex-mcp.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'MCP stdio 健康检查失败' }
