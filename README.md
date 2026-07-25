@@ -125,6 +125,20 @@ AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-works
 
 执行完后按提示生效：MCP Server 是 AI 客户端在会话启动时拉起的 stdio 进程，需要重启 Kimi Code / Codex 会话加载新构建；若 Bridge Extension 有变更，还需要在 Cocos Creator 中刷新/重启扩展。常用参数：`-SkipProbeRestart` 只同步代码和构建不重启 Probe，`-Force` 强制重新安装依赖和构建，`-TargetRef` 可指定同步到其它远程引用。
 
+## 安装 AI 使用技能
+
+仓库自带一份使用技能（`skills/cocos-ai-toolkit/SKILL.md`），告诉 AI 各工具什么时候用、写入/取证纪律和排障方法。装好 MCP 后建议一并安装：
+
+```powershell
+# Kimi Code 用户级（默认）；可选 codex / claude / project / custom
+& scripts/install-skills.ps1 -Target kimi
+
+# 项目级 .agents/skills（只对该工作区生效，在项目根目录执行）
+& scripts/install-skills.ps1 -Target project
+```
+
+默认用 Junction 挂接到仓库，仓库更新技能即更新；`-Copy` 改为复制（复制后更新需重装），`-Force` 覆盖同名旧安装。技能列表在 AI 会话启动时加载，安装后重启会话生效。
+
 MCP 默认注册以下十七个只读工具：
 
 | 工具 | 用途 |
