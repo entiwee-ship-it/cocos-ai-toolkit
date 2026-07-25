@@ -91,6 +91,20 @@ function createFakePage() {
           nodeCount: 2
         } as never;
       }
+      if (script.includes('return sampleRuntimeWindow')) {
+        return {
+          found: true,
+          nodeUuid: 'u2',
+          componentType: 'LoginView',
+          mode: 'perFrame',
+          durationMs: 220,
+          samples: [
+            { frame: 0, t: 100, values: { opacity: 255 }, nodeValid: true },
+            { frame: 1, t: 116, values: {}, nodeValid: false }
+          ],
+          trigger: { invoked: true, method: 'startTransition' }
+        } as never;
+      }
       if (script.includes('return readRuntimeComponent')) {
         return {
           found: true,
@@ -361,6 +375,41 @@ describe('ProbeServer 运行态方法', () => {
     expect(snapshot.nodeUuid).toBe('u2');
     expect(snapshot.properties).toMatchObject({ string: '确定退出？', fontSize: 28 });
     expect(snapshot.skipped).toEqual(['onClick']);
+
+    bridge.close();
+    await server.stop();
+  });
+
+  it('runtimeSampleWindow 单次 evaluate 返回逐帧时间线与节点销毁证据', async () => {
+    const { driver, pages } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+    const reply = await callServer(url, 'server.runtimeSampleWindow', {
+      sessionId,
+      path: 'Scene/Canvas/login',
+      componentType: 'LoginView',
+      properties: ['opacity'],
+      mode: 'perFrame',
+      durationMs: 220,
+      trigger: { method: 'startTransition', args: [] }
+    });
+
+    expect(reply.ok).toBe(true);
+    expect(reply.payload).toMatchObject({
+      source: 'preview-runtime',
+      previewSessionId: sessionId,
+      path: 'Scene/Canvas/login',
+      samples: [
+        { frame: 0, nodeValid: true },
+        { frame: 1, nodeValid: false }
+      ]
+    });
+    expect(pages[0].state.evaluateScripts.at(-1)).toContain('return sampleRuntimeWindow');
 
     bridge.close();
     await server.stop();

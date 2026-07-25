@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join, resolve, sep } from 'node:path';
-import { resolveWebSocketMaxPayload, ResolutionSchema, RuntimeComponentSnapshotSchema, ScenarioStepSchema } from '@cocos-ai/protocol';
+import {
+  resolveWebSocketMaxPayload,
+  ResolutionSchema,
+  RuntimeComponentSnapshotSchema,
+  RuntimeSampleWindowInputSchema,
+  RuntimeSampleWindowSnapshotSchema,
+  ScenarioStepSchema
+} from '@cocos-ai/protocol';
 import { assembleRuntimeNodeSnapshot, buildRuntimeScript, diffPng, runRuntimeScenario, RuntimeDriver, watchRuntimeProperty, type ScenarioRuntime } from '@cocos-ai/core';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { z } from 'zod';
@@ -84,6 +91,7 @@ const RUNTIME_METHODS = new Set([
   'server.runtimeHierarchy',
   'server.runtimeComponent',
   'server.runtimeInvoke',
+  'server.runtimeSampleWindow',
   'server.runtimeWatch',
   'server.runtimeDispatchInput',
   'server.runtimeCapture',
@@ -164,6 +172,10 @@ const RuntimeInvokePayloadSchema = z.object({
   componentType: z.string().min(1),
   method: z.string().min(1),
   args: z.array(z.unknown()).optional()
+});
+
+const RuntimeSampleWindowPayloadSchema = RuntimeSampleWindowInputSchema.extend({
+  sessionId: z.string().min(1)
 });
 
 const RuntimeWatchPayloadSchema = z.object({
@@ -389,7 +401,7 @@ export class ProbeServer {
   }
 
   /**
-   * 处理运行态控制方法（阶段五）：Preview 会话生命周期与 console 读取。
+   * 处理运行态控制方法（阶段五）：Preview 会话生命周期、运行时读取与页面内采样。
    *
    * @param method 运行态方法名（server.previewLaunch 等）。
    * @param payload 方法参数。
@@ -472,6 +484,36 @@ export class ProbeServer {
             args: parsed.args ?? []
           })
         );
+      }
+      case 'server.runtimeSampleWindow': {
+        const parsed = RuntimeSampleWindowPayloadSchema.parse(payload);
+        const raw = await driver.evaluate(
+          parsed.sessionId,
+          buildRuntimeScript('sampleRuntimeWindow', {
+            path: parsed.path,
+            componentType: parsed.componentType,
+            properties: parsed.properties,
+            mode: parsed.mode,
+            durationMs: parsed.durationMs,
+            ...(parsed.trigger ? { trigger: parsed.trigger } : {})
+          })
+        ) as Record<string, unknown>;
+        if (!raw || raw.found !== true) {
+          throw new Error(`RUNTIME_SAMPLE_WINDOW_UNAVAILABLE:${JSON.stringify(raw ?? null)}`);
+        }
+        return RuntimeSampleWindowSnapshotSchema.parse({
+          source: 'preview-runtime',
+          previewSessionId: parsed.sessionId,
+          capturedAt: new Date().toISOString(),
+          path: parsed.path,
+          nodeUuid: raw.nodeUuid,
+          componentType: raw.componentType ?? parsed.componentType,
+          mode: parsed.mode,
+          durationMs: parsed.durationMs,
+          samples: raw.samples,
+          ...(raw.trigger !== undefined ? { trigger: raw.trigger } : {}),
+          ...(raw.truncated === true ? { truncated: true } : {})
+        });
       }
       case 'server.runtimeWatch': {
         const parsed = RuntimeWatchPayloadSchema.parse(payload);

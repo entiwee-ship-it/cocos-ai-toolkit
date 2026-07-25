@@ -61,6 +61,19 @@ function createRuntimeRespond(overrides: Record<string, unknown> = {}) {
     if (method === 'server.runtimeInvoke') {
       return { found: true, invoked: true, returnValue: 6 };
     }
+    if (method === 'server.runtimeSampleWindow') {
+      return {
+        source: 'preview-runtime',
+        previewSessionId: 'preview-1',
+        capturedAt: '2026-07-25T01:00:00.000Z',
+        path: 'Scene/Canvas/login',
+        nodeUuid: 'u2',
+        componentType: 'LoginView',
+        mode: 'perFrame',
+        durationMs: 220,
+        samples: [{ frame: 0, t: 100, values: {}, nodeValid: false }]
+      };
+    }
     if (method === 'server.runtimeInstantiate') {
       return { done: true, nodePath: 'Canvas/LayerUI/Dialog', parentName: 'LayerUI' };
     }
@@ -122,6 +135,7 @@ describe('运行态 MCP 工具（阶段五）', () => {
       'cocos_preview_launch',
       'cocos_preview_stop',
       'cocos_runtime_invoke_method',
+      'cocos_runtime_sample_window',
       'cocos_runtime_dispatch_input',
       'cocos_runtime_instantiate_prefab',
       'cocos_runtime_run_scenario'
@@ -136,6 +150,7 @@ describe('运行态 MCP 工具（阶段五）', () => {
       'cocos_preview_launch',
       'cocos_preview_stop',
       'cocos_runtime_invoke_method',
+      'cocos_runtime_sample_window',
       'cocos_runtime_dispatch_input',
       'cocos_runtime_instantiate_prefab',
       'cocos_runtime_run_scenario'
@@ -226,6 +241,41 @@ describe('运行态 MCP 工具（阶段五）', () => {
     expect(probeClient.requests.at(-1)).toMatchObject({
       method: 'server.runtimeInvoke',
       payload: { sessionId: 'preview-1', path: 'Canvas/panel', componentType: 'GameLogic', method: 'add', args: [2, 3] }
+    });
+  });
+
+  it('cocos_runtime_sample_window 经门控转发页面内采样请求', async () => {
+    const probeClient = new RecordingProbeClient(createRuntimeRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_runtime_sample_window',
+      arguments: {
+        sessionId: 'preview-1',
+        path: 'Scene/Canvas/login',
+        componentType: 'LoginView',
+        properties: ['opacity'],
+        mode: 'perFrame',
+        durationMs: 220,
+        trigger: { method: 'startTransition', args: [] }
+      }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      source: 'preview-runtime',
+      samples: [{ frame: 0, nodeValid: false }]
+    });
+    expect(probeClient.requests.at(-1)).toMatchObject({
+      method: 'server.runtimeSampleWindow',
+      payload: {
+        sessionId: 'preview-1',
+        path: 'Scene/Canvas/login',
+        componentType: 'LoginView',
+        properties: ['opacity'],
+        mode: 'perFrame',
+        durationMs: 220,
+        trigger: { method: 'startTransition', args: [] }
+      }
     });
   });
 

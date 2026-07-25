@@ -44,6 +44,7 @@ export const COCOS_WRITE_TOOL_NAMES = [
   'cocos_preview_launch',
   'cocos_preview_stop',
   'cocos_runtime_invoke_method',
+  'cocos_runtime_sample_window',
   'cocos_runtime_dispatch_input',
   'cocos_runtime_instantiate_prefab',
   'cocos_runtime_run_scenario',

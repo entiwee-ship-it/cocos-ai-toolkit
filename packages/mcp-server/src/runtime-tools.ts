@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { appendWriteJournalEntry } from '@cocos-ai/core';
-import { PreviewSessionSchema, RuntimeNodeSnapshotSchema, ScenarioStepSchema } from '@cocos-ai/protocol';
+import {
+  PreviewSessionSchema,
+  RuntimeNodeSnapshotSchema,
+  RuntimeSampleWindowInputSchema,
+  RuntimeSampleWindowSnapshotSchema,
+  ScenarioStepSchema,
+  type RuntimeSampleWindowInput
+} from '@cocos-ai/protocol';
 import { z as zod } from 'zod';
 import type { CocosReadonlyToolService, CocosReadonlyToolServiceOptions } from './tools.js';
 
@@ -221,6 +228,27 @@ export class CocosRuntimeToolService {
     });
     const output = zod.record(zod.string(), zod.unknown()).parse(result);
     await this.audit('cocos_runtime_invoke_method', input, output);
+    return output;
+  }
+
+  /**
+   * 在单次页面 evaluate 内采集短时间窗口的组件属性时间线。
+   *
+   * @param input Preview 会话与协议化时间窗口采样选项。
+   * @returns 带会话身份、逐帧样本和可选触发结果的采样快照。
+   */
+  async sampleRuntimeWindow(input: RuntimeSampleWindowInput & { sessionId: string }) {
+    const result = await this.options.probeClient.request('server.runtimeSampleWindow', {
+      sessionId: input.sessionId,
+      path: input.path,
+      componentType: input.componentType,
+      properties: input.properties,
+      mode: input.mode,
+      durationMs: input.durationMs,
+      ...(input.trigger ? { trigger: input.trigger } : {})
+    });
+    const output = RuntimeSampleWindowSnapshotSchema.parse(result);
+    await this.audit('cocos_runtime_sample_window', input, output);
     return output;
   }
 
@@ -452,6 +480,16 @@ export function registerCocosRuntimeGatedTools(
     outputSchema: RuntimeRecordOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.invokeRuntimeMethod(input)));
+
+  server.registerTool('cocos_runtime_sample_window', {
+    description: '在单次页面执行中逐帧或定时采样组件属性；可先触发组件方法，并保留节点销毁的 nodeValid=false 证据。',
+    inputSchema: {
+      ...SessionIdInput,
+      ...RuntimeSampleWindowInputSchema.shape
+    },
+    outputSchema: RuntimeSampleWindowSnapshotSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.sampleRuntimeWindow(input)));
 
   server.registerTool('cocos_runtime_dispatch_input', {
     description: '向 Preview 页面派发输入（tap/click 为画布 CSS 像素坐标，key 为按键；回执不保证游戏响应，须后续断言验证）。',

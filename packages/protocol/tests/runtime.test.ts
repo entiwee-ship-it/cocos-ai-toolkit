@@ -6,6 +6,8 @@ import {
   RuntimeCaptureOptionsSchema,
   RuntimeCaptureResultSchema,
   RuntimeComponentSnapshotSchema,
+  RuntimeSampleWindowInputSchema,
+  RuntimeSampleWindowSnapshotSchema,
   RuntimeNodeSnapshotSchema,
   ScenarioReportSchema,
   ScenarioStepSchema
@@ -113,6 +115,61 @@ describe('运行态协议（阶段五）', () => {
       properties: { string: '确定退出？', fontSize: 28 },
       capturedAt: '2026-07-22T04:40:00.000Z'
     })).toBeTruthy();
+  });
+
+  it('时间窗口采样协议约束目标、模式、时长与销毁证据帧', () => {
+    expect(RuntimeSampleWindowInputSchema.parse({
+      path: 'Scene/Canvas/login',
+      componentType: 'LoginView',
+      properties: ['opacity', 'state.progress'],
+      mode: 'perFrame',
+      durationMs: 220,
+      trigger: { method: 'startTransition', args: [] }
+    })).toBeTruthy();
+    expect(RuntimeSampleWindowSnapshotSchema.parse({
+      source: 'preview-runtime',
+      previewSessionId: 'preview-1',
+      capturedAt: '2026-07-25T01:00:00.000Z',
+      path: 'Scene/Canvas/login',
+      nodeUuid: 'login-node',
+      componentType: 'LoginView',
+      mode: 'perFrame',
+      durationMs: 220,
+      samples: [
+        { frame: 0, t: 100, values: { opacity: 255 }, nodeValid: true },
+        { frame: 1, t: 116, values: {}, nodeValid: false }
+      ],
+      trigger: { invoked: true, method: 'startTransition' }
+    })).toBeTruthy();
+
+    expect(RuntimeSampleWindowInputSchema.parse({
+      path: 'Scene/Canvas/login',
+      componentType: 'LoginView',
+      properties: ['opacity'],
+      mode: { intervalMs: 16 },
+      durationMs: 220
+    })).toBeTruthy();
+    expect(() => RuntimeSampleWindowInputSchema.parse({
+      path: 'Scene/Canvas/login',
+      componentType: 'LoginView',
+      properties: [],
+      mode: { intervalMs: 16 },
+      durationMs: 220
+    })).toThrow();
+    expect(() => RuntimeSampleWindowInputSchema.parse({
+      path: 'Scene/Canvas/login',
+      componentType: 'LoginView',
+      properties: Array.from({ length: 21 }, (_, index) => `property${index}`),
+      mode: 'perFrame',
+      durationMs: 220
+    })).toThrow();
+    expect(() => RuntimeSampleWindowInputSchema.parse({
+      path: 'Scene/Canvas/login',
+      componentType: 'LoginView',
+      properties: ['opacity'],
+      mode: 'perFrame',
+      durationMs: 55_001
+    })).toThrow();
   });
 
   it('场景步骤覆盖启动、等待、断言、输入、Console 与截图', () => {

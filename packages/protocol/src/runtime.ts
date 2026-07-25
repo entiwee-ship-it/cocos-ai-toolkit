@@ -81,6 +81,64 @@ export const RuntimeComponentSnapshotSchema = z.object({
   capturedAt: z.string().min(1)
 });
 
+/** 时间窗口采样模式：逐帧，或按固定毫秒间隔。 */
+export const RuntimeSampleWindowModeSchema = z.union([
+  z.literal('perFrame'),
+  z.object({
+    intervalMs: z.number().int().positive().max(10_000)
+  })
+]);
+
+/** 采样前可选触发的组件方法。 */
+export const RuntimeSampleWindowTriggerSchema = z.object({
+  method: z.string().min(1),
+  args: z.array(z.unknown()).optional()
+});
+
+/** 页面内时间窗口采样入参。 */
+export const RuntimeSampleWindowInputSchema = z.object({
+  path: z.string().min(1),
+  componentType: z.string().min(1),
+  properties: z.array(z.string().min(1)).min(1).max(20),
+  mode: RuntimeSampleWindowModeSchema,
+  /** 必须低于 60 秒客户端超时，避免结果状态未知。 */
+  durationMs: z.number().int().positive().max(55_000),
+  trigger: RuntimeSampleWindowTriggerSchema.optional()
+});
+
+/** 单帧运行时属性样本；节点销毁后 values 为空并保留 nodeValid=false。 */
+export const RuntimeSampleFrameSchema = z.object({
+  frame: z.number().int().nonnegative(),
+  t: z.number().nonnegative(),
+  values: z.record(z.string(), z.unknown()),
+  nodeValid: z.boolean()
+});
+
+/** 采样前方法触发结果。 */
+export const RuntimeSampleWindowTriggerResultSchema = z.object({
+  invoked: z.boolean(),
+  method: z.string().min(1),
+  returnValue: z.unknown().optional(),
+  reason: z.string().optional(),
+  error: z.string().optional()
+});
+
+/** 页面内时间窗口采样快照。 */
+export const RuntimeSampleWindowSnapshotSchema = z.object({
+  source: z.literal('preview-runtime'),
+  previewSessionId: z.string().min(1),
+  capturedAt: z.string().min(1),
+  path: z.string().min(1),
+  nodeUuid: z.string().min(1),
+  componentType: z.string().min(1),
+  mode: RuntimeSampleWindowModeSchema,
+  durationMs: z.number().int().positive().max(55_000),
+  samples: z.array(RuntimeSampleFrameSchema),
+  trigger: RuntimeSampleWindowTriggerResultSchema.optional(),
+  /** 高刷新率下超过本地 3600 条样本上限时为 true。 */
+  truncated: z.boolean().optional()
+});
+
 /** Console 条目：seq 为单调游标，供增量拉取。 */
 export const ConsoleEntrySchema = z.object({
   seq: z.number().int().nonnegative(),
@@ -221,6 +279,10 @@ export type Resolution = z.infer<typeof ResolutionSchema>;
 export type PreviewSession = z.infer<typeof PreviewSessionSchema>;
 export type RuntimeNodeSnapshot = z.infer<typeof RuntimeNodeSnapshotSchema>;
 export type RuntimeComponentSnapshot = z.infer<typeof RuntimeComponentSnapshotSchema>;
+export type RuntimeSampleWindowMode = z.infer<typeof RuntimeSampleWindowModeSchema>;
+export type RuntimeSampleWindowInput = z.infer<typeof RuntimeSampleWindowInputSchema>;
+export type RuntimeSampleFrame = z.infer<typeof RuntimeSampleFrameSchema>;
+export type RuntimeSampleWindowSnapshot = z.infer<typeof RuntimeSampleWindowSnapshotSchema>;
 export type ConsoleEntry = z.infer<typeof ConsoleEntrySchema>;
 export type RuntimeCaptureOptions = z.infer<typeof RuntimeCaptureOptionsSchema>;
 export type RuntimeCaptureResult = z.infer<typeof RuntimeCaptureResultSchema>;

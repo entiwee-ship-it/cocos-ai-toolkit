@@ -460,17 +460,18 @@ function listRuntimeMethods(component: unknown): string[] {
 }
 
 /**
- * 调用运行时组件方法：白名单参数、黑名单方法、返回值序列化回传。
+ * 在已经定位的组件上调用方法，共享危险方法与参数安全校验。
  *
- * @param options path 节点路径；componentType 组件类型；method 方法名；args 位置参数。
+ * @param located 已定位的组件、节点 UUID 与实际组件类型。
+ * @param options 方法调用选项。
+ * @param options.method 方法名。
+ * @param options.args 可选位置参数。
  * @returns invoked 调用标记、序列化返回值或失败原因。
  */
-async function invokeRuntimeComponentMethod(options: {
-  path: string;
-  componentType: string;
-  method: string;
-  args?: unknown[];
-}): Promise<Record<string, unknown>> {
+async function invokeLocatedRuntimeMethod(
+  located: Record<string, unknown>,
+  options: { method: string; args?: unknown[] }
+): Promise<Record<string, unknown>> {
   // 生命周期与危险方法黑名单（内联字面量：模块级常量在打包脚本作用域中不存在）。
   const blocklist = [
     'onLoad', 'start', 'update', 'lateUpdate', 'onEnable', 'onDisable', 'onDestroy',
@@ -478,19 +479,19 @@ async function invokeRuntimeComponentMethod(options: {
     'eval', 'Function', 'constructor'
   ];
   if (blocklist.includes(options.method)) {
-    return { invoked: false, reason: 'method-not-allowed' };
+    return { invoked: false, method: options.method, reason: 'method-not-allowed' };
   }
   const args = Array.isArray(options.args) ? options.args : [];
   if (!args.every((arg) => isRuntimeArgsSafe(arg, 1))) {
-    return { invoked: false, reason: 'invalid-args' };
+    return { invoked: false, method: options.method, reason: 'invalid-args' };
   }
-  const located = await locateRuntimeComponent({ path: options.path, componentType: options.componentType });
-  if (located.found !== true) return located;
   const component = located.component as Record<string, unknown>;
   const method = component[options.method];
   if (typeof method !== 'function') {
     return {
       found: false,
+      invoked: false,
+      method: options.method,
       reason: 'method-not-found',
       nodeUuid: located.nodeUuid,
       availableMethods: listRuntimeMethods(component)
@@ -501,6 +502,7 @@ async function invokeRuntimeComponentMethod(options: {
     return {
       found: true,
       invoked: true,
+      method: options.method,
       nodeUuid: located.nodeUuid,
       componentType: located.actualComponentType,
       returnValue: serializeRuntimeValue(returnValue, 1, new Set())
@@ -509,11 +511,163 @@ async function invokeRuntimeComponentMethod(options: {
     return {
       found: true,
       invoked: false,
+      method: options.method,
       reason: 'method-threw',
       nodeUuid: located.nodeUuid,
       error: error instanceof Error ? error.message : String(error)
     };
   }
+}
+
+/**
+ * 按路径定位组件并调用指定方法。
+ *
+ * @param options 运行时组件方法调用选项。
+ * @param options.path 节点路径。
+ * @param options.componentType 组件类型。
+ * @param options.method 方法名。
+ * @param options.args 可选位置参数。
+ * @returns invoked 调用标记、序列化返回值或定位/调用失败原因。
+ */
+async function invokeRuntimeComponentMethod(options: {
+  path: string;
+  componentType: string;
+  method: string;
+  args?: unknown[];
+}): Promise<Record<string, unknown>> {
+  const located = await locateRuntimeComponent({ path: options.path, componentType: options.componentType });
+  if (located.found !== true) return located;
+  return invokeLocatedRuntimeMethod(located, { method: options.method, args: options.args ?? [] });
+}
+
+/**
+ * 在一次页面 evaluate 内完成时间窗口采样，避免跨进程轮询错过短过渡。
+ *
+ * @param options 时间窗口采样选项。
+ * @param options.path 节点路径。
+ * @param options.componentType 组件类型。
+ * @param options.properties 要采样的属性点路径。
+ * @param options.mode 逐帧模式或固定毫秒间隔。
+ * @param options.durationMs 采样持续时间。
+ * @param options.trigger 采样前可选调用的组件方法与参数。
+ * @returns 定位身份、逐帧样本、可选触发结果与截断标记。
+ */
+async function sampleRuntimeWindow(options: {
+  path: string;
+  componentType: string;
+  properties: string[];
+  mode: 'perFrame' | { intervalMs: number };
+  durationMs: number;
+  trigger?: { method: string; args?: unknown[] };
+}): Promise<Record<string, unknown>> {
+  const located = await locateRuntimeComponent({ path: options.path, componentType: options.componentType });
+  if (located.found !== true) return located;
+
+  const component = located.component as Record<string, unknown>;
+  const node = located.node as Record<string, unknown>;
+  let triggerResult: Record<string, unknown> | undefined;
+  if (options.trigger) {
+    triggerResult = await invokeLocatedRuntimeMethod(located, {
+      method: options.trigger.method,
+      args: options.trigger.args ?? []
+    });
+    if (triggerResult.invoked !== true) {
+      return {
+        found: false,
+        reason: 'trigger-failed',
+        nodeUuid: located.nodeUuid,
+        componentType: located.actualComponentType,
+        trigger: triggerResult
+      };
+    }
+  }
+
+  const globalObject = globalThis as {
+    performance?: { now?: () => number };
+    requestAnimationFrame?: (callback: (timestamp: number) => void) => unknown;
+    setTimeout?: (callback: () => void, delay: number) => unknown;
+  };
+  const now = (): number => typeof globalObject.performance?.now === 'function'
+    ? globalObject.performance.now()
+    : Date.now();
+  const startedAt = now();
+  const samples: Array<Record<string, unknown>> = [];
+  const maxSamples = 3_600;
+  let frame = 0;
+  let truncated = false;
+
+  const capture = (): boolean => {
+    const timestamp = now();
+    let nodeValid = true;
+    try {
+      nodeValid = node.isValid !== false && component.isValid !== false;
+    } catch {
+      nodeValid = false;
+    }
+
+    const values: Record<string, unknown> = {};
+    if (nodeValid) {
+      for (const property of options.properties) {
+        const segments = property.split('.').filter((segment) => segment.length > 0);
+        let value: unknown = component;
+        try {
+          for (const segment of segments) {
+            if (value === null || value === undefined || typeof value !== 'object') {
+              value = undefined;
+              break;
+            }
+            value = (value as Record<string, unknown>)[segment];
+          }
+          values[property] = serializeRuntimeValue(value, 1, new Set([component]));
+        } catch {
+          values[property] = null;
+        }
+      }
+    }
+
+    if (samples.length < maxSamples) {
+      samples.push({ frame, t: timestamp, values, nodeValid });
+    } else {
+      truncated = true;
+    }
+    frame += 1;
+    return timestamp - startedAt >= options.durationMs;
+  };
+
+  capture();
+  await new Promise<void>((resolve) => {
+    const tick = (): void => {
+      if (capture()) {
+        resolve();
+        return;
+      }
+      schedule();
+    };
+    const schedule = (): void => {
+      if (options.mode === 'perFrame' && typeof globalObject.requestAnimationFrame === 'function') {
+        globalObject.requestAnimationFrame(() => tick());
+        return;
+      }
+      const delay = options.mode === 'perFrame' ? 16 : options.mode.intervalMs;
+      if (typeof globalObject.setTimeout === 'function') {
+        globalObject.setTimeout(tick, delay);
+        return;
+      }
+      Promise.resolve().then(tick);
+    };
+    schedule();
+  });
+
+  return {
+    found: true,
+    nodeUuid: located.nodeUuid,
+    componentType: located.actualComponentType,
+    mode: options.mode,
+    durationMs: options.durationMs,
+    samples,
+    ...(triggerResult ? { trigger: triggerResult } : {}),
+    ...(truncated ? { truncated: true } : {})
+  };
 }
 
 /**
@@ -623,7 +777,9 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   locateRuntimeComponent,
   isRuntimeArgsSafe,
   listRuntimeMethods,
+  invokeLocatedRuntimeMethod,
   invokeRuntimeComponentMethod,
+  sampleRuntimeWindow,
   readRuntimeProperty,
   readCanvasRect,
   readRuntimeNodeBounds,

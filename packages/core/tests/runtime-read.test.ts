@@ -280,6 +280,100 @@ describe('readRuntimeComponent（页面注入：组件属性读取）', () => {
   });
 });
 
+describe('sampleRuntimeWindow（页面注入：时间窗口采样）', () => {
+  it('触发方法后逐帧采样属性，并把节点销毁记录为 nodeValid=false', async () => {
+    const loginNode = fakeNode({
+      name: 'login',
+      fileId: 'login-file',
+      components: [{ type: 'LoginView' }]
+    }) as Record<string, unknown>;
+    const component = (loginNode.components as Array<Record<string, unknown>>)[0];
+    loginNode.isValid = true;
+    component.isValid = true;
+    component.opacity = 1;
+    component.state = { progress: 0 };
+    component.startTransition = () => 'started';
+    installScene(fakeNode({
+      name: 'Scene',
+      fileId: 'scene-file',
+      children: [fakeNode({
+        name: 'Canvas',
+        fileId: 'canvas-file',
+        children: [loginNode as ReturnType<typeof fakeNode>]
+      })]
+    }));
+
+    let now = 100;
+    let frame = 0;
+    vi.stubGlobal('performance', { now: () => now });
+    vi.stubGlobal('requestAnimationFrame', (callback: (timestamp: number) => void) => {
+      frame += 1;
+      now += 16;
+      if (frame === 2) {
+        component.opacity = 0.5;
+        component.state = { progress: 0.5 };
+      }
+      if (frame === 3) {
+        loginNode.isValid = false;
+        component.isValid = false;
+      }
+      queueMicrotask(() => callback(now));
+      return frame;
+    });
+
+    const result = await runScript('sampleRuntimeWindow', {
+      path: 'Scene/Canvas/login',
+      componentType: 'LoginView',
+      properties: ['opacity', 'state.progress'],
+      mode: 'perFrame',
+      durationMs: 48,
+      trigger: { method: 'startTransition', args: [] }
+    }) as {
+      found: boolean;
+      trigger?: { invoked?: boolean; returnValue?: unknown };
+      samples: Array<{ frame: number; t: number; values: Record<string, unknown>; nodeValid: boolean }>;
+    };
+
+    expect(result.found).toBe(true);
+    expect(result.trigger).toMatchObject({ invoked: true, returnValue: 'started' });
+    expect(result.samples.map((sample) => sample.nodeValid)).toContain(false);
+    expect(result.samples.some((sample) => sample.values.opacity === 0.5)).toBe(true);
+    expect(result.samples.at(-1)).toMatchObject({ values: {}, nodeValid: false });
+  });
+
+  it('页面没有 requestAnimationFrame 时按 intervalMs 定时采样', async () => {
+    const targetNode = fakeNode({
+      name: 'target',
+      fileId: 'target-file',
+      components: [{ type: 'CounterView', props: { count: 1 } }]
+    }) as Record<string, unknown>;
+    const component = (targetNode.components as Array<Record<string, unknown>>)[0];
+    targetNode.isValid = true;
+    component.isValid = true;
+    installScene(fakeNode({ name: 'Scene', fileId: 'scene-file', children: [targetNode as ReturnType<typeof fakeNode>] }));
+
+    let now = 100;
+    vi.stubGlobal('performance', { now: () => now });
+    vi.stubGlobal('requestAnimationFrame', undefined);
+    vi.stubGlobal('setTimeout', (callback: () => void, delay: number) => {
+      now += delay;
+      component.count = Number(component.count) + 1;
+      queueMicrotask(callback);
+      return 1;
+    });
+
+    const result = await runScript('sampleRuntimeWindow', {
+      path: 'Scene/target',
+      componentType: 'CounterView',
+      properties: ['count'],
+      mode: { intervalMs: 20 },
+      durationMs: 40
+    }) as { samples: Array<{ values: Record<string, unknown> }> };
+
+    expect(result.samples.map((sample) => sample.values.count)).toEqual([1, 2, 3]);
+  });
+});
+
 describe('assembleRuntimeNodeSnapshot（core 装配）', () => {
   it('原始树装配为协议快照并通过 Schema 校验', () => {
     const snapshot = assembleRuntimeNodeSnapshot(
