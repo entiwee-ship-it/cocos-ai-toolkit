@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { BridgeClient } from './bridge-client';
 import { buildBridgeHello, probeEditorState } from './editor-state';
+import type { CreatorDocumentIdentity } from './creator-document-identity';
 import { debugEditorMessage } from './debug-editor-message';
 import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
 import { ProbeError } from './probe-errors';
@@ -72,7 +73,7 @@ export function load(): void {
       bridgeVersion: BRIDGE_VERSION
     }),
     handlers: {
-      'probe.editorState': () => probeEditorState(),
+      'probe.editorState': () => probeEditorStateWithDocumentIdentity(),
       'probe.assets': (payload) => probeAssets(payload),
       'probe.assetIndex': () => probeAssetIndexWithScriptCache(),
       'probe.component': (payload) => probeComponent(payload),
@@ -115,6 +116,26 @@ export function unload(): void {
   client?.dispose();
   client = null;
   cachedScriptPathsByUuid = null;
+}
+
+/**
+ * 组合主进程公开状态探针与 Scene 进程当前文档身份。
+ * 身份转发失败时按未解析保留证据（best-effort），不拖死整个编辑器状态探针。
+ *
+ * @returns 编辑器状态；document.assetUuid/mode/source 由 Scene 进程实测填充。
+ */
+async function probeEditorStateWithDocumentIdentity(): Promise<unknown> {
+  const identity = await forwardToScene('editorStateDocumentIdentity', {})
+    .catch((error: unknown): CreatorDocumentIdentity => ({
+      assetUuid: null,
+      mode: null,
+      source: null,
+      failures: [{
+        source: 'scene.editorStateDocumentIdentity',
+        reason: error instanceof Error ? error.message : String(error)
+      }]
+    })) as CreatorDocumentIdentity;
+  return probeEditorState(identity);
 }
 
 async function readDocumentAsset(documentAssetUuid: string): Promise<Buffer> {
@@ -289,7 +310,7 @@ function readObject(value: unknown): Record<string, unknown> {
 }
 
 export const methods: Record<string, (request: JsonObject) => Promise<unknown>> = {
-  'probe-editor-state': () => probeEditorState(),
+  'probe-editor-state': () => probeEditorStateWithDocumentIdentity(),
   'probe-assets': (request) => probeAssets(request),
   'probe-asset-index': () => probeAssetIndexWithScriptCache(),
   'probe-document-snapshot': (request) => probeDocumentSnapshot(request),

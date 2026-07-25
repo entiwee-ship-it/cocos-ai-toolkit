@@ -15,6 +15,7 @@
 | 资产与脚本索引 | Bridge `probe.assetIndex` | AssetDB + 协议 Schema | message-api | Phase 1 实测读取 6,485 个资产、756 个脚本，脚本 UUID 可映射到项目路径 |
 | 完整组件 Schema | Bridge `probe.component` + 主进程脚本索引 | Component Dump、类反射、Inspector 属性包装 | message/internal-api | 已验证自定义组件脚本 UUID、脚本路径、继承、属性类型、Inspector 元数据、引用和未消费原始字段 |
 | 完整文档快照 | Bridge `probe.documentSnapshot` | `query-node-tree`、`query-node`、`query-component` | message/internal-api | 支持 summary/full、分页、Revision cursor 和原始数据；完整快照逐文档落盘并校验 SHA-256 |
+| 当前文档身份 | Scene 进程 `cce.SceneFacadeManager.queryCurrentSceneUuid()` / `queryMode()`（10×50ms 重试），主进程 `probe.editorState` 组合转发 | internal-api | 已接线 `cocos_editor_state` | `document.assetUuid`/`mode`/`source` 由 Scene 进程实测填充；转发失败保留 `document.assetUuid` unresolved（`CURRENT_DOCUMENT_UUID_EMPTY`）不拖死探针；依赖 internal-api，3.8.x 逐版本升级需复验 |
 | Prefab 跨文档图 | CLI/MCP + `core/prefab-graph` | 运行时 Prefab 信息、FileID、Override | internal-api | 真实项目生成 16,116,497 字节图；保留实例来源、多段 localID、Override、循环和未解析证据 |
 | 全项目只读扫描 | CLI/MCP + checkpoint + 流式报告 | Bridge 原子读取 + Core 编排 | composite | 421/421 个 Scene/Prefab 均被处理；339 个完整快照、82 个失败证据，支持同 `scanId` 断点恢复 |
 | Prefab 信息 | `query-node.__prefab__` + Scene 运行时 Prefab 资源/实例反射 | Creator 运行时对象和内部信息 | internal-api | 已验证所属文档、源资源、实例根、源 FileID、实例 FileID、两层实例链、26 条 Property Override、Mounted Child/Component |

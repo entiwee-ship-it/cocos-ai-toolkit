@@ -105,7 +105,10 @@ const EditorStateSchema = z.object({
   projectId: z.string().min(1),
   document: z.object({
     assetUuid: z.string().nullable(),
-    dirty: z.boolean().nullable()
+    dirty: z.boolean().nullable(),
+    // Scene 进程实测身份成功时附带的编辑模式与来源；未解析时缺省。
+    mode: z.string().nullable().optional(),
+    source: z.string().nullable().optional()
   }),
   ready: z.object({
     scene: z.boolean(),
@@ -211,6 +214,8 @@ const OpenAssetResponseSchema = z.object({
   uuid: z.string().min(1)
 });
 
+// Bridge 场景进程返回信封 {data:{…,schema,raw}, raw, source}；readComponentProbeResponse 先解包 data，
+// 再按这里的内层形状校验，因此信封形状与无信封的旧形状均可接受。
 const ComponentProbeResponseSchema = z.object({
   schema: ComponentTypeSchemaSchema,
   raw: z.unknown()
@@ -694,7 +699,10 @@ export class CocosReadonlyToolService {
         params: { uuid: input.uuid }
       })
     );
-    if (response.schema.componentUuid && response.schema.componentUuid !== input.uuid) {
+    // Bridge 当前不回传 schema.componentUuid：身份校验仅在真实拿到该字段时执行，避免恒空转。
+    if (typeof response.schema.componentUuid === 'string'
+      && response.schema.componentUuid
+      && response.schema.componentUuid !== input.uuid) {
       throw new Error('COMPONENT_IDENTITY_MISMATCH');
     }
     return ComponentSchemaOutputSchema.parse({
@@ -1873,7 +1881,15 @@ function readAssetProbeResponse(value: unknown): z.infer<typeof AssetProbeRespon
 }
 
 function readComponentProbeResponse(value: unknown): z.infer<typeof ComponentProbeResponseSchema> {
-  const result = ComponentProbeResponseSchema.safeParse(value);
+  // Bridge 场景进程返回信封 {data:{…,schema,raw}, raw, source}：先解包 data 作为校验对象；
+  // raw 优先取解包对象的 raw，缺省时回落信封顶层 raw；无 data 字段时按旧形状直接校验。
+  const envelope = readObject(value);
+  const data = envelope.data;
+  const inner = data && typeof data === 'object' && !Array.isArray(data)
+    ? data as Record<string, unknown>
+    : envelope;
+  const candidate = 'raw' in inner ? inner : { ...inner, raw: envelope.raw };
+  const result = ComponentProbeResponseSchema.safeParse(candidate);
   if (!result.success) {
     throw new Error(`COMPONENT_SCHEMA_INVALID:${result.error.message}`);
   }

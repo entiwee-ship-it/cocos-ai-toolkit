@@ -11,9 +11,13 @@ const probeServerScriptPath = fileURLToPath(
 const gitignorePath = fileURLToPath(new URL('../../../.gitignore', import.meta.url));
 const readmePath = fileURLToPath(new URL('../../../README.md', import.meta.url));
 
+async function readValidationScript() {
+  return (await readFile(validationScriptPath, 'utf8')).replace(/\r\n/g, '\n');
+}
+
 describe('Phase 1 只读统一验证脚本', () => {
   it('以 fail-fast 顺序执行全部只读验证阶段', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
 
     expect(script).toContain("$ErrorActionPreference = 'Stop'");
     expect(script).toContain('Invoke-NativeCommand');
@@ -74,7 +78,7 @@ describe('Phase 1 只读统一验证脚本', () => {
   });
 
   it('从资产索引和完整文档快照自动选择样本', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
 
     expect(script).toContain('documents');
     expect(script).toContain('assetUuid');
@@ -89,7 +93,7 @@ describe('Phase 1 只读统一验证脚本', () => {
   });
 
   it('为每次运行创建唯一且不可覆盖的证据集合', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
 
     expect(script).toContain('$runId');
     expect(script).toContain('CocosAiProbe_');
@@ -110,7 +114,7 @@ describe('Phase 1 只读统一验证脚本', () => {
   });
 
   it('清理中断种子扫描遗留的原子写临时文件', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
 
     const recoveryFunction = script.slice(
       script.indexOf('function Invoke-ServerInterruptRecovery'),
@@ -125,7 +129,7 @@ describe('Phase 1 只读统一验证脚本', () => {
   });
 
   it('保留可重复的 Server 中断和同 checkpoint 恢复证据', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
 
     expect(script).toContain('server-interrupt-recovery');
     expect(script).toContain('beforeInterruptionRequest');
@@ -194,7 +198,7 @@ describe('Phase 1 只读统一验证脚本', () => {
   });
 
   it('已有 Probe Server 也会在验证前换成当前构建并等待真实 Ready', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
     const mainFlow = script.slice(script.indexOf('\ntry {'));
     const serverStartup = mainFlow.slice(
       mainFlow.indexOf('$existingListener'),
@@ -207,7 +211,7 @@ describe('Phase 1 只读统一验证脚本', () => {
   });
 
   it('为真实项目长耗时只读请求统一配置端到端超时', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
 
     expect(script).toMatch(/\[int\]\$RequestTimeoutSeconds = 120\b/);
     expect(script).toContain(
@@ -216,7 +220,7 @@ describe('Phase 1 只读统一验证脚本', () => {
   });
 
   it('以 Hashtable 解析包含空键的 Creator 原始 JSON', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
     const propertyFunction = script.slice(
       script.indexOf('function Test-ObjectProperty'),
       script.indexOf('function Write-ReportFile')
@@ -244,7 +248,7 @@ describe('Phase 1 只读统一验证脚本', () => {
   });
 
   it('解包 CLI component probe 后分别校验组件身份和类型 Schema', async () => {
-    const script = await readFile(validationScriptPath, 'utf8');
+    const script = await readValidationScript();
     const componentSchemaValidation = script.slice(
       script.indexOf("$componentSchema = Invoke-CliJson"),
       script.indexOf("$prefabGraph = Invoke-CliJson")

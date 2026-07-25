@@ -199,6 +199,31 @@ describe('Cocos readonly MCP tools', () => {
     expect(result.structuredContent).toEqual({ editor: session, state });
   });
 
+  it('editor_state 在文档身份未解析时保留 unresolved 证据而不伪造 assetUuid', async () => {
+    const session = createEditorSession('editor-a');
+    const state = {
+      ...createEditorState(),
+      document: { assetUuid: null, dirty: false },
+      unresolved: [
+        { path: 'document.assetUuid', reason: 'CURRENT_DOCUMENT_UUID_EMPTY' }
+      ]
+    };
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [session];
+      if (method === 'probe.editorState') return state;
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_editor_state',
+      arguments: { projectId: 'project-a' }
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({ editor: session, state });
+  });
+
   it('editor_state 拒绝 Bridge 返回其它项目或版本的状态', async () => {
     const probeClient = new RecordingProbeClient((method) => {
       if (method === 'server.editors') return [createEditorSession('editor-a')];
@@ -430,6 +455,69 @@ describe('Cocos readonly MCP tools', () => {
         selector: { projectId: 'project-a', editorInstanceId: 'editor-a' },
         params: { uuid: 'component-a' }
       }
+    });
+  });
+
+  it('component_schema 解包 Bridge 信封并优先取内层原始 Dump', async () => {
+    const component = createComponentProbeResult();
+    const innerRaw = { value: { uuid: { value: 'component-a' } }, marker: 'inner-raw' };
+    const envelope = {
+      data: { ...component.data, raw: innerRaw },
+      raw: { marker: 'envelope-raw' },
+      source: 'message-api'
+    };
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      if (method === 'probe.component') return envelope;
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_component_schema',
+      arguments: {
+        projectId: 'project-a',
+        uuid: 'component-a',
+        includeRaw: true
+      }
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      schema: {
+        componentUuid: 'component-a',
+        className: 'GameController',
+        scriptPath: 'db://assets/script/GameController.ts'
+      },
+      raw: innerRaw
+    });
+  });
+
+  it('component_schema 兼容无信封的旧形状响应', async () => {
+    const legacy = createComponentProbeResult().data;
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      if (method === 'probe.component') return legacy;
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_component_schema',
+      arguments: {
+        projectId: 'project-a',
+        uuid: 'component-a',
+        includeRaw: true
+      }
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      schema: {
+        componentUuid: 'component-a',
+        className: 'GameController'
+      },
+      raw: legacy.raw
     });
   });
 
@@ -1074,13 +1162,16 @@ function createEditorState() {
     creatorVersion: '3.8.8',
     projectPath: 'E:/project-a',
     projectId: 'project-a',
-    document: { assetUuid: null, dirty: false },
+    document: {
+      assetUuid: 'scene-a',
+      dirty: false,
+      mode: 'scene',
+      source: 'cce.SceneFacadeManager'
+    },
     ready: { scene: true, assetDatabase: true },
     selection: { node: ['node-a'], asset: ['asset-a'] },
     preview: null,
-    unresolved: [
-      { path: 'document.assetUuid', reason: 'PUBLIC_API_NOT_CONFIRMED' }
-    ]
+    unresolved: []
   };
 }
 
@@ -1131,32 +1222,38 @@ function createAssetProbeInfo(asset: ReturnType<typeof createAssetRecord>) {
 }
 
 function createComponentProbeResult() {
+  // 与 Bridge 场景进程 probeComponent 的真实信封形状一致：{data:{…,schema,raw}, raw, source}
+  const raw = { value: { uuid: { value: 'component-a' } } };
   return {
-    identity: { objectUuid: 'component-a', fileId: 'component-file-a' },
-    class: {
-      className: 'GameController',
-      typeId: 'game-controller-type',
-      custom: true,
-      scriptUuid: 'script-a',
-      scriptPath: 'db://assets/script/GameController.ts',
-      inheritance: ['cc.Component', 'cc.Object']
+    data: {
+      identity: { objectUuid: 'component-a', fileId: 'component-file-a' },
+      class: {
+        className: 'GameController',
+        typeId: 'game-controller-type',
+        custom: true,
+        scriptUuid: 'script-a',
+        scriptPath: 'db://assets/script/GameController.ts',
+        inheritance: ['cc.Component', 'cc.Object']
+      },
+      properties: {},
+      schema: {
+        componentUuid: 'component-a',
+        className: 'GameController',
+        qualifiedName: 'GameController',
+        typeId: 'game-controller-type',
+        scriptUuid: 'script-a',
+        scriptPath: 'db://assets/script/GameController.ts',
+        inheritance: ['cc.Component', 'cc.Object'],
+        executionOrder: 0,
+        properties: [],
+        rawClassAttributes: {},
+        unresolved: []
+      },
+      unresolved: [],
+      raw
     },
-    properties: {},
-    schema: {
-      componentUuid: 'component-a',
-      className: 'GameController',
-      qualifiedName: 'GameController',
-      typeId: 'game-controller-type',
-      scriptUuid: 'script-a',
-      scriptPath: 'db://assets/script/GameController.ts',
-      inheritance: ['cc.Component', 'cc.Object'],
-      executionOrder: 0,
-      properties: [],
-      rawClassAttributes: {},
-      unresolved: []
-    },
-    unresolved: [],
-    raw: { value: { uuid: { value: 'component-a' } } }
+    raw,
+    source: 'message-api'
   };
 }
 

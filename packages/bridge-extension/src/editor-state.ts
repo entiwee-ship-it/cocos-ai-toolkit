@@ -1,4 +1,5 @@
 import { editorPreviewMessageSource, readPreviewStatus } from './preview';
+import type { CreatorDocumentIdentity } from './creator-document-identity';
 
 export const BRIDGE_CAPABILITIES = [
   'probe.editorState',
@@ -47,7 +48,14 @@ export function buildBridgeHello(state: BridgeEditorState) {
   };
 }
 
-export async function probeEditorState(): Promise<unknown> {
+/**
+ * 读取编辑器当前状态：主进程公开消息探针 + 调用方已解析的当前文档身份。
+ *
+ * @param identity Scene 进程经 cce.SceneFacadeManager 实测的当前文档身份；
+ *   缺省或解析失败时不伪造 assetUuid，只把未解析证据放进 unresolved。
+ * @returns 编辑器版本、项目、文档、就绪、选择、预览状态和未解析证据。
+ */
+export async function probeEditorState(identity?: CreatorDocumentIdentity): Promise<unknown> {
   const unresolved: Array<{ path: string; reason: string }> = [];
   const [assetDatabaseReady, sceneReady, dirty] = await Promise.all([
     Editor.Message.request('asset-db', 'query-ready'),
@@ -61,13 +69,19 @@ export async function probeEditorState(): Promise<unknown> {
     node: Editor.Selection.getSelected('node'),
     asset: Editor.Selection.getSelected('asset')
   };
-  unresolved.push({ path: 'document.assetUuid', reason: 'PUBLIC_API_NOT_CONFIRMED' });
+  if (!identity?.assetUuid) {
+    unresolved.push({ path: 'document.assetUuid', reason: 'CURRENT_DOCUMENT_UUID_EMPTY' });
+  }
   const preview = await readPreviewStatus(editorPreviewMessageSource);
   return {
     creatorVersion: Editor.App.version,
     projectPath: Editor.Project.path,
     projectId: Editor.Project.uuid,
-    document: { assetUuid: null, dirty },
+    document: {
+      assetUuid: identity?.assetUuid ?? null,
+      dirty,
+      ...(identity?.assetUuid ? { mode: identity.mode ?? null, source: identity.source ?? null } : {})
+    },
     ready: { scene: sceneReady, assetDatabase: assetDatabaseReady },
     selection,
     preview,

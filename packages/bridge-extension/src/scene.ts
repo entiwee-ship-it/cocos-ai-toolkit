@@ -80,6 +80,15 @@ async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
 }
 
 /**
+ * 读取当前打开文档的身份（资产 UUID 与编辑模式），供主进程编辑器状态探针组合。
+ *
+ * @returns 当前文档身份；内部入口不可用时保留失败证据并返回空身份。
+ */
+async function editorStateDocumentIdentity(): Promise<unknown> {
+  return resolveCreatorDocumentIdentity(globalThis);
+}
+
+/**
  * 读取当前节点的 Prefab 来源、实例链、FileID、Override 三值和宿主路径。
  *
  * @param request 包含目标节点运行时 UUID 的只读探针请求。
@@ -936,12 +945,12 @@ export function unload(): void {
 }
 
 export const methods = {
-  probeEditorState: notImplemented,
   probeAssets: notImplemented,
   probeHierarchy,
   probeNode,
   probeComponent,
   probeDocumentSnapshot,
+  editorStateDocumentIdentity,
   probePrefab,
   writeDocumentIdentity,
   writeExecute,
