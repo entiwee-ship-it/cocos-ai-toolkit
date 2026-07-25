@@ -141,13 +141,13 @@ MCP 默认注册以下十七个只读工具：
 | `cocos_design_plan` | 对比当前文档与目标文档，生成最小差异和有序计划 |
 | `cocos_design_preview` | 渲染逐项操作、Override、影响面和风险，零执行 |
 | `cocos_preview_sessions` | 列出工具管理的 Preview 页面会话 |
-| `cocos_runtime_get_hierarchy` | 读取 Preview 运行时节点树 |
+| `cocos_runtime_get_hierarchy` | 读取 Preview 运行时整树或指定 `path` 子树，可排除 inactive 子树 |
 | `cocos_runtime_inspect_component` | 读取运行时组件属性包 |
 | `cocos_runtime_get_console` | 按游标和级别读取运行时 Console |
 | `cocos_runtime_watch_property` | 有界监听运行时属性变化 |
 | `cocos_runtime_capture` | 截图、裁剪及节点边界/锚点叠加 |
 
-除 `cocos_editor_list` 外，所有工具都必须传 `projectId`。同一项目连接多个 Creator 实例时还必须传 `editorInstanceId`，工具不会按“最近连接”隐式选择。
+编辑态工具除 `cocos_editor_list` 外都必须传 `projectId`；同一项目连接多个 Creator 实例时还必须传 `editorInstanceId`，工具不会按“最近连接”隐式选择。Preview 与运行时工具使用 `sessionId` 绑定工具自行启动的页面会话。
 
 `cocos_project_scan` 和 `cocos_prefab_graph` 的完整报告与 checkpoint 只会写入 `COCOS_AI_MCP_REPORT_ROOT`。AI 只能传相对 `.json` 路径；绝对路径、盘符、UNC、完整 `..` 分段、目录、符号链接和越界 Junction 都会在任何 Creator 请求前被拒绝。MCP 响应只包含摘要、有界页和不透明 cursor，不会把完整项目报告一次塞进 AI 上下文。cursor 翻页读取已落盘报告，不会重新打开 Creator 资产。
 
@@ -157,7 +157,23 @@ MCP Server 裸启动仍保持只读；Codex 安装脚本默认为开发环境附
 node packages/mcp-server/dist/run.js --enable-writes
 ```
 
-门控运行时工具包括 `cocos_preview_launch`、`cocos_preview_stop`、`cocos_runtime_invoke_method`、`cocos_runtime_dispatch_input`、`cocos_runtime_instantiate_prefab` 和 `cocos_runtime_run_scenario`。当前 Preview 通道由 Probe Server 自行启动外部 Chrome/Edge 页面；运行时 Prefab 实例化只改页面内存，不写工程文件。apply 与运行时动作标注为破坏性；verify/export 虽然只读，但与 apply 共用门控。声明式与运行时 MCP 调用都会写入报告根下的审计日志。
+门控运行时工具包括 `cocos_preview_launch`、`cocos_preview_stop`、`cocos_runtime_invoke_method`、`cocos_runtime_sample_window`、`cocos_runtime_dispatch_input`、`cocos_runtime_instantiate_prefab` 和 `cocos_runtime_run_scenario`。当前 Preview 通道由 Probe Server 自行启动外部 Chrome/Edge 页面；运行时 Prefab 实例化只改页面内存，不写工程文件。apply 与运行时动作标注为破坏性；verify/export 虽然只读，但与 apply 共用门控。声明式与运行时 MCP 调用都会写入报告根下的审计日志。
+
+`cocos_runtime_sample_window` 在单次页面执行内完成整个采样窗口，适合验证 220ms 一类容易被跨进程轮询错过的短过渡。它支持逐帧或固定间隔采样、采样前安全调用一个组件方法，并在节点中途销毁后保留 `nodeValid: false` 的证据帧：
+
+```json
+{
+  "sessionId": "<preview-session-id>",
+  "path": "Scene/Canvas/login",
+  "componentType": "LoginView",
+  "properties": ["opacity", "state.progress"],
+  "mode": "perFrame",
+  "durationMs": 220,
+  "trigger": { "method": "startTransition", "args": [] }
+}
+```
+
+固定间隔模式把 `mode` 改为 `{ "intervalMs": 20 }`。`properties` 最多 20 项，`durationMs` 最大 55000；高刷新率下样本超过 3600 条时结果带 `truncated: true`。
 
 ## 选择编辑器和准备样本
 
