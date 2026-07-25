@@ -512,7 +512,8 @@ export class ProbeServer {
           durationMs: parsed.durationMs,
           samples: raw.samples,
           ...(raw.trigger !== undefined ? { trigger: raw.trigger } : {}),
-          ...(raw.truncated === true ? { truncated: true } : {})
+          ...(raw.truncated === true ? { truncated: true } : {}),
+          ...(raw.timedOut === true ? { timedOut: true } : {})
         });
       }
       case 'server.runtimeWatch': {

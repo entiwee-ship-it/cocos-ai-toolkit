@@ -1888,7 +1888,7 @@ function readComponentProbeResponse(value: unknown): z.infer<typeof ComponentPro
   const inner = data && typeof data === 'object' && !Array.isArray(data)
     ? data as Record<string, unknown>
     : envelope;
-  const candidate = 'raw' in inner ? inner : { ...inner, raw: envelope.raw };
+  const candidate = inner.raw !== undefined ? inner : { ...inner, raw: envelope.raw };
   const result = ComponentProbeResponseSchema.safeParse(candidate);
   if (!result.success) {
     throw new Error(`COMPONENT_SCHEMA_INVALID:${result.error.message}`);

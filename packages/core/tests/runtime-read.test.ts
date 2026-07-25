@@ -185,6 +185,31 @@ describe('readRuntimeHierarchy（页面注入：层级序列化）', () => {
     expect(result.truncated).toBeUndefined();
     expect(result.children).toEqual([expect.objectContaining({ name: 'visible' })]);
   });
+
+  it('includeInactive=false 不返回 inactive 路径根节点或其祖先下的子树', async () => {
+    installScene(fakeNode({
+      name: 'Scene',
+      fileId: 'scene-file',
+      children: [fakeNode({
+        name: 'hidden',
+        fileId: 'hidden-file',
+        active: false,
+        children: [fakeNode({ name: 'locally-visible', fileId: 'visible-file' })]
+      })]
+    }));
+
+    const rootResult = await runScript('readRuntimeHierarchy', {
+      path: 'Scene/hidden',
+      includeInactive: false
+    }) as Record<string, unknown>;
+    const descendantResult = await runScript('readRuntimeHierarchy', {
+      path: 'Scene/hidden/locally-visible',
+      includeInactive: false
+    }) as Record<string, unknown>;
+
+    expect(rootResult).toMatchObject({ found: false, reason: 'node-not-found', inactive: true });
+    expect(descendantResult).toMatchObject({ found: false, reason: 'node-not-found', inactive: true });
+  });
 });
 
 describe('readRuntimeComponent（页面注入：组件属性读取）', () => {
@@ -416,6 +441,60 @@ describe('sampleRuntimeWindow（页面注入：时间窗口采样）', () => {
     expect(result.samples[0].values.opacity).toBe(0.75);
     expect(result.samples.some((sample) => sample.values.opacity === 0.5)).toBe(true);
     expect(result.trigger).toMatchObject({ invoked: true, pending: false, returnValue: 'finished' });
+  });
+
+  it('requestAnimationFrame 不回调时由 wall-clock watchdog 返回部分证据', async () => {
+    const targetNode = fakeNode({
+      name: 'target',
+      fileId: 'target-file',
+      components: [{ type: 'FrozenView', props: { opacity: 1 } }]
+    }) as Record<string, unknown>;
+    const component = (targetNode.components as Array<Record<string, unknown>>)[0];
+    targetNode.isValid = true;
+    component.isValid = true;
+    installScene(fakeNode({ name: 'Scene', fileId: 'scene-file', children: [targetNode as ReturnType<typeof fakeNode>] }));
+
+    vi.stubGlobal('performance', { now: () => 100 });
+    vi.stubGlobal('requestAnimationFrame', () => 1);
+    vi.stubGlobal('setTimeout', (callback: () => void) => {
+      queueMicrotask(callback);
+      return 1;
+    });
+
+    const result = await runScript('sampleRuntimeWindow', {
+      path: 'Scene/target',
+      componentType: 'FrozenView',
+      properties: ['opacity'],
+      mode: 'perFrame',
+      durationMs: 32
+    }) as {
+      samples: Array<{ values: Record<string, unknown> }>;
+      timedOut?: boolean;
+    };
+
+    expect(result.samples.length).toBe(2);
+    expect(result.samples[1].values.opacity).toBe(1);
+    expect(result.timedOut).toBe(true);
+  });
+
+  it('trigger 不允许调用 Object 原型方法', async () => {
+    const targetNode = fakeNode({
+      name: 'target',
+      fileId: 'target-file',
+      components: [{ type: 'SafeView' }]
+    }) as Record<string, unknown>;
+    const component = (targetNode.components as Array<Record<string, unknown>>)[0];
+    targetNode.isValid = true;
+    component.isValid = true;
+    installScene(fakeNode({ name: 'Scene', fileId: 'scene-file', children: [targetNode as ReturnType<typeof fakeNode>] }));
+
+    const result = await runScript('invokeRuntimeComponentMethod', {
+      path: 'Scene/target',
+      componentType: 'SafeView',
+      method: 'toString'
+    }) as Record<string, unknown>;
+
+    expect(result).toMatchObject({ invoked: false, reason: 'method-not-allowed' });
   });
 });
 

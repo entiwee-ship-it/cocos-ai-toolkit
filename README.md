@@ -173,7 +173,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 }
 ```
 
-固定间隔模式把 `mode` 改为 `{ "intervalMs": 20 }`。异步 trigger 不会阻塞首帧采样；窗口结束时仍未完成则 `trigger.pending` 为 `true`。`properties` 最多 20 项，`durationMs` 最大 55000；高刷新率下样本超过 3600 条时结果带 `truncated: true`。
+固定间隔模式把 `mode` 改为 `{ "intervalMs": 20 }`。异步 trigger 不会阻塞首帧采样；窗口结束时仍未完成则 `trigger.pending` 为 `true`。如果 Preview 页面暂停了 `requestAnimationFrame`，wall-clock watchdog 会在窗口到期时返回已有样本并标记 `timedOut: true`，不会让请求无限挂起。`properties` 最多 20 项，`durationMs` 最大 55000；高刷新率下样本超过 3600 条时结果带 `truncated: true`。
 
 ## 选择编辑器和准备样本
 

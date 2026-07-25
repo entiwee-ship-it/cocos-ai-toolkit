@@ -259,16 +259,19 @@ async function readRuntimeHierarchy(options: {
   // 指定路径时从目标节点开始序列化；未命中沿用组件定位的候选子节点证据。
   let root = scene;
   if (typeof options.path === 'string' && options.path) {
-    const located = findRuntimeNodeByPath(scene, options.path);
+    const located = findRuntimeNodeByPath(scene, options.path, options.includeInactive !== false);
     if (!located.node) {
       const parent = located.failedAtParent;
       const siblings = parent && Array.isArray(parent.children)
         ? (parent.children as Array<Record<string, unknown>>)
           .map((child) => (typeof child.name === 'string' ? child.name : ''))
         : [];
-      return { found: false, reason: 'node-not-found', availableChildren: siblings };
+      return { found: false, reason: 'node-not-found', ...(located.inactive ? { inactive: true } : {}), availableChildren: siblings };
     }
     root = located.node;
+  }
+  if (options.includeInactive === false && root.active === false) {
+    return { found: false, reason: 'node-not-found', inactive: true, availableChildren: [] };
   }
 
   const maxDepth = typeof options.maxDepth === 'number' && options.maxDepth > 0 ? Math.floor(options.maxDepth) : 8;
@@ -323,8 +326,9 @@ async function readRuntimeHierarchy(options: {
 /** 按 `/` 分隔的名称路径查找节点；首段与场景名相同则跳过。 */
 function findRuntimeNodeByPath(
   scene: Record<string, unknown>,
-  path: string
-): { node?: Record<string, unknown>; failedAtParent?: Record<string, unknown> } {
+  path: string,
+  includeInactive = true
+): { node?: Record<string, unknown>; failedAtParent?: Record<string, unknown>; inactive?: boolean } {
   const segments = path.split('/').filter((segment) => segment.length > 0);
   let current = scene;
   let index = segments[0] === (scene.name as string) ? 1 : 0;
@@ -332,6 +336,9 @@ function findRuntimeNodeByPath(
     const children = Array.isArray(current.children) ? current.children as Array<Record<string, unknown>> : [];
     const next = children.find((child) => child.name === segments[index]);
     if (!next) return { failedAtParent: current };
+    if (!includeInactive && (current.active === false || next.active === false)) {
+      return { failedAtParent: current, inactive: true };
+    }
     current = next;
   }
   return { node: current };
@@ -479,7 +486,9 @@ function invokeLocatedRuntimeMethod(
     'onFocusInEditor', 'onLostFocusInEditor', 'resetInEditor',
     'eval', 'Function', 'constructor'
   ];
-  if (blocklist.includes(options.method)) {
+  if (blocklist.includes(options.method)
+    || options.method === '__proto__'
+    || Object.prototype.hasOwnProperty.call(Object.prototype, options.method)) {
     return { invoked: false, method: options.method, reason: 'method-not-allowed' };
   }
   const args = Array.isArray(options.args) ? options.args : [];
@@ -487,7 +496,16 @@ function invokeLocatedRuntimeMethod(
     return { invoked: false, method: options.method, reason: 'invalid-args' };
   }
   const component = located.component as Record<string, unknown>;
-  const method = component[options.method];
+  let method: unknown;
+  let cursor = component as Record<string, unknown> | null;
+  while (cursor && cursor !== Object.prototype) {
+    const descriptor = Object.getOwnPropertyDescriptor(cursor, options.method);
+    if (descriptor) {
+      method = descriptor.value;
+      break;
+    }
+    cursor = Object.getPrototypeOf(cursor) as Record<string, unknown> | null;
+  }
   if (typeof method !== 'function') {
     return {
       found: false,
@@ -623,6 +641,7 @@ async function sampleRuntimeWindow(options: {
     performance?: { now?: () => number };
     requestAnimationFrame?: (callback: (timestamp: number) => void) => unknown;
     setTimeout?: (callback: () => void, delay: number) => unknown;
+    clearTimeout?: (handle: unknown) => void;
   };
   const now = (): number => typeof globalObject.performance?.now === 'function'
     ? globalObject.performance.now()
@@ -672,10 +691,23 @@ async function sampleRuntimeWindow(options: {
   };
 
   capture();
+  let timedOut = false;
   await new Promise<void>((resolve) => {
+    let settled = false;
+    let watchdogHandle: unknown;
+    const finish = (watchdog: boolean): void => {
+      if (settled) return;
+      settled = true;
+      timedOut = watchdog;
+      if (watchdogHandle !== undefined && typeof globalObject.clearTimeout === 'function') {
+        globalObject.clearTimeout(watchdogHandle);
+      }
+      resolve();
+    };
     const tick = (): void => {
+      if (settled) return;
       if (capture()) {
-        resolve();
+        finish(false);
         return;
       }
       schedule();
@@ -692,6 +724,17 @@ async function sampleRuntimeWindow(options: {
       }
       Promise.resolve().then(tick);
     };
+    // rAF may be paused in a background tab; keep the outer request from hanging forever.
+    if (options.mode === 'perFrame'
+      && typeof globalObject.requestAnimationFrame === 'function'
+      && typeof globalObject.setTimeout === 'function') {
+      watchdogHandle = globalObject.setTimeout(() => {
+        if (!settled) {
+          capture();
+          finish(true);
+        }
+      }, options.durationMs);
+    }
     schedule();
   });
 
@@ -702,6 +745,7 @@ async function sampleRuntimeWindow(options: {
     mode: options.mode,
     durationMs: options.durationMs,
     samples,
+    ...(timedOut ? { timedOut: true } : {}),
     ...(triggerResult ? { trigger: triggerResult } : {}),
     ...(truncated ? { truncated: true } : {})
   };

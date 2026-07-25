@@ -493,6 +493,28 @@ describe('Cocos readonly MCP tools', () => {
     });
   });
 
+  it('component_schema 内层 raw 显式 undefined 时回落到信封 raw', async () => {
+    const component = createComponentProbeResult();
+    const envelope = {
+      data: { ...component.data, raw: undefined },
+      raw: { marker: 'envelope-raw' },
+      source: 'message-api'
+    };
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      if (method === 'probe.component') return envelope;
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_component_schema',
+      arguments: { projectId: 'project-a', uuid: 'component-a', includeRaw: true }
+    });
+
+    expect(result.structuredContent).toMatchObject({ raw: envelope.raw });
+  });
+
   it('component_schema 兼容无信封的旧形状响应', async () => {
     const legacy = createComponentProbeResult().data;
     const probeClient = new RecordingProbeClient((method) => {

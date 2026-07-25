@@ -113,6 +113,33 @@ describe('editor state document identity', () => {
     });
   });
 
+  it('身份读取失败时保留具体失败原因，而不是只返回通用 UUID 错误', async () => {
+    const requestEditorMessage = vi.fn(routeEditorStateMessages(() => {
+      throw new Error('UNEXPECTED_SCENE_FORWARD');
+    }));
+    installEditorMock(requestEditorMessage);
+
+    const state = await probeEditorState({
+      assetUuid: 'scene-uuid-1',
+      mode: null,
+      source: 'cce.SceneFacadeManager',
+      failures: [{ source: 'cce.SceneFacadeManager.queryMode', reason: 'MODE_QUERY_FAILED' }]
+    }) as {
+      document: Record<string, unknown>;
+      unresolved: Array<{ path: string; reason: string }>;
+    };
+
+    expect(state.document.assetUuid).toBe('scene-uuid-1');
+    expect(state.unresolved).toContainEqual({
+      path: 'document.mode',
+      reason: 'MODE_QUERY_FAILED'
+    });
+    expect(state.unresolved).not.toContainEqual({
+      path: 'document.assetUuid',
+      reason: 'CURRENT_DOCUMENT_UUID_EMPTY'
+    });
+  });
+
   it('probeEditorState 拿不到身份时不伪造 assetUuid，只保留 unresolved 证据', async () => {
     const requestEditorMessage = vi.fn(routeEditorStateMessages(() => {
       throw new Error('UNEXPECTED_SCENE_FORWARD');
@@ -196,7 +223,7 @@ describe('editor state document identity', () => {
     expect(state.document).not.toHaveProperty('mode');
     expect(state.unresolved).toContainEqual({
       path: 'document.assetUuid',
-      reason: 'CURRENT_DOCUMENT_UUID_EMPTY'
+      reason: 'SCENE_SCRIPT_UNAVAILABLE'
     });
   });
 });

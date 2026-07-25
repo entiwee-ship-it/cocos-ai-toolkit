@@ -69,8 +69,16 @@ export async function probeEditorState(identity?: CreatorDocumentIdentity): Prom
     node: Editor.Selection.getSelected('node'),
     asset: Editor.Selection.getSelected('asset')
   };
+  for (const failure of identity?.failures ?? []) {
+    unresolved.push({
+      path: failure.source.endsWith('.queryMode') ? 'document.mode' : 'document.assetUuid',
+      reason: failure.reason
+    });
+  }
   if (!identity?.assetUuid) {
-    unresolved.push({ path: 'document.assetUuid', reason: 'CURRENT_DOCUMENT_UUID_EMPTY' });
+    if (!(identity?.failures ?? []).some((failure) => failure.reason === 'CURRENT_DOCUMENT_UUID_EMPTY')) {
+      unresolved.push({ path: 'document.assetUuid', reason: 'CURRENT_DOCUMENT_UUID_EMPTY' });
+    }
   }
   const preview = await readPreviewStatus(editorPreviewMessageSource);
   return {

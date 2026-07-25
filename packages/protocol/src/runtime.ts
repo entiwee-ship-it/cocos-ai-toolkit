@@ -138,7 +138,9 @@ export const RuntimeSampleWindowSnapshotSchema = z.object({
   samples: z.array(RuntimeSampleFrameSchema),
   trigger: RuntimeSampleWindowTriggerResultSchema.optional(),
   /** 高刷新率下超过本地 3600 条样本上限时为 true。 */
-  truncated: z.boolean().optional()
+  truncated: z.boolean().optional(),
+  /** requestAnimationFrame 未在窗口内回调时由 wall-clock watchdog 返回部分证据。 */
+  timedOut: z.boolean().optional()
 });
 
 /** Console 条目：seq 为单调游标，供增量拉取。 */
