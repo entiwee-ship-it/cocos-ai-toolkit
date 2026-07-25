@@ -233,10 +233,19 @@ function serializeRuntimeValue(value: unknown, depth: number, seen: Set<unknown>
  * 序列化运行时场景层级：节点身份、active、组件类型、动态创建标注；
  * 深度与节点数上限截断并显式标注（AI 必须知晓读取不完整）。
  *
- * @param options maxDepth 默认 8；maxNodes 默认 2000。
+ * @param options 运行时层级读取选项。
+ * @param options.maxDepth 最大序列化深度，默认 8。
+ * @param options.maxNodes 最大序列化节点数，默认 2000。
+ * @param options.path 可选节点路径；提供时只读取目标子树。
+ * @param options.includeInactive 是否包含未激活节点，默认 true。
  * @returns 协议 RuntimeNode 形态的树（含 nodeCount/truncated 汇总）。
  */
-async function readRuntimeHierarchy(options: { maxDepth?: number; maxNodes?: number }): Promise<Record<string, unknown>> {
+async function readRuntimeHierarchy(options: {
+  maxDepth?: number;
+  maxNodes?: number;
+  path?: string;
+  includeInactive?: boolean;
+}): Promise<Record<string, unknown>> {
   const globalObject = globalThis as {
     System?: { import?: (name: string) => Promise<Record<string, unknown>> };
   };
@@ -247,7 +256,23 @@ async function readRuntimeHierarchy(options: { maxDepth?: number; maxNodes?: num
   const scene = cc?.director?.getScene?.();
   if (!scene) return { found: false, reason: 'scene-missing' };
 
+  // 指定路径时从目标节点开始序列化；未命中沿用组件定位的候选子节点证据。
+  let root = scene;
+  if (typeof options.path === 'string' && options.path) {
+    const located = findRuntimeNodeByPath(scene, options.path);
+    if (!located.node) {
+      const parent = located.failedAtParent;
+      const siblings = parent && Array.isArray(parent.children)
+        ? (parent.children as Array<Record<string, unknown>>)
+          .map((child) => (typeof child.name === 'string' ? child.name : ''))
+        : [];
+      return { found: false, reason: 'node-not-found', availableChildren: siblings };
+    }
+    root = located.node;
+  }
+
   const maxDepth = typeof options.maxDepth === 'number' && options.maxDepth > 0 ? Math.floor(options.maxDepth) : 8;
+  const includeInactive = options.includeInactive !== false;
   const state = {
     nodeCount: 0,
     truncated: false,
@@ -266,7 +291,9 @@ async function readRuntimeHierarchy(options: { maxDepth?: number; maxNodes?: num
         type: readRuntimeComponentType(component)
       }))
     };
-    const children = Array.isArray(node.children) ? node.children as Array<Record<string, unknown>> : [];
+    // 未激活子树在过滤模式下完全跳过，不占深度或节点额度。
+    const children = (Array.isArray(node.children) ? node.children as Array<Record<string, unknown>> : [])
+      .filter((child) => includeInactive || child.active !== false);
     if (depth >= maxDepth) {
       if (children.length > 0) {
         result.truncated = true;
@@ -287,7 +314,7 @@ async function readRuntimeHierarchy(options: { maxDepth?: number; maxNodes?: num
     return result;
   };
 
-  const tree = serializeNode(scene, 1);
+  const tree = serializeNode(root, 1);
   tree.nodeCount = state.nodeCount;
   if (state.truncated) tree.truncated = true;
   return tree;

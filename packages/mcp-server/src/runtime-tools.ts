@@ -124,12 +124,25 @@ export class CocosRuntimeToolService {
     return output;
   }
 
-  /** 读取运行时层级快照。 */
-  async getRuntimeHierarchy(input: { sessionId: string; maxDepth?: number; maxNodes?: number }) {
+  /**
+   * 读取运行时整树或指定子树快照。
+   *
+   * @param input Preview 会话、深度/节点上限、可选节点路径和未激活节点过滤选项。
+   * @returns Probe Server 返回的协议化运行时节点快照。
+   */
+  async getRuntimeHierarchy(input: {
+    sessionId: string;
+    maxDepth?: number;
+    maxNodes?: number;
+    path?: string;
+    includeInactive?: boolean;
+  }) {
     const result = await this.options.probeClient.request('server.runtimeHierarchy', {
       sessionId: input.sessionId,
       ...(input.maxDepth !== undefined ? { maxDepth: input.maxDepth } : {}),
-      ...(input.maxNodes !== undefined ? { maxNodes: input.maxNodes } : {})
+      ...(input.maxNodes !== undefined ? { maxNodes: input.maxNodes } : {}),
+      ...(input.path ? { path: input.path } : {}),
+      ...(input.includeInactive !== undefined ? { includeInactive: input.includeInactive } : {})
     });
     const output = zod.record(zod.string(), zod.unknown()).parse(result);
     await this.audit('cocos_runtime_get_hierarchy', input, output);
@@ -343,11 +356,13 @@ export function registerCocosRuntimeReadonlyTools(
   }, async (input) => toToolResult(await service.listPreviewSessions(input)));
 
   server.registerTool('cocos_runtime_get_hierarchy', {
-    description: '读取 Preview 运行时节点树（source=preview-runtime，动态创建节点带 dynamic 标注，与编辑态数据严格区分）。',
+    description: '读取 Preview 运行时整树或指定 path 子树；可排除 inactive 子树，动态节点带 dynamic 标注。',
     inputSchema: {
       ...SessionIdInput,
       maxDepth: zod.number().int().positive().max(20).optional(),
-      maxNodes: zod.number().int().positive().max(10_000).optional()
+      maxNodes: zod.number().int().positive().max(10_000).optional(),
+      path: zod.string().min(1).optional(),
+      includeInactive: zod.boolean().optional()
     },
     outputSchema: RuntimeNodeSnapshotSchema,
     annotations: READONLY_ANNOTATIONS

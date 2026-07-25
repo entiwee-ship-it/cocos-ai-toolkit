@@ -101,7 +101,7 @@ const HELP = `用法:
   cocos-ai-probe preview-stop --session-id <id>
   cocos-ai-probe preview-sessions [--project-id <id>]
   cocos-ai-probe runtime-console --session-id <id> [--since-seq <n>] [--level log|info|warn|error|debug]
-  cocos-ai-probe runtime-hierarchy --session-id <id> [--max-depth <n>] [--max-nodes <n>]
+  cocos-ai-probe runtime-hierarchy --session-id <id> [--max-depth <n>] [--max-nodes <n>] [--path <节点路径>] [--include-inactive <true|false>]
   cocos-ai-probe runtime-component --session-id <id> --path <节点路径> --component-type <类型>
   cocos-ai-probe runtime-invoke --session-id <id> --path <节点路径> --component-type <类型> --method <方法名> [--args <json数组>]
   cocos-ai-probe runtime-watch --session-id <id> --path <节点路径> --component-type <类型> --property <属性路径> [--timeout-ms <n>] [--interval-ms <n>] [--max-changes <n>]
@@ -1427,7 +1427,9 @@ export function toRequest(command: CliCommand): [string, unknown] {
     return ['server.runtimeHierarchy', {
       sessionId: command.sessionId,
       ...(command.maxDepth !== undefined ? { maxDepth: command.maxDepth } : {}),
-      ...(command.maxNodes !== undefined ? { maxNodes: command.maxNodes } : {})
+      ...(command.maxNodes !== undefined ? { maxNodes: command.maxNodes } : {}),
+      ...(command.path ? { path: command.path } : {}),
+      ...(command.includeInactive !== undefined ? { includeInactive: command.includeInactive } : {})
     }];
   }
   if (command.command === 'runtime-component') {

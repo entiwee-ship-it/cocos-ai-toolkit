@@ -191,7 +191,12 @@ describe('运行态 MCP 工具（阶段五）', () => {
 
     const result = await client.callTool({
       name: 'cocos_runtime_get_hierarchy',
-      arguments: { sessionId: 'preview-1', maxDepth: 4 }
+      arguments: {
+        sessionId: 'preview-1',
+        maxDepth: 4,
+        path: 'Scene/Canvas',
+        includeInactive: false
+      }
     });
     expect(result.structuredContent).toMatchObject({
       source: 'preview-runtime',
@@ -200,7 +205,12 @@ describe('运行态 MCP 工具（阶段五）', () => {
     });
     expect(probeClient.requests.at(-1)).toMatchObject({
       method: 'server.runtimeHierarchy',
-      payload: { sessionId: 'preview-1', maxDepth: 4 }
+      payload: {
+        sessionId: 'preview-1',
+        maxDepth: 4,
+        path: 'Scene/Canvas',
+        includeInactive: false
+      }
     });
   });
 

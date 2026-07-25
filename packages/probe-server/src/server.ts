@@ -147,7 +147,9 @@ const RuntimeCapturePayloadSchema = z.object({
 const RuntimeHierarchyPayloadSchema = z.object({
   sessionId: z.string().min(1),
   maxDepth: z.number().int().positive().max(20).optional(),
-  maxNodes: z.number().int().positive().max(10_000).optional()
+  maxNodes: z.number().int().positive().max(10_000).optional(),
+  path: z.string().min(1).optional(),
+  includeInactive: z.boolean().optional()
 });
 
 const RuntimeComponentPayloadSchema = z.object({
@@ -428,7 +430,9 @@ export class ProbeServer {
           parsed.sessionId,
           buildRuntimeScript('readRuntimeHierarchy', {
             ...(parsed.maxDepth !== undefined ? { maxDepth: parsed.maxDepth } : {}),
-            ...(parsed.maxNodes !== undefined ? { maxNodes: parsed.maxNodes } : {})
+            ...(parsed.maxNodes !== undefined ? { maxNodes: parsed.maxNodes } : {}),
+            ...(parsed.path ? { path: parsed.path } : {}),
+            ...(parsed.includeInactive !== undefined ? { includeInactive: parsed.includeInactive } : {})
           })
         );
         if (raw && typeof raw === 'object' && (raw as { found?: unknown }).found === false) {

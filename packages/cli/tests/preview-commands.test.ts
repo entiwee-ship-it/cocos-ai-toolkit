@@ -44,10 +44,21 @@ describe('preview 命令解析（阶段五）', () => {
 
   it('runtime-hierarchy 解析会话与可选上限', () => {
     expect(parseCommand(['runtime-hierarchy', '--session-id', 's1'])).toEqual({ command: 'runtime-hierarchy', sessionId: 's1' });
-    expect(parseCommand(['runtime-hierarchy', '--session-id', 's1', '--max-depth', '4', '--max-nodes', '500']))
-      .toEqual({ command: 'runtime-hierarchy', sessionId: 's1', maxDepth: 4, maxNodes: 500 });
+    expect(parseCommand([
+      'runtime-hierarchy', '--session-id', 's1', '--max-depth', '4', '--max-nodes', '500',
+      '--path', 'Scene/Canvas', '--include-inactive', 'false'
+    ])).toEqual({
+      command: 'runtime-hierarchy',
+      sessionId: 's1',
+      maxDepth: 4,
+      maxNodes: 500,
+      path: 'Scene/Canvas',
+      includeInactive: false
+    });
     expect(() => parseCommand(['runtime-hierarchy', '--session-id', 's1', '--max-depth', '0'])).toThrow('INVALID_MAX_DEPTH');
     expect(() => parseCommand(['runtime-hierarchy', '--session-id', 's1', '--max-depth', '99'])).toThrow('INVALID_MAX_DEPTH');
+    expect(() => parseCommand(['runtime-hierarchy', '--session-id', 's1', '--include-inactive', 'no']))
+      .toThrow('INVALID_INCLUDE_INACTIVE');
   });
 
   it('runtime-component 解析路径与组件类型', () => {
@@ -155,8 +166,20 @@ describe('preview 命令请求映射', () => {
   });
 
   it('runtime-hierarchy / runtime-component 映射对应 server 方法', () => {
-    expect(toRequest({ command: 'runtime-hierarchy', sessionId: 's1', maxDepth: 4, maxNodes: 500 }))
-      .toEqual(['server.runtimeHierarchy', { sessionId: 's1', maxDepth: 4, maxNodes: 500 }]);
+    expect(toRequest({
+      command: 'runtime-hierarchy',
+      sessionId: 's1',
+      maxDepth: 4,
+      maxNodes: 500,
+      path: 'Scene/Canvas',
+      includeInactive: false
+    })).toEqual(['server.runtimeHierarchy', {
+      sessionId: 's1',
+      maxDepth: 4,
+      maxNodes: 500,
+      path: 'Scene/Canvas',
+      includeInactive: false
+    }]);
     expect(toRequest({ command: 'runtime-hierarchy', sessionId: 's1' }))
       .toEqual(['server.runtimeHierarchy', { sessionId: 's1' }]);
     expect(toRequest({ command: 'runtime-component', sessionId: 's1', path: 'Canvas/btn', componentType: 'cc.Button' }))

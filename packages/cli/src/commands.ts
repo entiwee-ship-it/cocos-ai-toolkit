@@ -65,7 +65,14 @@ export type CliCommand =
   | { command: 'preview-stop'; sessionId: string }
   | { command: 'preview-sessions'; projectId?: string }
   | { command: 'runtime-console'; sessionId: string; sinceSeq?: number; level?: string }
-  | { command: 'runtime-hierarchy'; sessionId: string; maxDepth?: number; maxNodes?: number }
+  | {
+      command: 'runtime-hierarchy';
+      sessionId: string;
+      maxDepth?: number;
+      maxNodes?: number;
+      path?: string;
+      includeInactive?: boolean;
+    }
   | { command: 'runtime-component'; sessionId: string; path: string; componentType: string }
   | { command: 'runtime-invoke'; sessionId: string; path: string; componentType: string; method: string; args?: unknown[] }
   | { command: 'runtime-watch'; sessionId: string; path: string; componentType: string; property: string; timeoutMs?: number; intervalMs?: number; maxChanges?: number }
@@ -129,7 +136,7 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   'preview-stop': ['session-id'],
   'preview-sessions': ['project-id'],
   'runtime-console': ['session-id', 'since-seq', 'level'],
-  'runtime-hierarchy': ['session-id', 'max-depth', 'max-nodes'],
+  'runtime-hierarchy': ['session-id', 'max-depth', 'max-nodes', 'path', 'include-inactive'],
   'runtime-component': ['session-id', 'path', 'component-type'],
   'runtime-invoke': ['session-id', 'path', 'component-type', 'method', 'args'],
   'runtime-watch': ['session-id', 'path', 'component-type', 'property', 'timeout-ms', 'interval-ms', 'max-changes'],
@@ -174,11 +181,14 @@ export function parseCommand(argv: string[]): CliCommand {
     };
   }
   if (command === 'runtime-hierarchy') {
+    const includeInactive = readOptionalBoolean(flags, 'include-inactive', 'INVALID_INCLUDE_INACTIVE');
     return {
       command,
       sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED'),
       ...(flags.has('max-depth') ? { maxDepth: readBoundedPositiveInteger(flags.get('max-depth') ?? '', 20, 'INVALID_MAX_DEPTH') } : {}),
-      ...(flags.has('max-nodes') ? { maxNodes: readBoundedPositiveInteger(flags.get('max-nodes') ?? '', 10_000, 'INVALID_MAX_NODES') } : {})
+      ...(flags.has('max-nodes') ? { maxNodes: readBoundedPositiveInteger(flags.get('max-nodes') ?? '', 10_000, 'INVALID_MAX_NODES') } : {}),
+      ...(flags.has('path') ? { path: requireFlag(flags, 'path', 'NODE_PATH_REQUIRED') } : {}),
+      ...(includeInactive !== undefined ? { includeInactive } : {})
     };
   }
   if (command === 'runtime-component') {

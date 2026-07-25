@@ -69,6 +69,7 @@ function createFakePage() {
     keys: [] as string[],
     viewport: null as null | { width: number; height: number },
     screenshots: 0,
+    evaluateScripts: [] as string[],
     consoleListeners: [] as Array<(entry: { level: string; text: string; stack?: string }) => void>,
     pageErrorListeners: [] as Array<(error: { message: string; stack?: string }) => void>
   };
@@ -78,6 +79,7 @@ function createFakePage() {
     },
     async evaluate(fn) {
       const script = typeof fn === 'string' ? fn : '';
+      state.evaluateScripts.push(script);
       if (script.includes('return readRuntimeHierarchy')) {
         return {
           uuid: 'u1',
@@ -222,7 +224,7 @@ describe('ProbeServer 运行态方法', () => {
   });
 
   it('previewOpen 失败时 launch 失败并透传错误', async () => {
-    const { driver } = createFakeDriver();
+    const { driver, pages } = createFakeDriver();
     const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver });
     const address = await server.start();
     const url = `ws://127.0.0.1:${address.port}`;
@@ -303,7 +305,7 @@ describe('ProbeServer 运行态方法', () => {
   });
 
   it('runtimeHierarchy 返回协议化快照（source/dynamic 标注齐全）', async () => {
-    const { driver } = createFakeDriver();
+    const { driver, pages } = createFakeDriver();
     const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver });
     const address = await server.start();
     const url = `ws://127.0.0.1:${address.port}`;
@@ -312,7 +314,12 @@ describe('ProbeServer 运行态方法', () => {
     const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
     const sessionId = (launched.payload as { sessionId: string }).sessionId;
 
-    const reply = await callServer(url, 'server.runtimeHierarchy', { sessionId, maxDepth: 4 });
+    const reply = await callServer(url, 'server.runtimeHierarchy', {
+      sessionId,
+      maxDepth: 4,
+      path: 'Scene/Canvas',
+      includeInactive: false
+    });
     expect(reply.ok).toBe(true);
     const snapshot = reply.payload as {
       source: string;
@@ -325,6 +332,8 @@ describe('ProbeServer 运行态方法', () => {
     expect(snapshot.root.name).toBe('Scene');
     expect(snapshot.root.children[0]).toMatchObject({ name: 'toast', dynamic: true });
     expect(snapshot.nodeCount).toBe(2);
+    expect(pages[0].state.evaluateScripts.at(-1)).toContain('"path":"Scene/Canvas"');
+    expect(pages[0].state.evaluateScripts.at(-1)).toContain('"includeInactive":false');
 
     bridge.close();
     await server.stop();

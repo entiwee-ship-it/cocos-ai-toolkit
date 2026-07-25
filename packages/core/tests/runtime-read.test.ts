@@ -114,6 +114,77 @@ describe('readRuntimeHierarchy（页面注入：层级序列化）', () => {
     expect(result.nodeCount).toBeLessThanOrEqual(4);
     expect(result.truncated).toBe(true);
   });
+
+  it('按 path 只序列化目标子树', async () => {
+    installScene(fakeNode({
+      name: 'Scene',
+      fileId: 'scene-file',
+      children: [fakeNode({
+        name: 'Canvas',
+        fileId: 'canvas-file',
+        children: [fakeNode({ name: 'panel', fileId: 'panel-file' })]
+      })]
+    }));
+
+    const result = await runScript('readRuntimeHierarchy', { path: 'Scene/Canvas' }) as {
+      name: string;
+      nodeCount: number;
+      children: Array<{ name: string }>;
+    };
+
+    expect(result.name).toBe('Canvas');
+    expect(result.nodeCount).toBe(2);
+    expect(result.children).toEqual([expect.objectContaining({ name: 'panel' })]);
+  });
+
+  it('path 未命中时返回 node-not-found 与父节点可用子项', async () => {
+    installScene(fakeNode({
+      name: 'Scene',
+      fileId: 'scene-file',
+      children: [fakeNode({ name: 'Canvas', fileId: 'canvas-file' })]
+    }));
+
+    const result = await runScript('readRuntimeHierarchy', { path: 'Scene/missing/panel' }) as {
+      found: boolean;
+      reason?: string;
+      availableChildren?: string[];
+    };
+
+    expect(result).toEqual({
+      found: false,
+      reason: 'node-not-found',
+      availableChildren: ['Canvas']
+    });
+  });
+
+  it('includeInactive=false 跳过未激活子树且不消耗节点额度', async () => {
+    installScene(fakeNode({
+      name: 'Scene',
+      fileId: 'scene-file',
+      children: [
+        fakeNode({
+          name: 'hidden',
+          fileId: 'hidden-file',
+          active: false,
+          children: [fakeNode({ name: 'hidden-child', fileId: 'hidden-child-file' })]
+        }),
+        fakeNode({ name: 'visible', fileId: 'visible-file' })
+      ]
+    }));
+
+    const result = await runScript('readRuntimeHierarchy', {
+      includeInactive: false,
+      maxNodes: 2
+    }) as {
+      nodeCount: number;
+      truncated?: boolean;
+      children: Array<{ name: string }>;
+    };
+
+    expect(result.nodeCount).toBe(2);
+    expect(result.truncated).toBeUndefined();
+    expect(result.children).toEqual([expect.objectContaining({ name: 'visible' })]);
+  });
 });
 
 describe('readRuntimeComponent（页面注入：组件属性读取）', () => {
