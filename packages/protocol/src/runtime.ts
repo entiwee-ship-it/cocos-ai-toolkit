@@ -118,6 +118,8 @@ export const RuntimeSampleFrameSchema = z.object({
 export const RuntimeSampleWindowTriggerResultSchema = z.object({
   invoked: z.boolean(),
   method: z.string().min(1),
+  /** 异步方法在采样窗口结束时是否仍未完成。 */
+  pending: z.boolean().optional(),
   returnValue: z.unknown().optional(),
   reason: z.string().optional(),
   error: z.string().optional()

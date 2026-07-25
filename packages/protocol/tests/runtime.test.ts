@@ -139,8 +139,20 @@ describe('运行态协议（阶段五）', () => {
         { frame: 0, t: 100, values: { opacity: 255 }, nodeValid: true },
         { frame: 1, t: 116, values: {}, nodeValid: false }
       ],
-      trigger: { invoked: true, method: 'startTransition' }
+      trigger: { invoked: true, method: 'startTransition', pending: true }
     })).toBeTruthy();
+    expect(RuntimeSampleWindowSnapshotSchema.parse({
+      source: 'preview-runtime',
+      previewSessionId: 'preview-1',
+      capturedAt: '2026-07-25T01:00:00.000Z',
+      path: 'Scene/Canvas/login',
+      nodeUuid: 'login-node',
+      componentType: 'LoginView',
+      mode: 'perFrame',
+      durationMs: 220,
+      samples: [],
+      trigger: { invoked: true, method: 'startTransition', pending: true }
+    }).trigger).toMatchObject({ pending: true });
 
     expect(RuntimeSampleWindowInputSchema.parse({
       path: 'Scene/Canvas/login',

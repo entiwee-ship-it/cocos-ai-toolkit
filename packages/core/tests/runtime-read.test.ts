@@ -372,6 +372,51 @@ describe('sampleRuntimeWindow（页面注入：时间窗口采样）', () => {
 
     expect(result.samples.map((sample) => sample.values.count)).toEqual([1, 2, 3]);
   });
+
+  it('异步 trigger 不等待 Promise 完成，触发后立即开始采样', async () => {
+    const targetNode = fakeNode({
+      name: 'target',
+      fileId: 'target-file',
+      components: [{ type: 'TransitionView', props: { opacity: 1 } }]
+    }) as Record<string, unknown>;
+    const component = (targetNode.components as Array<Record<string, unknown>>)[0];
+    targetNode.isValid = true;
+    component.isValid = true;
+    installScene(fakeNode({ name: 'Scene', fileId: 'scene-file', children: [targetNode as ReturnType<typeof fakeNode>] }));
+
+    let now = 100;
+    vi.stubGlobal('performance', { now: () => now });
+    vi.stubGlobal('requestAnimationFrame', (callback: (timestamp: number) => void) => {
+      now += 16;
+      queueMicrotask(() => callback(now));
+      return now;
+    });
+    component.startTransition = () => {
+      component.opacity = 0.75;
+      return new Promise<string>((resolve) => {
+        (globalThis.requestAnimationFrame as (callback: () => void) => unknown)(() => {
+          component.opacity = 0.5;
+          resolve('finished');
+        });
+      });
+    };
+
+    const result = await runScript('sampleRuntimeWindow', {
+      path: 'Scene/target',
+      componentType: 'TransitionView',
+      properties: ['opacity'],
+      mode: 'perFrame',
+      durationMs: 32,
+      trigger: { method: 'startTransition', args: [] }
+    }) as {
+      trigger: { invoked: boolean; pending?: boolean; returnValue?: unknown };
+      samples: Array<{ values: Record<string, unknown> }>;
+    };
+
+    expect(result.samples[0].values.opacity).toBe(0.75);
+    expect(result.samples.some((sample) => sample.values.opacity === 0.5)).toBe(true);
+    expect(result.trigger).toMatchObject({ invoked: true, pending: false, returnValue: 'finished' });
+  });
 });
 
 describe('assembleRuntimeNodeSnapshot（core 装配）', () => {

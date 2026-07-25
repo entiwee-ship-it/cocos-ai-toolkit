@@ -466,12 +466,13 @@ function listRuntimeMethods(component: unknown): string[] {
  * @param options 方法调用选项。
  * @param options.method 方法名。
  * @param options.args 可选位置参数。
+ * @param options.awaitResult 是否等待 Promise 返回值；采样触发器传 false 以免错过过渡窗口。
  * @returns invoked 调用标记、序列化返回值或失败原因。
  */
-async function invokeLocatedRuntimeMethod(
+function invokeLocatedRuntimeMethod(
   located: Record<string, unknown>,
-  options: { method: string; args?: unknown[] }
-): Promise<Record<string, unknown>> {
+  options: { method: string; args?: unknown[]; awaitResult?: boolean }
+): Record<string, unknown> | Promise<Record<string, unknown>> {
   // 生命周期与危险方法黑名单（内联字面量：模块级常量在打包脚本作用域中不存在）。
   const blocklist = [
     'onLoad', 'start', 'update', 'lateUpdate', 'onEnable', 'onDisable', 'onDestroy',
@@ -498,15 +499,49 @@ async function invokeLocatedRuntimeMethod(
     };
   }
   try {
-    const returnValue = await (method as (...rest: unknown[]) => unknown).apply(component, args);
-    return {
+    const returnValue = (method as (...rest: unknown[]) => unknown).apply(component, args);
+    const buildSuccess = (value: unknown): Record<string, unknown> => ({
       found: true,
       invoked: true,
       method: options.method,
       nodeUuid: located.nodeUuid,
       componentType: located.actualComponentType,
-      returnValue: serializeRuntimeValue(returnValue, 1, new Set())
-    };
+      returnValue: serializeRuntimeValue(value, 1, new Set())
+    });
+    const buildFailure = (error: unknown): Record<string, unknown> => ({
+      found: true,
+      invoked: false,
+      method: options.method,
+      reason: 'method-threw',
+      nodeUuid: located.nodeUuid,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    const then = returnValue && typeof returnValue === 'object'
+      ? (returnValue as { then?: unknown }).then
+      : undefined;
+    if (typeof then === 'function') {
+      if (options.awaitResult !== false) {
+        return Promise.resolve(returnValue).then(buildSuccess, buildFailure);
+      }
+
+      // 采样不能等待异步 trigger，否则短过渡会在第一帧采样前结束。
+      const pendingResult: Record<string, unknown> = {
+        ...buildSuccess({ __type: 'promise' }),
+        pending: true
+      };
+      Promise.resolve(returnValue).then(
+        (value) => {
+          pendingResult.pending = false;
+          pendingResult.returnValue = serializeRuntimeValue(value, 1, new Set());
+        },
+        (error) => {
+          Object.assign(pendingResult, buildFailure(error), { pending: false });
+          delete pendingResult.returnValue;
+        }
+      );
+      return pendingResult;
+    }
+    return buildSuccess(returnValue);
   } catch (error) {
     return {
       found: true,
@@ -537,7 +572,7 @@ async function invokeRuntimeComponentMethod(options: {
 }): Promise<Record<string, unknown>> {
   const located = await locateRuntimeComponent({ path: options.path, componentType: options.componentType });
   if (located.found !== true) return located;
-  return invokeLocatedRuntimeMethod(located, { method: options.method, args: options.args ?? [] });
+  return await invokeLocatedRuntimeMethod(located, { method: options.method, args: options.args ?? [] });
 }
 
 /**
@@ -567,10 +602,12 @@ async function sampleRuntimeWindow(options: {
   const node = located.node as Record<string, unknown>;
   let triggerResult: Record<string, unknown> | undefined;
   if (options.trigger) {
-    triggerResult = await invokeLocatedRuntimeMethod(located, {
+    const invocationResult = invokeLocatedRuntimeMethod(located, {
       method: options.trigger.method,
-      args: options.trigger.args ?? []
+      args: options.trigger.args ?? [],
+      awaitResult: false
     });
+    triggerResult = invocationResult instanceof Promise ? await invocationResult : invocationResult;
     if (triggerResult.invoked !== true) {
       return {
         found: false,
