@@ -15,6 +15,7 @@ import {
   mergeDocumentPages,
   parseScanCheckpoint,
   ProjectScanner,
+  scanPrefabReferencesFromDisk,
   verifyDesignTarget,
   type DesignApplyRuntime,
   type DesignApplyVerificationContext,
@@ -83,8 +84,6 @@ const SUPPORTED_CREATOR_VERSION = '3.8.8';
 const ASSET_SEARCH_PAGE_SIZE_MAX = 200;
 const ASSET_INSPECT_PAGE_SIZE_MAX = 500;
 const REPORT_PAGE_SIZE_MAX = 200;
-const DESIGN_DOCUMENT_READY_TIMEOUT_MS = 10_000;
-const DESIGN_DOCUMENT_READY_POLL_MS = 50;
 
 const EditorSessionSchema = z.object({
   editorInstanceId: z.string().min(1),
@@ -207,11 +206,6 @@ const AssetInspectOutputSchema = z.object({
     nextCursor: z.string().nullable()
   }),
   unresolved: z.array(z.object({ path: z.string(), reason: z.string() }))
-});
-
-const OpenAssetResponseSchema = z.object({
-  opened: z.literal(true),
-  uuid: z.string().min(1)
 });
 
 // Bridge 场景进程返回信封 {data:{…,schema,raw}, raw, source}；readComponentProbeResponse 先解包 data，
@@ -1128,7 +1122,7 @@ export class CocosDesignToolService {
     if (target.document.scope !== 'current-document') {
       const documentId = context.snapshot.document.assetUuid;
       if (!documentId) throw new Error('DESIGN_WRITE_DOCUMENT_IDENTITY_REQUIRED');
-      prefabGraph = await this.readDesignPrefabGraph(context.editor, documentId);
+      prefabGraph = await this.readDesignPrefabGraph(context.editor);
       sourceAssetPath = target.document.scope === 'source-prefab'
         ? context.snapshot.document.path ?? undefined
         : prefabGraph.nodes.find((node) =>
@@ -1146,76 +1140,16 @@ export class CocosDesignToolService {
     ));
   }
 
-  /** 扫描完整 Prefab 图，并在 finally 中恢复最初打开的设计文档。 */
+  /**
+   * 构建设计影响分析所需的 Prefab 引用图：直接只读扫描项目 assets 目录的
+   * 序列化文档文件，不在编辑器里打开任何文档（用哪里就扫哪里，避免全量打开快照）。
+   */
   private async readDesignPrefabGraph(
-    editor: EditorSession,
-    documentId: string
+    editor: EditorSession
   ): Promise<ProjectScanResult['prefabGraph']> {
-    const reportRoot = resolve(this.options.reportRoot);
-    const reportDirectory = join(reportRoot, 'mcp', 'design-impact');
-    await mkdir(reportDirectory, { recursive: true });
-    const runId = randomUUID();
-    const scanner = new ProjectScanner(
-      this.options.probeClient,
-      new JsonScanReportWriter(
-        join(reportDirectory, `${runId}.report.json`),
-        join(reportDirectory, `${runId}.checkpoint.json`),
-        reportRoot
-      )
-    );
-    try {
-      const result = await scanner.scan({
-        projectId: editor.projectId,
-        editorInstanceId: editor.editorInstanceId
-      });
-      return result.prefabGraph;
-    } finally {
-      await this.restoreDesignDocument(editor, documentId);
-    }
+    return scanPrefabReferencesFromDisk(join(editor.projectPath, 'assets')) as Promise<ProjectScanResult['prefabGraph']>;
   }
 
-  /** 重新打开影响扫描前的文档，等待 Scene/AssetDB 可读并核对文档身份。 */
-  private async restoreDesignDocument(editor: EditorSession, documentId: string): Promise<void> {
-    assertCapability(editor, 'probe.openAsset');
-    const opened = OpenAssetResponseSchema.parse(await this.options.probeClient.request('probe.openAsset', {
-      selector: toSelector(editor),
-      params: { uuid: documentId }
-    }));
-    if (opened.uuid !== documentId) throw new Error('DESIGN_WRITE_DOCUMENT_CHANGED');
-    const deadline = Date.now() + DESIGN_DOCUMENT_READY_TIMEOUT_MS;
-    while (true) {
-      const state = await this.options.probeClient.request('probe.editorState', {
-        selector: toSelector(editor),
-        params: {}
-      });
-      const ready = state && typeof state === 'object'
-        ? (state as { ready?: unknown }).ready
-        : undefined;
-      if (
-        ready
-        && typeof ready === 'object'
-        && (ready as { scene?: unknown }).scene === true
-        && (ready as { assetDatabase?: unknown }).assetDatabase === true
-      ) {
-        break;
-      }
-      if (Date.now() >= deadline) throw new Error('DOCUMENT_NOT_READY');
-      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, DESIGN_DOCUMENT_READY_POLL_MS));
-    }
-    if (editor.capabilities.includes('probe.writeRevision')) {
-      const revision = WriteRevisionSnapshotSchema.parse(await this.options.probeClient.request(
-        'probe.writeRevision',
-        { selector: toSelector(editor), params: {} }
-      ));
-      if (revision.documentId !== documentId) throw new Error('DESIGN_WRITE_DOCUMENT_CHANGED');
-      return;
-    }
-    const snapshot = DocumentSnapshotSchema.parse(await this.options.probeClient.request(
-      'probe.documentSnapshot',
-      { selector: toSelector(editor), params: { mode: 'summary', pageSize: 1, cursor: null } }
-    ));
-    if (snapshot.document.assetUuid !== documentId) throw new Error('DESIGN_WRITE_DOCUMENT_CHANGED');
-  }
 
   /** 读取同一 revision 的完整分页快照并规整成声明式树。 */
   private async readDesignContext(

@@ -5,6 +5,7 @@ export * from './design-export.js';
 export * from './design-plan.js';
 export * from './prefab-graph.js';
 export * from './prefab-impact.js';
+export * from './prefab-reference-scan.js';
 export * from './project-scanner.js';
 export * from './report-writer.js';
 export * from './runtime-capture.js';
