@@ -1123,11 +1123,10 @@ export class CocosDesignToolService {
       const documentId = context.snapshot.document.assetUuid;
       if (!documentId) throw new Error('DESIGN_WRITE_DOCUMENT_IDENTITY_REQUIRED');
       prefabGraph = await this.readDesignPrefabGraph(context.editor);
-      sourceAssetPath = target.document.scope === 'source-prefab'
-        ? context.snapshot.document.path ?? undefined
-        : prefabGraph.nodes.find((node) =>
-            node.assetUuid === target.document.assetUuid
-          )?.path ?? undefined;
+      // 快照 path 可能缺失（当前文档不是源资产或快照未带路径），用引用图节点路径兜底
+      sourceAssetPath = context.snapshot.document.path
+        ?? prefabGraph.nodes.find((node) => node.assetUuid === target.document.assetUuid)?.path
+        ?? undefined;
     }
     return DesignPlanSchema.parse(buildDesignPlan(
       computeDesignDiff(tree, target.tree, target.prune === true),
