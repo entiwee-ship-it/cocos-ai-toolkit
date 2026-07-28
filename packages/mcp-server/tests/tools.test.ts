@@ -77,6 +77,7 @@ describe('Cocos readonly MCP tools', () => {
       ['cocos_editor_state', ['projectId']],
       ['cocos_asset_search', ['projectId', 'pattern']],
       ['cocos_asset_inspect', ['projectId', 'uuid']],
+      ['cocos_asset_open', ['projectId', 'uuid']],
       ['cocos_component_schema', ['projectId', 'uuid']],
       ['cocos_document_snapshot', ['projectId', 'mode', 'pageSize']],
       ['cocos_prefab_graph', ['projectId']],
@@ -418,6 +419,88 @@ describe('Cocos readonly MCP tools', () => {
         nextCursor: null
       }
     });
+  });
+
+  it('asset_open 只打开已索引资产，并返回 Bridge 确认的资产身份', async () => {
+    const asset = createAssetRecord(
+      'asset-a',
+      'db://assets/ui/Button.prefab',
+      'Button'
+    );
+    const probeClient = new RecordingProbeClient((method, payload) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      if (method === 'probe.assetIndex') {
+        return { assets: [asset], scripts: [], documents: [], unresolved: [] };
+      }
+      if (method === 'probe.openAsset') {
+        expect(payload).toEqual({
+          selector: { projectId: 'project-a', editorInstanceId: 'editor-a' },
+          params: { uuid: 'asset-a' }
+        });
+        return { opened: true, uuid: 'asset-a' };
+      }
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_asset_open',
+      arguments: { projectId: 'project-a', uuid: 'asset-a' }
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      editor: { editorInstanceId: 'editor-a', projectId: 'project-a' },
+      asset: { assetUuid: 'asset-a', url: 'db://assets/ui/Button.prefab' },
+      opened: true
+    });
+  });
+
+  it('asset_open 拒绝不在当前 AssetDB 索引内的 UUID', async () => {
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      if (method === 'probe.assetIndex') {
+        return { assets: [], scripts: [], documents: [], unresolved: [] };
+      }
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_asset_open',
+      arguments: { projectId: 'project-a', uuid: 'missing-asset' }
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as Array<{ text?: string }>)[0]?.text).toContain('ASSET_NOT_FOUND');
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.openAsset');
+  });
+
+  it('asset_open 拒绝 Bridge 回传其它资产身份', async () => {
+    const asset = createAssetRecord(
+      'asset-a',
+      'db://assets/ui/Button.prefab',
+      'Button'
+    );
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      if (method === 'probe.assetIndex') {
+        return { assets: [asset], scripts: [], documents: [], unresolved: [] };
+      }
+      if (method === 'probe.openAsset') return { opened: true, uuid: 'asset-b' };
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_asset_open',
+      arguments: { projectId: 'project-a', uuid: 'asset-a' }
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as Array<{ text?: string }>)[0]?.text).toContain(
+      'ASSET_OPEN_IDENTITY_MISMATCH'
+    );
   });
 
   it('component_schema 返回协议校验后的完整 Schema，并按需包含原始 Dump', async () => {

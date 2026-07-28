@@ -20,6 +20,7 @@ export const COCOS_READONLY_TOOL_NAMES = [
   'cocos_editor_state',
   'cocos_asset_search',
   'cocos_asset_inspect',
+  'cocos_asset_open',
   'cocos_component_schema',
   'cocos_document_snapshot',
   'cocos_prefab_graph',

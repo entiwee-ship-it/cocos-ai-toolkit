@@ -208,6 +208,17 @@ const AssetInspectOutputSchema = z.object({
   unresolved: z.array(z.object({ path: z.string(), reason: z.string() }))
 });
 
+const AssetOpenProbeResponseSchema = z.object({
+  opened: z.literal(true),
+  uuid: z.string().min(1)
+});
+
+const AssetOpenOutputSchema = z.object({
+  editor: EditorSessionSchema,
+  asset: PublicAssetRecordSchema,
+  opened: z.literal(true)
+});
+
 // Bridge 场景进程返回信封 {data:{…,schema,raw}, raw, source}；readComponentProbeResponse 先解包 data，
 // 再按这里的内层形状校验，因此信封形状与无信封的旧形状均可接受。
 const ComponentProbeResponseSchema = z.object({
@@ -670,6 +681,43 @@ export class CocosReadonlyToolService {
           : null
       },
       unresolved: response.unresolved
+    });
+  }
+
+  /**
+   * 通过 Creator AssetDB 打开一个已索引资产，不直接读取或修改序列化文件。
+   *
+   * @param input 项目选择和目标资产 UUID。
+   * @returns Creator 确认的打开状态、资产身份和编辑器会话。
+   */
+  async openAsset(input: {
+    projectId: string;
+    editorInstanceId?: string;
+    uuid: string;
+  }) {
+    const editor = await this.resolveEditor(input);
+    assertCapability(editor, 'probe.assetIndex');
+    assertCapability(editor, 'probe.openAsset');
+    const index = readAssetIndex(await this.options.probeClient.request('probe.assetIndex', {
+      selector: toSelector(editor),
+      params: {}
+    }));
+    const indexedAsset = index.assets.find((asset) => asset.assetUuid === input.uuid);
+    if (!indexedAsset) throw new Error('ASSET_NOT_FOUND');
+    const response = readAssetOpenProbeResponse(await this.options.probeClient.request(
+      'probe.openAsset',
+      {
+        selector: toSelector(editor),
+        params: { uuid: indexedAsset.assetUuid }
+      }
+    ));
+    if (response.uuid !== indexedAsset.assetUuid) {
+      throw new Error('ASSET_OPEN_IDENTITY_MISMATCH');
+    }
+    return AssetOpenOutputSchema.parse({
+      editor,
+      asset: toPublicAssetRecord(indexedAsset, false),
+      opened: response.opened
     });
   }
 
@@ -1652,6 +1700,15 @@ export function registerCocosReadonlyTools(
     outputSchema: AssetInspectOutputSchema,
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(await service.inspectAsset(input)));
+  server.registerTool('cocos_asset_open', {
+    description: '通过 Creator AssetDB 打开一个已索引资产，并返回已打开的资产身份。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      uuid: z.string().min(1)
+    },
+    outputSchema: AssetOpenOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.openAsset(input)));
   server.registerTool('cocos_component_schema', {
     description: '读取当前 Creator 文档中组件实例的完整类型、属性和 Inspector Schema。',
     inputSchema: {
@@ -1809,6 +1866,14 @@ function readAssetProbeResponse(value: unknown): z.infer<typeof AssetProbeRespon
   const result = AssetProbeResponseSchema.safeParse(value);
   if (!result.success) {
     throw new Error(`ASSET_INSPECT_INVALID:${result.error.message}`);
+  }
+  return result.data;
+}
+
+function readAssetOpenProbeResponse(value: unknown): z.infer<typeof AssetOpenProbeResponseSchema> {
+  const result = AssetOpenProbeResponseSchema.safeParse(value);
+  if (!result.success) {
+    throw new Error(`ASSET_OPEN_INVALID:${result.error.message}`);
   }
   return result.data;
 }

@@ -37,6 +37,7 @@ try {
   const listed = await withTimeout(client.listTools(), 'TOOLS_LIST');
   const names = listed.tools.map((tool) => tool.name);
   if (!names.includes('cocos_editor_list')) throw new Error('COCOS_EDITOR_LIST_MISSING');
+  if (!names.includes('cocos_asset_open')) throw new Error('COCOS_ASSET_OPEN_MISSING');
   if (enableWrites && !names.includes('cocos_write_prepare')) throw new Error('WRITE_TOOL_MISSING');
   if (!enableWrites && names.includes('cocos_write_prepare')) throw new Error('WRITE_TOOL_EXPOSED_BY_DEFAULT');
   const editorResult = await withTimeout(

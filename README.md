@@ -139,7 +139,7 @@ AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-works
 
 默认用 Junction 挂接到仓库，仓库更新技能即更新；`-Copy` 改为复制（复制后更新需重装），`-Force` 覆盖同名旧安装。技能列表在 AI 会话启动时加载，安装后重启会话生效。
 
-MCP 默认注册以下十七个只读工具：
+MCP 默认注册以下十八个只读工具：
 
 | 工具 | 用途 |
 | --- | --- |
@@ -147,6 +147,7 @@ MCP 默认注册以下十七个只读工具：
 | `cocos_editor_state` | 读取并校验指定编辑器状态 |
 | `cocos_asset_search` | 搜索完整 AssetDB 索引并分页返回资产 |
 | `cocos_asset_inspect` | 读取单资产详情、可选原始 Meta、依赖和反向使用者 |
+| `cocos_asset_open` | 通过 Creator AssetDB 打开已索引资产并校验回执身份 |
 | `cocos_component_schema` | 读取默认或自定义组件的完整 Schema、脚本 UUID/路径和可选原始 Dump |
 | `cocos_document_snapshot` | 读取当前文档的摘要或完整 Creator 分页快照 |
 | `cocos_prefab_graph` | 扫描项目、落盘完整 Prefab 图，并分页返回节点和边 |

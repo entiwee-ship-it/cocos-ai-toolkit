@@ -26,7 +26,7 @@ description: Use when a task creates, generates, composes, arranges, inspects, e
 
 | 用户意图 | 必经 MCP 路径 |
 | --- | --- |
-| 查找、查看、检查或分析资产 | `cocos_editor_list` → `cocos_editor_state` → `cocos_asset_search` / `cocos_asset_inspect` / `cocos_document_snapshot` / `cocos_component_schema` |
+| 查找、打开、查看、检查或分析资产 | `cocos_editor_list` → `cocos_editor_state` → `cocos_asset_search` → `cocos_asset_open`（需要在 Creator 中打开时）→ `cocos_asset_inspect` / `cocos_document_snapshot` / `cocos_component_schema` |
 | 修改或编排既有 Prefab / Scene | `cocos_editor_list` → `cocos_editor_state` → `cocos_design_inspect` → `cocos_design_plan` → `cocos_design_preview` → `cocos_design_apply` → `cocos_design_verify` |
 | 从已有节点创建新的 Prefab 资产 | `cocos_editor_list` → `cocos_editor_state` → `cocos_document_snapshot` → `cocos_write_prepare`（`prefab.create_from_node`）→ `cocos_write_confirm` → 重读验证 |
 | 验证 Preview 运行时 | `cocos_preview_launch` → runtime 读取/动作/取证工具 → `cocos_preview_stop` |
@@ -34,7 +34,7 @@ description: Use when a task creates, generates, composes, arranges, inspects, e
 ## 开工检查
 
 1. 调用 `cocos_editor_list`，按 `projectPath` 选择目标实例并记录 `projectId`；同项目多实例时同时记录 `editorInstanceId`。
-2. 调用 `cocos_editor_state`，确认 Creator、AssetDB、当前文档和选区状态。写入前必须确认当前打开的资产就是目标 Prefab 或 Scene。
+2. 调用 `cocos_editor_state`，确认 Creator、AssetDB、当前文档和选区状态。需要切换文档时，先用 `cocos_asset_search` 取得真实 UUID，再调用 `cocos_asset_open`；写入前必须重新读取状态，确认当前打开的资产就是目标 Prefab 或 Scene。
 3. 用 `cocos_document_snapshot`、`cocos_component_schema` 或 `cocos_design_inspect` 取得真实 UUID、fileId、属性和引用；不得从磁盘 JSON 猜值。
 4. Preview 工具必须先用 `cocos_preview_launch` 获取 `sessionId`；已有会话用 `cocos_preview_sessions` 查找。
 
