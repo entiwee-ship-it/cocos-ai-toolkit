@@ -38,6 +38,159 @@ describe('applyDesignPlan', () => {
     });
   });
 
+  it('临时流程仅在首个事务提交后允许继续写脏文档且始终不保存', async () => {
+    const runtime = new FakeApplyRuntime();
+
+    const result = await applyDesignPlan(createReferencePlan(), runtime, {
+      executionId: 'run-scratch',
+      initialNodeResolutions: { '$root': 'uuid-root' },
+      revision: {
+        document: null,
+        hierarchy: 'sha256:hier-0',
+        assetDatabase: null,
+        scriptCompilation: null,
+        prefabGraph: null
+      },
+      save: false,
+      allowDirtyAfterFirstCommit: true
+    });
+
+    expect(result.status).toBe('committed');
+    expect(runtime.requests[0]).toMatchObject({ save: false });
+    expect(runtime.requests[0]).not.toHaveProperty('allowDirty');
+    expect(runtime.requests.slice(1).every((request) => (
+      request.save === false && request.allowDirty === true
+    ))).toBe(true);
+  });
+
+  it('引用数组逐项物化逻辑 ID 并保留资产引用顺序', async () => {
+    const runtime = new FakeApplyRuntime();
+    const assetReference = {
+      kind: 'asset' as const,
+      assetUuid: 'texture-a',
+      subAssetUuid: 'frame-a',
+      assetType: 'cc.SpriteFrame',
+      path: null,
+      available: true
+    };
+    const plan: DesignPlan = {
+      items: [{
+        kind: 'component.set_reference',
+        target: '$button',
+        propertyPath: 'textureFrames',
+        params: { componentType: 'FrameList', reference: ['$first', assetReference, '$second'] }
+      }],
+      risks: [],
+      unresolved: []
+    };
+
+    await applyDesignPlan(plan, runtime, {
+      executionId: 'run-reference-array',
+      initialNodeResolutions: {
+        '$button': 'uuid-button', '$first': 'uuid-first', '$second': 'uuid-second'
+      }
+    });
+
+    expect(runtime.requests[0].operations[0]).toMatchObject({
+      type: 'component.set_reference',
+      propertyPath: 'textureFrames',
+      reference: [
+        { kind: 'node', objectUuid: 'uuid-first' },
+        assetReference,
+        { kind: 'node', objectUuid: 'uuid-second' }
+      ]
+    });
+  });
+
+  it('document.extract_subtree 物化为 Creator prefab.create_from_node', async () => {
+    const runtime = new FakeApplyRuntime();
+    const plan: DesignPlan = {
+      items: [{
+        kind: 'document.extract_subtree', target: '$dialog',
+        params: { nodeLogicalId: '$dialog', assetUrl: 'db://assets/ui/Dialog.prefab' }
+      }],
+      risks: [], unresolved: []
+    };
+
+    await applyDesignPlan(plan, runtime, {
+      executionId: 'run-extract-subtree',
+      initialNodeResolutions: { '$dialog': 'node-dialog' }
+    });
+
+    expect(runtime.requests[0].operations).toEqual([{
+      type: 'prefab.create_from_node', nodeUuid: 'node-dialog', assetUrl: 'db://assets/ui/Dialog.prefab'
+    }]);
+  });
+
+  it('嵌套实例 override 物化实例根、组件目标和引用值', async () => {
+    const runtime = new FakeApplyRuntime();
+    const plan: DesignPlan = {
+      items: [{
+        kind: 'prefab.instance_override',
+        target: '$label',
+        propertyPath: 'target',
+        params: {
+          instanceRootLogicalId: '$panel',
+          componentType: 'cc.Label',
+          targetNodePath: 'Root/Panel/Label',
+          reference: '$target'
+        },
+        producesOverride: true,
+        overrideLayer: 'instance:$panel'
+      }],
+      risks: [], unresolved: []
+    };
+
+    await applyDesignPlan(plan, runtime, {
+      executionId: 'run-instance-override',
+      initialNodeResolutions: {
+        '$panel': 'node-panel', '$label': 'node-label', '$target': 'node-target'
+      }
+    });
+
+    expect(runtime.requests[0].operations).toEqual([{
+      type: 'prefab.instance_override',
+      instanceRootUuid: 'node-panel',
+      targetObjectUuid: 'component-cc.Label',
+      targetNodePath: 'Root/Panel/Label',
+      propertyPath: 'target',
+      value: {
+        kind: 'node', objectUuid: 'node-target', fileId: null, nodePath: null, available: true
+      }
+    }]);
+  });
+
+  it('精确还原计划物化目标组件而不是整实例还原', async () => {
+    const runtime = new FakeApplyRuntime();
+    const plan: DesignPlan = {
+      items: [{
+        kind: 'prefab.revert_override',
+        target: '$label',
+        propertyPath: 'string',
+        params: {
+          instanceRootLogicalId: '$panel',
+          targetObjectLogicalId: '$label',
+          componentType: 'cc.Label',
+          targetNodePath: 'Root/Panel/Label'
+        }
+      }],
+      risks: [], unresolved: []
+    };
+
+    await applyDesignPlan(plan, runtime, {
+      executionId: 'run-revert-instance-override',
+      initialNodeResolutions: { '$panel': 'node-panel', '$label': 'node-label' }
+    });
+
+    expect(runtime.requests[0].operations).toEqual([{
+      type: 'prefab.revert_override',
+      instanceRootUuid: 'node-panel',
+      targetObjectUuid: 'component-cc.Label',
+      targetNodePath: 'Root/Panel/Label',
+      propertyPath: 'string'
+    }]);
+  });
+
   it('连续属性与引用操作按依赖阶段合并为同一原子事务', async () => {
     const runtime = new FakeApplyRuntime();
     const plan: DesignPlan = {
@@ -321,6 +474,33 @@ describe('applyDesignPlan', () => {
     expect(runtime.requests).toHaveLength(2);
     expect(runtime.requests.map((request) => request.operations[0])).toMatchObject([
       { value: 'A' }, { value: 'B' }
+    ]);
+  });
+
+  it('UITransform contentSize 在 Label 属性提交后使用独立事务', async () => {
+    const runtime = new FakeApplyRuntime();
+    const plan: DesignPlan = {
+      items: [
+        {
+          kind: 'component.set_property', target: '$title', propertyPath: 'string',
+          value: 'Cocos AI 0.2.0', params: { componentType: 'cc.Label' }
+        },
+        {
+          kind: 'component.set_property', target: '$title', propertyPath: 'contentSize',
+          value: { width: 400, height: 80 }, params: { componentType: 'cc.UITransform' }
+        }
+      ],
+      risks: [], unresolved: []
+    };
+
+    const result = await applyDesignPlan(plan, runtime, {
+      executionId: 'run-layout-final', initialNodeResolutions: { '$title': 'uuid-title' }
+    });
+
+    expect(result.status).toBe('committed');
+    expect(runtime.requests).toHaveLength(2);
+    expect(runtime.requests.map((request) => request.operations[0])).toMatchObject([
+      { propertyPath: 'string' }, { propertyPath: 'contentSize' }
     ]);
   });
 

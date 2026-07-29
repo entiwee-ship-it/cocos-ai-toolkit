@@ -20,6 +20,13 @@ interface TargetLocation {
   parentLogicalId: string | null;
   prefabRootLogicalId: string | null;
   insidePrefabInstance: boolean;
+  nodePath: string | null;
+}
+
+interface InstanceOverrideTarget {
+  instanceRootLogicalId: string;
+  targetNodeLogicalId: string;
+  targetNodePath: string | null;
 }
 
 interface PlanDraft {
@@ -74,12 +81,14 @@ export function buildDesignPlan(
     }
 
     const override = createOverrideAnnotation(target.document.scope, diff, location);
-    appendDiffDrafts(drafts, diff, sourceIndex, targetIdentity, override, unresolved);
+    const instanceOverride = createInstanceOverrideTarget(diff, location);
+    appendDiffDrafts(drafts, diff, sourceIndex, targetIdentity, override, instanceOverride, unresolved);
     if (override.producesOverride && override.overrideLayer) {
       risks.push(`写入 ${targetIdentity} 将产生 ${override.overrideLayer} Override`);
     }
   });
 
+  appendImplicitLabelLayoutDrafts(drafts, target);
   inferDependencies(drafts);
   const sorted = topologicalSort(drafts, unresolved);
   const impactAnalysis = buildImpactAnalysis(target, diffItems, options, unresolved);
@@ -90,6 +99,7 @@ export function buildDesignPlan(
       ? [...draft.humanDependencies].sort()
       : undefined
   }));
+  appendDocumentOperations(items, target, risks);
   appendApplyToSourceItem(items, target, unresolved, risks);
 
   return {
@@ -146,7 +156,8 @@ function indexTargetLocations(nodes: DesignTargetNode[]): Map<string, TargetLoca
         depth,
         parentLogicalId,
         prefabRootLogicalId,
-        insidePrefabInstance
+        insidePrefabInstance,
+        nodePath: node.path ?? null
       });
       visit(node.children ?? [], node.id, depth + 1, prefabRootLogicalId);
     }
@@ -162,7 +173,7 @@ function isBlockedPrefabContentWrite(
   editMode: BuildDesignPlanOptions['documentEditMode']
 ): boolean {
   if (editMode !== 'prefab' || !location?.insidePrefabInstance) return false;
-  return diff.kind !== 'node.delete' && diff.kind !== 'component.remove';
+  return diff.kind !== 'component.set_property' && diff.kind !== 'reference.set';
 }
 
 /** 根据目标 scope 与 Prefab 层级标注 Override。 */
@@ -171,6 +182,14 @@ function createOverrideAnnotation(
   diff: DesignDiffItem,
   location: TargetLocation | undefined
 ): Pick<DesignPlanItem, 'producesOverride' | 'overrideLayer'> {
+  if (location?.insidePrefabInstance
+    && (diff.kind === 'component.set_property' || diff.kind === 'reference.set')
+    && location.prefabRootLogicalId) {
+    return {
+      producesOverride: true,
+      overrideLayer: `instance:${location.prefabRootLogicalId}`
+    };
+  }
   if (scope === 'source-prefab') return { producesOverride: false, overrideLayer: 'source-prefab' };
   if (scope === 'apply-to-source') return { producesOverride: false, overrideLayer: 'apply-to-source' };
   if (!location?.prefabRootLogicalId || diff.kind === 'prefab.instantiate') return {};
@@ -180,6 +199,71 @@ function createOverrideAnnotation(
   };
 }
 
+function createInstanceOverrideTarget(
+  diff: DesignDiffItem,
+  location: TargetLocation | undefined
+): InstanceOverrideTarget | null {
+  if (!location?.insidePrefabInstance || !location.prefabRootLogicalId || !diff.logicalId) return null;
+  if (diff.kind !== 'component.set_property' && diff.kind !== 'reference.set') return null;
+  return {
+    instanceRootLogicalId: location.prefabRootLogicalId,
+    targetNodeLogicalId: diff.logicalId,
+    targetNodePath: location.nodePath
+  };
+}
+
+function appendImplicitLabelLayoutDrafts(
+  drafts: PlanDraft[],
+  target: DesignTargetDocument
+): void {
+  const visit = (nodes: readonly DesignTargetNode[]): void => {
+    for (const node of nodes) {
+      const label = node.components?.find((component) => component.type === 'cc.Label');
+      const transform = node.components?.find((component) => component.type === 'cc.UITransform');
+      const hasExplicitSize = Boolean(
+        transform?.properties
+        && Object.prototype.hasOwnProperty.call(transform.properties, 'contentSize')
+      );
+      const hasExplicitOverflow = Boolean(
+        label?.properties
+        && Object.prototype.hasOwnProperty.call(label.properties, 'overflow')
+      );
+      const createsLabel = drafts.some((draft) => (
+        draft.logicalId === node.id
+        && draft.componentType === 'cc.Label'
+        && draft.item.kind === 'component.add'
+      ));
+      const alreadyPlansOverflow = drafts.some((draft) => (
+        draft.logicalId === node.id
+        && draft.componentType === 'cc.Label'
+        && draft.item.kind === 'component.set_property'
+        && draft.item.propertyPath === 'overflow'
+      ));
+      if (label && hasExplicitSize && !hasExplicitOverflow && createsLabel && !alreadyPlansOverflow) {
+        const sourceIndex = drafts.reduce((maximum, draft) => Math.max(maximum, draft.sourceIndex), 0) + 0.01;
+        drafts.push(createDraft({
+          key: `implicit:label-overflow:${node.id}`,
+          item: {
+            kind: 'component.set_property',
+            target: node.id,
+            propertyPath: 'overflow',
+            value: 1,
+            params: { componentType: 'cc.Label', resolveComponentOf: node.id }
+          },
+          logicalId: node.id,
+          parentLogicalId: null,
+          componentType: 'cc.Label',
+          scriptUuid: null,
+          rank: componentPropertyRank('cc.Label'),
+          sourceIndex
+        }));
+      }
+      visit(node.children ?? []);
+    }
+  };
+  visit(target.tree);
+}
+
 /** 把单个差异展开为一到多个原子计划草稿。 */
 function appendDiffDrafts(
   drafts: PlanDraft[],
@@ -187,6 +271,7 @@ function appendDiffDrafts(
   sourceIndex: number,
   targetIdentity: string,
   override: Pick<DesignPlanItem, 'producesOverride' | 'overrideLayer'>,
+  instanceOverride: InstanceOverrideTarget | null,
   unresolved: DesignPlan['unresolved']
 ): void {
   const logicalId = diff.logicalId ?? null;
@@ -221,12 +306,14 @@ function appendDiffDrafts(
     'node.create': 10,
     'prefab.instantiate': 20,
     'component.add': diff.scriptUuid ? 80 : 30,
-    'component.set_property': 50,
+    'component.set_property': componentPropertyRank(diff.componentType),
     'reference.set': 60,
     'component.remove': 90,
     'node.delete': 100
   };
-  const planKind = diff.kind === 'reference.set' ? 'component.set_reference' : diff.kind;
+  const planKind = instanceOverride
+    ? 'prefab.instance_override'
+    : diff.kind === 'reference.set' ? 'component.set_reference' : diff.kind;
 
   if (diff.kind === 'reference.set' && !diff.componentType && !diff.componentUuid) {
     unresolved.push({
@@ -236,7 +323,17 @@ function appendDiffDrafts(
     return;
   }
 
-  const params = { ...baseParams };
+  const params = {
+    ...baseParams,
+    ...(instanceOverride
+      ? compactParams({
+          instanceRootLogicalId: instanceOverride.instanceRootLogicalId,
+          targetNodeLogicalId: instanceOverride.targetNodeLogicalId,
+          targetNodePath: instanceOverride.targetNodePath,
+          targetObjectUuid: diff.componentUuid ?? (!diff.componentType ? diff.targetUuid : undefined)
+        })
+      : {})
+  };
   if (diff.kind === 'reference.set') {
     if (typeof diff.reference === 'string' && diff.reference.startsWith('$')) {
       params.resolveTo = diff.reference;
@@ -281,7 +378,7 @@ function appendDiffDrafts(
         parentLogicalId: null,
         componentType: diff.componentType ?? null,
         scriptUuid: null,
-        rank: 50,
+        rank: componentPropertyRank(diff.componentType),
         sourceIndex: sourceIndex + childIndex / 100
       }));
     }
@@ -307,6 +404,10 @@ function appendDiffDrafts(
       }));
     }
   }
+}
+
+function componentPropertyRank(componentType: string | undefined): number {
+  return componentType === 'cc.UITransform' ? 70 : 50;
 }
 
 function createDraft(input: Omit<PlanDraft, 'dependencyKeys' | 'humanDependencies'>): PlanDraft {
@@ -352,7 +453,50 @@ function inferDependencies(drafts: PlanDraft[]): void {
     if (typeof resolveTo === 'string' && resolveTo.startsWith('$')) {
       addDependency(draft, nodeProducers.get(resolveTo), resolveTo);
     }
+    for (const referenceId of collectLogicalReferenceIds(draft.item.params?.reference)) {
+      addDependency(draft, nodeProducers.get(referenceId), referenceId);
+    }
   }
+}
+
+function appendDocumentOperations(
+  items: DesignPlanItem[],
+  target: DesignTargetDocument,
+  risks: string[]
+): void {
+  const locations = indexTargetLocations(target.tree);
+  for (const operation of target.operations ?? []) {
+    if (operation.type === 'document.extract_subtree') {
+      items.push({
+        kind: operation.type,
+        target: operation.nodeId,
+        params: { nodeLogicalId: operation.nodeId, assetUrl: operation.assetUrl },
+        dependsOn: [operation.nodeId]
+      });
+      risks.push(`将节点 ${operation.nodeId} 抽取为 Prefab ${operation.assetUrl}`);
+      continue;
+    }
+    const targetLocation = locations.get(operation.targetId);
+    items.push({
+      kind: operation.type,
+      target: operation.targetId,
+      propertyPath: operation.propertyPath,
+      params: compactParams({
+        instanceRootLogicalId: operation.instanceRootId,
+        targetObjectLogicalId: operation.targetId,
+        componentType: operation.componentType,
+        targetNodePath: targetLocation?.nodePath
+      }),
+      dependsOn: [operation.instanceRootId, operation.targetId]
+    });
+    risks.push(`将实例 ${operation.instanceRootId} 的 ${operation.targetId}.${operation.propertyPath} 覆盖精确还原`);
+  }
+}
+
+function collectLogicalReferenceIds(reference: unknown): string[] {
+  if (typeof reference === 'string' && reference.startsWith('$')) return [reference];
+  if (!Array.isArray(reference)) return [];
+  return reference.flatMap((item) => collectLogicalReferenceIds(item));
 }
 
 function addDependency(draft: PlanDraft, key: string | undefined, humanDependency: string): void {

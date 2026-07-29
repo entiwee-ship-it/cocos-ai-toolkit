@@ -9,7 +9,7 @@
       保证 AI 客户端的 MCP 配置无需修改即可始终指向最新版本。
 
     执行步骤：
-    1. git fetch 并把运行时 Worktree 的本地 runtime 分支重置到目标引用（默认 origin/master）。
+    1. git fetch 并让运行时 Worktree 以 detached HEAD 对齐目标引用（默认 origin/master）。
     2. 依赖清单或 lockfile 变化时执行 npm install。
     3. 代码变化或产物缺失时执行 npm run build（全 workspace）。
     4. 重启 Probe Server 并等待端口就绪。
@@ -84,9 +84,8 @@ $old = ("$((Invoke-Git @('rev-parse', 'HEAD')).Output)".Trim())
 if (-not $target) { throw "无法解析目标引用: $TargetRef" }
 
 $codeChanged = $old -ne $target
-# 本地固定使用 runtime 分支指向目标引用，幂等且不影响其它检出
-Invoke-Git @('checkout', '-B', 'runtime', $target) | Out-Null
-Invoke-Git @('branch', '--set-upstream-to=origin/master', 'runtime') -AllowFail | Out-Null
+# 运行工作树只承载构建产物，保持 detached HEAD，避免产生额外本地分支。
+Invoke-Git @('checkout', '--detach', $target) | Out-Null
 if ($codeChanged) {
     Write-Output ("==> 代码已更新: {0} -> {1}" -f $old.Substring(0, 7), $target.Substring(0, 7))
 } else {

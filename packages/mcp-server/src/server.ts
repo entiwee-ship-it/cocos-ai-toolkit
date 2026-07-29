@@ -14,6 +14,15 @@ import {
   registerCocosRuntimeGatedTools,
   registerCocosRuntimeReadonlyTools
 } from './runtime-tools.js';
+import {
+  CocosPrefabToolService,
+  registerCocosPrefabReadonlyTools,
+  registerCocosPrefabWriteTools
+} from './prefab-tools.js';
+import {
+  CocosAssetWriteToolService,
+  registerCocosAssetWriteTools
+} from './asset-tools.js';
 
 export const COCOS_READONLY_TOOL_NAMES = [
   'cocos_editor_list',
@@ -49,6 +58,11 @@ export const COCOS_WRITE_TOOL_NAMES = [
   'cocos_runtime_dispatch_input',
   'cocos_runtime_instantiate_prefab',
   'cocos_runtime_run_scenario',
+  'cocos_asset_create',
+  'cocos_asset_move',
+  'cocos_asset_write_meta',
+  'cocos_asset_update_text',
+  'cocos_asset_delete',
   'cocos_design_apply'
 ] as const;
 
@@ -61,12 +75,15 @@ export const COCOS_GATED_READONLY_TOOL_NAMES = [
 /** MCP 运行时开关；写能力必须显式开启，默认保持只读。 */
 export interface CocosMcpRuntimeOptions {
   enableWrites?: boolean;
+  profile?: CocosMcpToolProfile;
 }
 
+export type CocosMcpToolProfile = 'prefab' | 'full';
+
 /**
- * 创建 Cocos MCP Server：默认暴露阶段一基础只读工具和阶段四三个声明式只读工具；
- * 默认同时开放声明式 inspect/plan/preview；仅当显式 enableWrites（对应启动参数
- * --enable-writes）时追加注册阶段二写工具和 design apply/verify/export。
+ * 创建 Cocos MCP Server：默认使用 prefab 场景档，暴露四个只读高层工具；
+ * 显式 enableWrites（对应启动参数 --enable-writes）时追加三个高层写工具。
+ * full 档保留原有底层工具集合，并在显式 enableWrites 时追加门控写工具。
  *
  * @param options 共享 Probe Client 和服务器授权的报告根目录。
  * @param runtime 运行时开关。
@@ -78,19 +95,47 @@ export function createCocosMcpServer(
 ): McpServer {
   const server = new McpServer({
     name: 'cocos-ai-toolkit',
-    version: '0.1.0'
+    version: '0.2.5'
   });
   const readonlyService = new CocosReadonlyToolService(options);
+  const runtimeService = new CocosRuntimeToolService(options, readonlyService);
+  const writeService = runtime.enableWrites === true
+    ? new CocosWriteToolService(options, readonlyService)
+    : undefined;
+  if ((runtime.profile ?? 'prefab') === 'prefab') {
+    const designService = new CocosDesignToolService(
+      options,
+      readonlyService,
+      writeService,
+      runtimeService
+    );
+    const prefabService = new CocosPrefabToolService(options, readonlyService, designService, writeService);
+    registerCocosPrefabReadonlyTools(server, prefabService);
+    if (writeService) {
+      registerCocosPrefabWriteTools(server, prefabService);
+      registerCocosAssetWriteTools(
+        server,
+        new CocosAssetWriteToolService(options, readonlyService, writeService)
+      );
+    }
+    return server;
+  }
   registerCocosReadonlyTools(server, readonlyService);
-  registerCocosDesignReadonlyTools(server, new CocosDesignToolService(options, readonlyService));
-  registerCocosRuntimeReadonlyTools(server, new CocosRuntimeToolService(options, readonlyService));
+  registerCocosDesignReadonlyTools(
+    server,
+    new CocosDesignToolService(options, readonlyService, undefined, runtimeService)
+  );
+  registerCocosRuntimeReadonlyTools(server, runtimeService);
   if (runtime.enableWrites === true) {
-    const writeService = new CocosWriteToolService(options, readonlyService);
-    registerCocosWriteTools(server, writeService);
-    registerCocosRuntimeGatedTools(server, new CocosRuntimeToolService(options, readonlyService));
+    registerCocosWriteTools(server, writeService!);
+    registerCocosRuntimeGatedTools(server, runtimeService);
+    registerCocosAssetWriteTools(
+      server,
+      new CocosAssetWriteToolService(options, readonlyService, writeService!)
+    );
     registerCocosDesignGatedTools(
       server,
-      new CocosDesignToolService(options, readonlyService, writeService)
+      new CocosDesignToolService(options, readonlyService, writeService!, runtimeService)
     );
   }
   return server;

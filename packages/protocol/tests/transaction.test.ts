@@ -10,6 +10,36 @@ import {
   WriteVerificationReportSchema
 } from '../src/index.js';
 
+it('写失败协议保留阶段、输入摘要、原始错误和下一步动作', () => {
+  const result = WriteTransactionResultSchema.parse({
+    transactionId: 'tx-structured-failure',
+    status: 'outcome-unknown',
+    executedOps: 0,
+    verification: null,
+    failure: {
+      code: 'WRITE_EXECUTION_TIMEOUT',
+      message: '写执行超时',
+      operationIndex: null,
+      stage: 'apply',
+      inputSummary: { scope: 'current-document', operationCount: 1, save: true },
+      originalError: {
+        code: 'WRITE_EXECUTION_TIMEOUT',
+        message: '写执行超时',
+        details: { timeoutMs: 180000 }
+      },
+      nextAction: '查询 transactionStatus；确认结局前禁止重试写入'
+    },
+    rollbackEvidence: null
+  });
+
+  expect(result.failure).toMatchObject({
+    stage: 'apply',
+    inputSummary: { operationCount: 1 },
+    originalError: { details: { timeoutMs: 180000 } },
+    nextAction: '查询 transactionStatus；确认结局前禁止重试写入'
+  });
+});
+
 it('写 revision 快照保留文档身份与五维指纹', () => {
   expect(WriteRevisionSnapshotSchema.parse({
     documentId: 'scene-1',
@@ -169,6 +199,87 @@ describe('WriteOperationSchema', () => {
     })).toBeTruthy();
   });
 
+  it('component.set_reference 接受有序引用数组', () => {
+    const operation = WriteOperationSchema.parse({
+      type: 'component.set_reference',
+      componentUuid: 'component-a',
+      propertyPath: 'textureFrames',
+      reference: [
+        { kind: 'asset', assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true },
+        { kind: 'asset', assetUuid: 'texture-b', subAssetUuid: 'frame-b', assetType: 'cc.SpriteFrame', path: null, available: true }
+      ]
+    });
+
+    expect(operation.reference).toHaveLength(2);
+  });
+
+  it('接受 Creator AssetDB 创建、移动、删除和元数据写入操作', () => {
+    const operations = [
+      {
+        type: 'asset.create', assetUrl: 'db://assets/ui', assetKind: 'folder'
+      },
+      {
+        type: 'asset.create', assetUrl: 'db://assets/ui/Dialog.ts', assetKind: 'component-script',
+        content: 'import { _decorator, Component } from "cc"; export class Dialog extends Component {}'
+      },
+      {
+        type: 'asset.move', sourceUrl: 'db://assets/ui/Dialog.ts', targetUrl: 'db://assets/view/Dialog.ts',
+        expectedAssetUuid: 'script-dialog'
+      },
+      {
+        type: 'asset.write_meta', assetUrl: 'db://assets/view/Dialog.ts', expectedAssetUuid: 'script-dialog',
+        meta: { userData: { priority: 1 } }
+      },
+      {
+        type: 'asset.delete', assetUrl: 'db://assets/view/Dialog.ts', expectedAssetUuid: 'script-dialog'
+      }
+    ];
+
+    for (const operation of operations) expect(WriteOperationSchema.parse(operation)).toBeTruthy();
+    expect(() => WriteOperationSchema.parse({
+      type: 'asset.create', assetUrl: 'db://assets/empty.prefab', assetKind: 'prefab'
+    })).toThrow();
+  });
+
+  it('受控资产内容恢复要求 UUID 与恢复前后 SHA256 前置', () => {
+    const currentSha256 = 'a'.repeat(64);
+    const targetSha256 = 'b'.repeat(64);
+    expect(WriteOperationSchema.parse({
+      type: 'asset.restore_content',
+      assetUrl: 'db://assets/ui/Dialog.prefab',
+      expectedAssetUuid: 'dialog-prefab',
+      expectedCurrentSha256: currentSha256,
+      content: '[{\"__type__\":\"cc.Prefab\"}]',
+      targetSha256
+    })).toBeTruthy();
+    expect(() => WriteOperationSchema.parse({
+      type: 'asset.restore_content',
+      assetUrl: 'db://assets/ui/Dialog.prefab',
+      expectedAssetUuid: 'dialog-prefab',
+      expectedCurrentSha256: 'not-a-hash',
+      content: '[]',
+      targetSha256
+    })).toThrow();
+  });
+
+  it('安全文本替换要求精确旧文本且禁止无效替换', () => {
+    expect(WriteOperationSchema.parse({
+      type: 'asset.update_text',
+      assetUrl: 'db://assets/script/GameUIConfig.ts',
+      expectedAssetUuid: 'game-ui-config',
+      expectedCurrentSha256: 'a'.repeat(64),
+      oldText: 'UIID.Lobby,',
+      newText: 'UIID.Lobby,\n  UIID.CocosAiValidation,'
+    })).toBeTruthy();
+    expect(() => WriteOperationSchema.parse({
+      type: 'asset.update_text',
+      assetUrl: 'db://assets/script/GameUIConfig.ts',
+      expectedAssetUuid: 'game-ui-config',
+      oldText: 'UIID.Lobby,',
+      newText: 'UIID.Lobby,'
+    })).toThrow();
+  });
+
   it('接受带 expectedOldValue 乐观锁的属性写入', () => {
     expect(WriteOperationSchema.parse({
       type: 'component.set_property',
@@ -211,6 +322,24 @@ describe('WriteTransactionRequestSchema', () => {
 
   it('接受合法的阶段二写事务请求', () => {
     expect(WriteTransactionRequestSchema.parse(createValidRequest())).toBeTruthy();
+  });
+
+  it('仅允许带层级 revision 的不保存事务继续写脏文档', () => {
+    const request = createValidRequest();
+    request.save = false;
+    request.revision.hierarchy = 'sha256:hier';
+
+    expect(WriteTransactionRequestSchema.parse({ ...request, allowDirty: true })).toMatchObject({
+      allowDirty: true,
+      save: false,
+      revision: { hierarchy: 'sha256:hier' }
+    });
+    expect(() => WriteTransactionRequestSchema.parse({ ...request, save: true, allowDirty: true })).toThrow();
+    expect(() => WriteTransactionRequestSchema.parse({
+      ...request,
+      revision: createRevisionPrecondition(),
+      allowDirty: true
+    })).toThrow();
   });
 
   it('拒绝空操作列表', () => {
@@ -431,10 +560,14 @@ describe('阶段三写事务协议', () => {
     })).toThrow();
   });
 
-  it('接受七类 prefab 写操作', () => {
+  it('接受八类 prefab 写操作', () => {
     const operations = [
       { type: 'prefab.instantiate', prefabAssetUuid: 'a1', parentNodeUuid: 'n0', name: 'Card' },
       { type: 'prefab.create_from_node', nodeUuid: 'n1', assetUrl: 'db://assets/a.prefab' },
+      {
+        type: 'prefab.instance_override', instanceRootUuid: 'n2', targetObjectUuid: 'c1',
+        propertyPath: 'string', value: '新标题', targetNodePath: 'Root/Card/Label'
+      },
       { type: 'prefab.revert_override', instanceRootUuid: 'n2' },
       { type: 'prefab.apply_to_source', instanceRootUuid: 'n3' },
       { type: 'prefab.replace_source', instanceRootUuid: 'n4', newPrefabAssetUuid: 'a2' },
@@ -457,6 +590,8 @@ describe('阶段三写事务协议', () => {
     expect(WriteOperationSchema.parse({
       type: 'prefab.revert_override',
       instanceRootUuid: 'n1',
+      targetObjectUuid: 'c1',
+      targetNodePath: 'Root/Card/Label',
       propertyPath: 'position'
     })).toBeTruthy();
   });

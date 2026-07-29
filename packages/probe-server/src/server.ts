@@ -13,8 +13,10 @@ import {
 import { assembleRuntimeNodeSnapshot, buildRuntimeScript, diffPng, runRuntimeScenario, RuntimeDriver, watchRuntimeProperty, type ScenarioRuntime } from '@cocos-ai/core';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { z } from 'zod';
-import { RequestRouter } from './request-router.js';
+import { RequestRouter, toServerErrorPayload } from './request-router.js';
 import { SessionRegistry, type SessionSelector } from './session-registry.js';
+
+export const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 180_000;
 
 const BridgeHelloSchema = z.object({
   method: z.literal('bridge.hello'),
@@ -393,9 +395,7 @@ export class ProbeServer {
         type: 'response',
         correlationId: request.requestId,
         ok: false,
-        payload: {
-          code: error instanceof Error ? error.message : 'UNKNOWN_SERVER_ERROR'
-        }
+        payload: toServerErrorPayload(error)
       }));
     }
   }

@@ -41,6 +41,7 @@ export interface WriteTransactionRequest {
   impactAnalysis?: unknown;
   operations: WriteOperation[];
   save: boolean;
+  allowDirty?: boolean;
   undoGroup: string;
 }
 
@@ -70,6 +71,10 @@ export interface WriteFailure {
   operationIndex?: number | null;
   conflicts?: WriteConflict[];
   details?: unknown;
+  stage?: 'plan' | 'prepare' | 'apply' | 'save' | 'verify' | 'rollback' | 'unknown';
+  inputSummary?: Record<string, unknown>;
+  originalError?: { code: string; message?: string; details?: unknown };
+  nextAction?: string;
 }
 
 export interface WriteRollbackEvidence {
@@ -123,6 +128,38 @@ export interface WriteRevisionCapture {
   fingerprint: RevisionFingerprint;
   /** Creator 当前文档脏状态；true 时禁止开始或确认事务。 */
   dirty?: boolean | null;
+}
+
+export interface WriteDocumentRevisionIdentity {
+  documentId: string;
+  hierarchySha256: string;
+  prefabGraphSha256: string | null;
+  dirty: boolean | null;
+}
+
+/** 未保存文档没有 AssetDB 文件路径时只跳过文档哈希，其余指纹继续参与事务门禁。 */
+export async function captureWriteRevisionFromDocument(
+  identity: WriteDocumentRevisionIdentity,
+  readDocumentAsset: (documentAssetUuid: string) => Promise<Buffer>
+): Promise<WriteRevisionCapture> {
+  let document: string | null = null;
+  try {
+    const content = await readDocumentAsset(identity.documentId);
+    document = `sha256:${createHash('sha256').update(content).digest('hex')}`;
+  } catch (error) {
+    if (!(error instanceof ProbeError) || error.code !== 'ASSET_FILE_PATH_UNAVAILABLE') throw error;
+  }
+  return {
+    documentId: identity.documentId,
+    dirty: identity.dirty,
+    fingerprint: {
+      document,
+      hierarchy: `sha256:${identity.hierarchySha256}`,
+      assetDatabase: null,
+      scriptCompilation: null,
+      prefabGraph: identity.prefabGraphSha256 ? `sha256:${identity.prefabGraphSha256}` : null
+    }
+  };
 }
 
 /**
@@ -281,7 +318,7 @@ export class WriteTransactionManager {
     this.now = options.now ?? (() => new Date());
     this.delay = options.delay ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     this.ttlMs = options.ttlMs ?? 30 * 60_000;
-    this.executionTimeoutMs = options.executionTimeoutMs ?? 120_000;
+    this.executionTimeoutMs = options.executionTimeoutMs ?? 180_000;
     this.undoCapability = options.undoCapability ?? 'step-undo-with-inverse';
     this.log = options.logger ?? (() => {});
   }
@@ -304,7 +341,7 @@ export class WriteTransactionManager {
     }
 
     const capture = await this.options.captureRevision(request);
-    assertDocumentClean(capture);
+    assertDocumentClean(capture, request.allowDirty === true);
     checkRevisionPrecondition(request.revision, capture.fingerprint);
     this.acquireDocumentLock(capture.documentId, request.transactionId);
 
@@ -354,7 +391,7 @@ export class WriteTransactionManager {
     }
 
     const capture = await this.options.captureRevision(record.request);
-    assertDocumentClean(capture);
+    assertDocumentClean(capture, record.request.allowDirty === true);
     checkRevisionPrecondition(record.request.revision, capture.fingerprint);
 
     record = this.transition(record, 'locked', 'confirm');
@@ -369,7 +406,7 @@ export class WriteTransactionManager {
       if (error instanceof ProbeError && error.code === 'WRITE_EXECUTION_TIMEOUT') {
         this.trackLateSettlement(transactionId, execution);
       }
-      record = this.updateRecord(record, { failure: toWriteFailure(error) });
+      record = this.updateRecord(record, { failure: toWriteFailure(error, 'apply', record.request) });
       record = this.transition(record, 'outcome-unknown', record.failure?.code);
       this.releaseDocumentLock(record);
       this.log(`事务 ${transactionId} 结果未知（${record.failure?.code}），禁止盲目重试`);
@@ -379,7 +416,7 @@ export class WriteTransactionManager {
     if (outcome.kind === 'operation-failed') {
       record = this.updateRecord(record, {
         executedOps: outcome.executedOps,
-        failure: outcome.failure,
+        failure: enrichWriteFailure(outcome.failure, 'apply', record.request),
         executionEvidence: outcome.evidence ?? null
       });
       record = this.transition(record, 'failed', outcome.failure.code);
@@ -401,7 +438,11 @@ export class WriteTransactionManager {
     // 协议不变式：committed 必须携带 passed=true 的重读验证报告，缺失一律转入失败回滚。
     if (!outcome.verification || !outcome.verification.passed) {
       record = this.updateRecord(record, {
-        failure: { code: 'WRITE_VERIFICATION_FAILED', message: '缺少通过的重读验证报告，禁止提交', operationIndex: null }
+        failure: enrichWriteFailure(
+          { code: 'WRITE_VERIFICATION_FAILED', message: '缺少通过的重读验证报告，禁止提交', operationIndex: null },
+          'verify',
+          record.request
+        )
       });
       record = this.transition(record, 'failed', 'WRITE_VERIFICATION_FAILED');
       record = await this.performRollback(record);
@@ -671,6 +712,15 @@ export function validateWriteTransactionRequest(value: unknown): WriteTransactio
   if (typeof request.save !== 'boolean') {
     throw new ProbeError('INVALID_WRITE_REQUEST', { field: 'save' });
   }
+  if (request.allowDirty !== undefined && typeof request.allowDirty !== 'boolean') {
+    throw new ProbeError('INVALID_WRITE_REQUEST', { field: 'allowDirty' });
+  }
+  if (request.allowDirty === true && request.save) {
+    throw new ProbeError('ALLOW_DIRTY_REQUIRES_NO_SAVE');
+  }
+  if (request.allowDirty === true && !revision.hierarchy) {
+    throw new ProbeError('ALLOW_DIRTY_REQUIRES_HIERARCHY_REVISION');
+  }
   const undoGroup = readRequiredString(request.undoGroup, 'UNDO_GROUP_REQUIRED');
   return {
     transactionId,
@@ -680,6 +730,7 @@ export function validateWriteTransactionRequest(value: unknown): WriteTransactio
     ...(request.impactAnalysis !== undefined ? { impactAnalysis: request.impactAnalysis } : {}),
     operations,
     save: request.save,
+    ...(request.allowDirty === true ? { allowDirty: true } : {}),
     undoGroup
   };
 }
@@ -689,8 +740,8 @@ export function validateTransactionIdRequest(value: unknown): { transactionId: s
   return { transactionId: readRequiredString(request.transactionId, 'TRANSACTION_ID_REQUIRED') };
 }
 
-function assertDocumentClean(capture: WriteRevisionCapture): void {
-  if (capture.dirty === true) {
+function assertDocumentClean(capture: WriteRevisionCapture, allowDirty: boolean): void {
+  if (capture.dirty === true && !allowDirty) {
     throw new ProbeError('DIRTY_DOCUMENT', { documentId: capture.documentId });
   }
 }
@@ -748,14 +799,82 @@ function readLastSuccessfulStep(record: WriteTransactionRecord): WriteTransactio
   return null;
 }
 
-function toWriteFailure(error: unknown): WriteFailure {
+function toWriteFailure(
+  error: unknown,
+  stage: NonNullable<WriteFailure['stage']>,
+  request: WriteTransactionRequest
+): WriteFailure {
   if (error instanceof ProbeError) {
-    return { code: error.code, message: error.code, operationIndex: null, details: error.details };
+    return enrichWriteFailure({
+      code: error.code,
+      message: error.message,
+      operationIndex: null,
+      details: error.details,
+      originalError: { code: error.code, message: error.message, details: error.details }
+    }, stage, request);
   }
   if (error instanceof Error) {
-    return { code: error.message || 'WRITE_EXECUTION_FAILED', message: error.message, operationIndex: null };
+    return enrichWriteFailure({
+      code: error.message || 'WRITE_EXECUTION_FAILED',
+      message: error.message,
+      operationIndex: null,
+      originalError: { code: error.message || 'WRITE_EXECUTION_FAILED', message: error.message }
+    }, stage, request);
   }
-  return { code: 'WRITE_EXECUTION_FAILED', message: '写执行器未知失败', operationIndex: null };
+  return enrichWriteFailure({
+    code: 'WRITE_EXECUTION_FAILED',
+    message: '写执行器未知失败',
+    operationIndex: null,
+    originalError: { code: 'WRITE_EXECUTION_FAILED', message: '写执行器未知失败', details: error }
+  }, stage, request);
+}
+
+function enrichWriteFailure(
+  failure: WriteFailure,
+  fallbackStage: NonNullable<WriteFailure['stage']>,
+  request: WriteTransactionRequest
+): WriteFailure {
+  const stage = failure.stage ?? inferFailureStage(failure.code, fallbackStage);
+  return {
+    ...failure,
+    stage,
+    inputSummary: failure.inputSummary ?? {
+      scope: request.scope,
+      operationCount: request.operations.length,
+      operationTypes: request.operations.map((operation) => operation.type),
+      save: request.save,
+      undoGroup: request.undoGroup
+    },
+    originalError: failure.originalError ?? {
+      code: failure.code,
+      message: failure.message,
+      ...(failure.details === undefined ? {} : { details: failure.details })
+    },
+    nextAction: failure.nextAction ?? nextActionForFailure(failure.code, stage)
+  };
+}
+
+function inferFailureStage(
+  code: string,
+  fallback: NonNullable<WriteFailure['stage']>
+): NonNullable<WriteFailure['stage']> {
+  if (/SAVE/i.test(code)) return 'save';
+  if (/VERIF/i.test(code)) return 'verify';
+  if (/PREPARE|REVISION|VALIDAT/i.test(code)) return 'prepare';
+  if (/ROLLBACK/i.test(code)) return 'rollback';
+  return fallback;
+}
+
+function nextActionForFailure(
+  code: string,
+  stage: NonNullable<WriteFailure['stage']>
+): string {
+  if (code === 'WRITE_EXECUTION_TIMEOUT' || code === 'WRITE_OUTCOME_UNCERTAIN') {
+    return '查询 transactionStatus；确认结局前禁止重试写入';
+  }
+  if (stage === 'verify') return '重读目标文档并检查 verification.items 后再决定回滚';
+  if (stage === 'rollback') return '保留事务证据并执行人工恢复，禁止继续写入';
+  return `检查 ${stage} 阶段的 originalError 与 inputSummary 后修正请求`;
 }
 
 function hashWriteRequest(request: WriteTransactionRequest): string {
@@ -779,8 +898,15 @@ const WRITE_OPERATION_STRING_FIELDS: Record<string, string[]> = {
   'component.set_reference': ['componentUuid', 'propertyPath'],
   'component.clear_reference': ['componentUuid', 'propertyPath'],
   'component.resize_array': ['componentUuid', 'propertyPath'],
+  'asset.create': ['assetUrl', 'assetKind'],
+  'asset.move': ['sourceUrl', 'targetUrl', 'expectedAssetUuid'],
+  'asset.delete': ['assetUrl', 'expectedAssetUuid'],
+  'asset.write_meta': ['assetUrl', 'expectedAssetUuid'],
+  'asset.update_text': ['assetUrl', 'expectedAssetUuid', 'oldText', 'newText'],
+  'asset.restore_content': ['assetUrl', 'expectedAssetUuid', 'expectedCurrentSha256', 'content', 'targetSha256'],
   'prefab.instantiate': ['prefabAssetUuid', 'parentNodeUuid'],
   'prefab.create_from_node': ['nodeUuid', 'assetUrl'],
+  'prefab.instance_override': ['instanceRootUuid', 'targetObjectUuid', 'propertyPath'],
   'prefab.revert_override': ['instanceRootUuid'],
   'prefab.apply_to_source': ['instanceRootUuid'],
   'prefab.replace_source': ['instanceRootUuid', 'newPrefabAssetUuid'],
@@ -828,12 +954,44 @@ function readWriteOperation(value: unknown, index: number): WriteOperation {
       if (typeof operation.enabled !== 'boolean') throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'enabled' });
       break;
     case 'component.set_reference': {
-      const reference = readObject(operation.reference);
-      if (typeof reference.kind !== 'string' || !reference.kind) {
+      const references = Array.isArray(operation.reference) ? operation.reference : [operation.reference];
+      if (references.length === 0 || references.some((item) => {
+        const reference = readObject(item);
+        return typeof reference.kind !== 'string' || !reference.kind;
+      })) {
         throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'reference.kind' });
       }
       break;
     }
+    case 'asset.create':
+      if (!['folder', 'component-script'].includes(String(operation.assetKind))) {
+        throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'assetKind' });
+      }
+      if (operation.assetKind === 'component-script' && (typeof operation.content !== 'string' || !operation.content)) {
+        throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'content' });
+      }
+      break;
+    case 'asset.write_meta':
+      if (!operation.meta || typeof operation.meta !== 'object' || Array.isArray(operation.meta)) {
+        throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'meta' });
+      }
+      break;
+    case 'asset.update_text':
+      if (operation.oldText === operation.newText) {
+        throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'newText' });
+      }
+      if (operation.expectedCurrentSha256 !== undefined && !isSha256(operation.expectedCurrentSha256)) {
+        throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'expectedCurrentSha256' });
+      }
+      break;
+    case 'asset.restore_content':
+      if (!isSha256(operation.expectedCurrentSha256)) {
+        throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'expectedCurrentSha256' });
+      }
+      if (!isSha256(operation.targetSha256)) {
+        throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'targetSha256' });
+      }
+      break;
     case 'component.resize_array':
       if (!Number.isInteger(operation.length) || (operation.length as number) < 0) {
         throw new ProbeError('INVALID_WRITE_OPERATION', { index, type, field: 'length' });
@@ -843,6 +1001,10 @@ function readWriteOperation(value: unknown, index: number): WriteOperation {
       break;
   }
   return { ...operation, type } as WriteOperation;
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 }
 
 function readLocalTransform(value: unknown, index: number): void {

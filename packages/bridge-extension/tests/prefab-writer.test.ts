@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { ProbeError } from '../src/probe-errors';
 import {
   executePrefabWriteOperation,
@@ -41,10 +42,24 @@ function createDependencies(overrides: Partial<PrefabWriterDependencies> = {}): 
     unlinkPrefabInstance: async () => undefined,
     linkPrefabInstance: async () => undefined,
     resetNodeProperty: async () => undefined,
+    setPrefabInstanceOverride: async () => ({
+      targetLocalIds: ['file-label-component'],
+      previous: null
+    }),
+    removePrefabInstanceOverride: async () => ({
+      targetLocalIds: ['file-label-component'],
+      previous: { value: '旧标题' }
+    }),
     getCurrentDocumentAssetUuid: async () => 'asset-doc',
     findPrefabInstanceRoot: async () => 'n1',
+    createAsset: async (assetUrl: string) => ({ uuid: `created:${assetUrl}`, type: null }),
+    moveAsset: async () => undefined,
+    readAssetMeta: async () => ({ userData: { priority: 0 } }),
+    writeAssetMeta: async () => undefined,
+    readAssetContent: async () => 'current-content',
+    saveAssetContent: async () => undefined,
     ...overrides
-  };
+  } as PrefabWriterDependencies;
 }
 
 describe('executePrefabWriteOperation', () => {
@@ -193,6 +208,196 @@ describe('executePrefabWriteOperation', () => {
     expect(result.inverse).toEqual([]);
   });
 
+  it('asset.create 禁止空 Prefab 模板并支持目录与组件脚本', async () => {
+    const calls: unknown[][] = [];
+    const createdAssets = new Map<string, { uuid: string; type: string | null }>();
+    const dependencies = createDependencies({
+      queryAssetInfo: async (assetUrl) => createdAssets.get(assetUrl) ?? null,
+      createAsset: async (...args: unknown[]) => {
+        calls.push(args);
+        const asset = { uuid: `asset-${calls.length}`, type: null };
+        createdAssets.set(args[0] as string, asset);
+        return asset;
+      }
+    } as Partial<PrefabWriterDependencies>);
+
+    await expect(executePrefabWriteOperation({
+      type: 'asset.create', assetUrl: 'db://assets/ui/Empty.prefab', assetKind: 'prefab'
+    } as WriteOperation, dependencies)).rejects.toThrow('PREFAB_CREATION_REQUIRES_NODE');
+    await executePrefabWriteOperation({
+      type: 'asset.create', assetUrl: 'db://assets/ui', assetKind: 'folder'
+    } as WriteOperation, dependencies);
+    await executePrefabWriteOperation({
+      type: 'asset.create', assetUrl: 'db://assets/ui/Dialog.ts', assetKind: 'component-script', content: 'export class Dialog {}'
+    } as WriteOperation, dependencies);
+
+    expect(calls).toEqual([
+      ['db://assets/ui', 'folder', null],
+      ['db://assets/ui/Dialog.ts', 'component-script', 'export class Dialog {}']
+    ]);
+  });
+
+  it('asset.move 保持 UUID 并生成反向移动操作', async () => {
+    let moved = false;
+    const dependencies = createDependencies({
+      queryAssetInfo: async (url) => {
+        if (url === 'db://assets/a.ts') return moved ? null : { uuid: 'asset-a', type: 'cc.Script' };
+        if (url === 'db://assets/b.ts') return moved ? { uuid: 'asset-a', type: 'cc.Script' } : null;
+        return null;
+      },
+      moveAsset: async () => { moved = true; }
+    } as Partial<PrefabWriterDependencies>);
+
+    const result = await executePrefabWriteOperation({
+      type: 'asset.move', sourceUrl: 'db://assets/a.ts', targetUrl: 'db://assets/b.ts', expectedAssetUuid: 'asset-a'
+    } as WriteOperation, dependencies);
+
+    expect(result.inverse).toEqual([{
+      type: 'asset.move', sourceUrl: 'db://assets/b.ts', targetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-a'
+    }]);
+  });
+
+  it('asset.move 检测 UUID 漂移并拒绝成功', async () => {
+    let moved = false;
+    const dependencies = createDependencies({
+      queryAssetInfo: async (url) => {
+        if (url === 'db://assets/a.ts') return moved ? null : { uuid: 'asset-a', type: 'cc.Script' };
+        if (url === 'db://assets/b.ts') return moved ? { uuid: 'asset-b', type: 'cc.Script' } : null;
+        return null;
+      },
+      moveAsset: async () => { moved = true; }
+    } as Partial<PrefabWriterDependencies>);
+
+    await expect(executePrefabWriteOperation({
+      type: 'asset.move', sourceUrl: 'db://assets/a.ts', targetUrl: 'db://assets/b.ts', expectedAssetUuid: 'asset-a'
+    } as WriteOperation, dependencies)).rejects.toThrow('ASSET_UUID_DRIFT');
+  });
+
+  it('asset.write_meta 可回滚且 asset.delete 要求精确 UUID', async () => {
+    let deleted = false;
+    const written: unknown[] = [];
+    const dependencies = createDependencies({
+      queryAssetInfo: async () => deleted ? null : { uuid: 'asset-a', type: 'cc.Script' },
+      writeAssetMeta: async (_assetUrl: string, meta: unknown) => { written.push(meta); },
+      deleteAsset: async () => { deleted = true; }
+    } as Partial<PrefabWriterDependencies>);
+    const metaResult = await executePrefabWriteOperation({
+      type: 'asset.write_meta', assetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-a',
+      meta: { userData: { priority: 1 } }
+    } as WriteOperation, dependencies);
+    expect(metaResult.inverse).toEqual([{
+      type: 'asset.write_meta', assetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-a',
+      meta: { userData: { priority: 0 } }
+    }]);
+
+    await expect(executePrefabWriteOperation({
+      type: 'asset.delete', assetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-other'
+    } as WriteOperation, dependencies)).rejects.toThrow('ASSET_IDENTITY_MISMATCH');
+    await executePrefabWriteOperation({
+      type: 'asset.delete', assetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-a'
+    } as WriteOperation, dependencies);
+    expect(deleted).toBe(true);
+    expect(written).toEqual([{ userData: { priority: 1 } }]);
+  });
+
+  it('asset.restore_content 当前内容哈希漂移时零写入拒绝', async () => {
+    let saveCalls = 0;
+    const targetContent = 'safe-backup';
+    const dependencies = createDependencies({
+      queryAssetInfo: async () => ({ uuid: 'asset-a', type: 'cc.Prefab' }),
+      readAssetContent: async () => 'unexpected-current',
+      saveAssetContent: async () => { saveCalls += 1; }
+    });
+
+    await expect(executePrefabWriteOperation({
+      type: 'asset.restore_content',
+      assetUrl: 'db://assets/ui/Dialog.prefab',
+      expectedAssetUuid: 'asset-a',
+      expectedCurrentSha256: sha256('expected-current'),
+      content: targetContent,
+      targetSha256: sha256(targetContent)
+    } as WriteOperation, dependencies)).rejects.toThrow('ASSET_CONTENT_PRECONDITION_FAILED');
+    expect(saveCalls).toBe(0);
+  });
+
+  it('asset.restore_content 通过 AssetDB 保存并生成带哈希前置的逆操作', async () => {
+    let content = 'current-content';
+    const targetContent = 'safe-backup';
+    const dependencies = createDependencies({
+      queryAssetInfo: async () => ({ uuid: 'asset-a', type: 'cc.Prefab' }),
+      readAssetContent: async () => content,
+      saveAssetContent: async (_assetUrl, nextContent) => { content = nextContent; }
+    });
+
+    const result = await executePrefabWriteOperation({
+      type: 'asset.restore_content',
+      assetUrl: 'db://assets/ui/Dialog.prefab',
+      expectedAssetUuid: 'asset-a',
+      expectedCurrentSha256: sha256(content),
+      content: targetContent,
+      targetSha256: sha256(targetContent)
+    } as WriteOperation, dependencies);
+
+    expect(content).toBe(targetContent);
+    expect(result.after).toMatchObject({ sha256: sha256(targetContent) });
+    expect(result.inverse).toEqual([{
+      type: 'asset.restore_content',
+      assetUrl: 'db://assets/ui/Dialog.prefab',
+      expectedAssetUuid: 'asset-a',
+      expectedCurrentSha256: sha256(targetContent),
+      content: 'current-content',
+      targetSha256: sha256('current-content')
+    }]);
+  });
+
+  it('asset.update_text 只替换唯一旧文本并生成整内容安全逆操作', async () => {
+    let content = 'export enum UIID {\n  Lobby,\n}\n';
+    const beforeContent = content;
+    const dependencies = createDependencies({
+      queryAssetInfo: async () => ({ uuid: 'game-ui-config', type: 'cc.Script' }),
+      readAssetContent: async () => content,
+      saveAssetContent: async (_assetUrl, nextContent) => { content = nextContent; }
+    });
+
+    const result = await executePrefabWriteOperation({
+      type: 'asset.update_text',
+      assetUrl: 'db://assets/script/GameUIConfig.ts',
+      expectedAssetUuid: 'game-ui-config',
+      expectedCurrentSha256: sha256(beforeContent),
+      oldText: '  Lobby,',
+      newText: '  Lobby,\n  CocosAiValidation,'
+    } as WriteOperation, dependencies);
+
+    expect(content).toContain('CocosAiValidation');
+    expect(result.after).toMatchObject({ sha256: sha256(content), matchCount: 1 });
+    expect(result.inverse).toEqual([{
+      type: 'asset.restore_content',
+      assetUrl: 'db://assets/script/GameUIConfig.ts',
+      expectedAssetUuid: 'game-ui-config',
+      expectedCurrentSha256: sha256(content),
+      content: beforeContent,
+      targetSha256: sha256(beforeContent)
+    }]);
+  });
+
+  it('asset.update_text 旧文本多处命中时零写入拒绝', async () => {
+    let saveCalls = 0;
+    const dependencies = createDependencies({
+      queryAssetInfo: async () => ({ uuid: 'game-ui-config', type: 'cc.Script' }),
+      readAssetContent: async () => 'Lobby\nLobby\n',
+      saveAssetContent: async () => { saveCalls += 1; }
+    });
+
+    await expect(executePrefabWriteOperation({
+      type: 'asset.update_text',
+      assetUrl: 'db://assets/script/GameUIConfig.ts',
+      expectedAssetUuid: 'game-ui-config',
+      oldText: 'Lobby',
+      newText: 'CocosAiValidation'
+    } as WriteOperation, dependencies)).rejects.toThrow('ASSET_TEXT_MATCH_COUNT_INVALID');
+    expect(saveCalls).toBe(0);
+  });
+
   it('prefab.revert_override 非实例节点拒绝', async () => {
     const dependencies = createDependencies({
       getPrefabInstanceInfo: async () => createInstanceInfo({ instanceFileId: null, prefabAssetUuid: null })
@@ -237,6 +442,68 @@ describe('executePrefabWriteOperation', () => {
 
     expect(reset).toEqual({ uuid: 'n1', path: 'position' });
     expect(result.inverse).toEqual([]);
+  });
+
+  it('prefab.instance_override 精确写入实例覆盖并生成精确还原逆操作', async () => {
+    let written: unknown = null;
+    const dependencies = createDependencies({
+      setPrefabInstanceOverride: async (...args) => {
+        written = args;
+        return { targetLocalIds: ['nested-instance', 'label-component'], previous: null };
+      },
+      getPrefabInstanceInfo: async () => createInstanceInfo({
+        overrideCount: 1,
+        overridePaths: ['string'],
+        overrideTargets: [{
+          path: 'string', targetFileId: 'nested-instance',
+          targetLocalIds: ['nested-instance', 'label-component']
+        }]
+      })
+    });
+
+    const result = await executePrefabWriteOperation({
+      type: 'prefab.instance_override', instanceRootUuid: 'instance-root',
+      targetObjectUuid: 'label-component', targetNodePath: 'Root/Panel/Label',
+      propertyPath: 'string', value: '新标题'
+    } as WriteOperation, dependencies);
+
+    expect(written).toEqual([
+      'instance-root', 'label-component', 'string', '新标题'
+    ]);
+    expect(result.targetLocalIds).toEqual(['nested-instance', 'label-component']);
+    expect(result.inverse).toEqual([{
+      type: 'prefab.revert_override', instanceRootUuid: 'instance-root',
+      targetObjectUuid: 'label-component', targetNodePath: 'Root/Panel/Label',
+      propertyPath: 'string'
+    }]);
+  });
+
+  it('prefab.revert_override 带目标对象时精确移除目标属性覆盖', async () => {
+    let removed: unknown = null;
+    const dependencies = createDependencies({
+      removePrefabInstanceOverride: async (...args) => {
+        removed = args;
+        return {
+          targetLocalIds: ['nested-instance', 'label-component'],
+          previous: { value: '新标题' }
+        };
+      }
+    });
+
+    const result = await executePrefabWriteOperation({
+      type: 'prefab.revert_override', instanceRootUuid: 'instance-root',
+      targetObjectUuid: 'label-component', targetNodePath: 'Root/Panel/Label',
+      propertyPath: 'string'
+    } as WriteOperation, dependencies);
+
+    expect(removed).toEqual(['instance-root', 'label-component', 'string']);
+    expect(result.targetLocalIds).toEqual(['nested-instance', 'label-component']);
+    expect(result.previousOverride).toEqual({ value: '新标题' });
+    expect(result.inverse).toEqual([{
+      type: 'prefab.instance_override', instanceRootUuid: 'instance-root',
+      targetObjectUuid: 'label-component', targetNodePath: 'Root/Panel/Label',
+      propertyPath: 'string', value: '新标题'
+    }]);
   });
 
   it('prefab.apply_to_source 非实例节点拒绝', async () => {
@@ -353,3 +620,7 @@ describe('executePrefabWriteOperation', () => {
     expect(result.after?.prefabAssetUuid).toBe('asset-2');
   });
 });
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}

@@ -64,6 +64,177 @@ describe('buildDesignPlan', () => {
     expect(plan.items.findIndex((item) => item.target === '$label')).toBeLessThan(plan.items.indexOf(referenceItem!));
   });
 
+  it('引用数组保留顺序并为每个逻辑 ID 建立依赖', () => {
+    const target = targetDocument({
+      tree: [{
+        id: '$root', name: 'root',
+        children: [
+          { id: '$first', name: 'first' },
+          { id: '$second', name: 'second' },
+          { id: '$consumer', name: 'consumer' }
+        ]
+      }]
+    });
+    const diffItems: DesignDiffItem[] = [
+      {
+        kind: 'reference.set', logicalId: '$consumer', componentType: 'FrameList',
+        propertyPath: 'frames', reference: ['$first', '$second']
+      },
+      { kind: 'node.create', logicalId: '$consumer', parentLogicalId: '$root', name: 'consumer' },
+      { kind: 'node.create', logicalId: '$second', parentLogicalId: '$root', name: 'second' },
+      { kind: 'node.create', logicalId: '$first', parentLogicalId: '$root', name: 'first' },
+      { kind: 'node.create', logicalId: '$root', parentLogicalId: null, name: 'root' }
+    ];
+
+    const plan = buildDesignPlan(diffItems, target);
+    expect(plan.items.find((item) => item.kind === 'component.set_reference')).toMatchObject({
+      params: { reference: ['$first', '$second'] },
+      dependsOn: expect.arrayContaining(['$consumer', '$first', '$second'])
+    });
+  });
+
+  it('显式 UITransform 属性在 Sprite 和 Label 的尺寸副作用之后写入', () => {
+    const target = targetDocument({
+      tree: [{ id: '$root', name: 'root', children: [
+        { id: '$background', name: 'Background' },
+        { id: '$title', name: 'Title' }
+      ] }]
+    });
+    const plan = buildDesignPlan([
+      {
+        kind: 'component.set_property', logicalId: '$background', componentType: 'cc.UITransform',
+        propertyPath: 'contentSize', value: { width: 640, height: 360 }
+      },
+      {
+        kind: 'reference.set', logicalId: '$background', componentType: 'cc.Sprite',
+        propertyPath: 'spriteFrame', reference: { kind: 'asset', assetUuid: 'frame-a' }
+      },
+      {
+        kind: 'component.set_property', logicalId: '$title', componentType: 'cc.UITransform',
+        propertyPath: 'contentSize', value: { width: 400, height: 80 }
+      },
+      {
+        kind: 'component.set_property', logicalId: '$title', componentType: 'cc.Label',
+        propertyPath: 'string', value: 'Cocos AI 0.2.0'
+      }
+    ], target);
+
+    const backgroundSize = plan.items.findIndex((item) => item.target === '$background'
+      && item.kind === 'component.set_property' && item.params?.componentType === 'cc.UITransform');
+    const spriteFrame = plan.items.findIndex((item) => item.target === '$background'
+      && item.kind === 'component.set_reference');
+    const titleSize = plan.items.findIndex((item) => item.target === '$title'
+      && item.kind === 'component.set_property' && item.params?.componentType === 'cc.UITransform');
+    const labelString = plan.items.findIndex((item) => item.target === '$title'
+      && item.kind === 'component.set_property' && item.params?.componentType === 'cc.Label');
+
+    expect(spriteFrame).toBeLessThan(backgroundSize);
+    expect(labelString).toBeLessThan(titleSize);
+  });
+
+  it('新建 Label 声明固定 contentSize 时补 CLAMP，显式 overflow 不被覆盖', () => {
+    const target = targetDocument({
+      tree: [{
+        id: '$title', name: 'Title', components: [
+          { type: 'cc.UITransform', properties: { contentSize: { width: 400, height: 80 } } },
+          { type: 'cc.Label', properties: { string: 'Cocos AI' } }
+        ]
+      }]
+    });
+    const plan = buildDesignPlan([
+      { kind: 'node.create', logicalId: '$title', parentLogicalId: null, name: 'Title' },
+      {
+        kind: 'component.add', logicalId: '$title', componentType: 'cc.UITransform',
+        properties: { contentSize: { width: 400, height: 80 } }
+      },
+      {
+        kind: 'component.add', logicalId: '$title', componentType: 'cc.Label',
+        properties: { string: 'Cocos AI' }
+      }
+    ], target);
+
+    expect(plan.items).toContainEqual(expect.objectContaining({
+      kind: 'component.set_property',
+      target: '$title',
+      propertyPath: 'overflow',
+      value: 1,
+      params: expect.objectContaining({ componentType: 'cc.Label' })
+    }));
+
+    const explicitTarget = targetDocument({
+      tree: [{
+        id: '$title', name: 'Title', components: [
+          { type: 'cc.UITransform', properties: { contentSize: { width: 400, height: 80 } } },
+          { type: 'cc.Label', properties: { string: 'Cocos AI', overflow: 0 } }
+        ]
+      }]
+    });
+    const explicitPlan = buildDesignPlan([
+      { kind: 'node.create', logicalId: '$title', parentLogicalId: null, name: 'Title' },
+      {
+        kind: 'component.add', logicalId: '$title', componentType: 'cc.UITransform',
+        properties: { contentSize: { width: 400, height: 80 } }
+      },
+      {
+        kind: 'component.add', logicalId: '$title', componentType: 'cc.Label',
+        properties: { string: 'Cocos AI', overflow: 0 }
+      }
+    ], explicitTarget);
+
+    expect(explicitPlan.items.filter((item) => item.propertyPath === 'overflow')).toEqual([
+      expect.objectContaining({ value: 0 })
+    ]);
+  });
+
+  it('document.extract_subtree 生成身份屏障计划并依赖目标节点', () => {
+    const target = targetDocument({
+      tree: [{ id: '$root', name: 'root', children: [{ id: '$dialog', name: 'dialog' }] }],
+      operations: [{
+        type: 'document.extract_subtree', nodeId: '$dialog', assetUrl: 'db://assets/ui/Dialog.prefab'
+      }]
+    });
+    const plan = buildDesignPlan([
+      { kind: 'node.create', logicalId: '$root', parentLogicalId: null, name: 'root' },
+      { kind: 'node.create', logicalId: '$dialog', parentLogicalId: '$root', name: 'dialog' }
+    ], target);
+
+    expect(plan.items.at(-1)).toMatchObject({
+      kind: 'document.extract_subtree', target: '$dialog',
+      params: { nodeLogicalId: '$dialog', assetUrl: 'db://assets/ui/Dialog.prefab' },
+      dependsOn: expect.arrayContaining(['$dialog'])
+    });
+  });
+
+  it('prefab.revert_override 生成可精确物化的声明式还原计划', () => {
+    const target = targetDocument({
+      tree: [{
+        id: '$instance', name: 'panel', path: 'Root/Panel', prefabInstance: { assetUuid: 'asset-panel' },
+        children: [{ id: '$label', name: 'label', path: 'Root/Panel/Label' }]
+      }],
+      operations: [{
+        type: 'prefab.revert_override',
+        instanceRootId: '$instance',
+        targetId: '$label',
+        componentType: 'cc.Label',
+        propertyPath: 'string'
+      }]
+    });
+
+    const plan = buildDesignPlan([], target, { documentEditMode: 'prefab' });
+
+    expect(plan.items).toEqual([expect.objectContaining({
+      kind: 'prefab.revert_override',
+      target: '$label',
+      propertyPath: 'string',
+      params: {
+        instanceRootLogicalId: '$instance',
+        targetObjectLogicalId: '$label',
+        componentType: 'cc.Label',
+        targetNodePath: 'Root/Panel/Label'
+      }
+    })]);
+  });
+
   it('源预制体作用域组装影响分析，实例内容写入标注 Override 层', () => {
     const sourceTarget = targetDocument({
       document: { scope: 'source-prefab', assetUuid: 'asset-source' }
@@ -128,7 +299,38 @@ describe('buildDesignPlan', () => {
     });
   });
 
-  it('预制体编辑模式中的嵌套实例内容写入进入 unresolved', () => {
+  it('预制体编辑模式中的嵌套实例属性写入生成显式 override', () => {
+    const target = targetDocument({
+      tree: [{
+        id: '$instance', name: 'panel', path: 'Root/Panel', prefabInstance: { assetUuid: 'asset-panel' },
+        children: [{ id: '$label', name: 'label', path: 'Root/Panel/Label' }]
+      }]
+    });
+    const plan = buildDesignPlan([
+      {
+        kind: 'component.set_property', logicalId: '$label', targetUuid: 'node-label',
+        componentUuid: 'component-label', componentType: 'cc.Label', propertyPath: 'string', value: '可写'
+      }
+    ], target, { documentEditMode: 'prefab' });
+
+    expect(plan.unresolved).toEqual([]);
+    expect(plan.items).toEqual([expect.objectContaining({
+      kind: 'prefab.instance_override',
+      target: '$label',
+      propertyPath: 'string',
+      value: '可写',
+      producesOverride: true,
+      overrideLayer: 'instance:$instance',
+      params: expect.objectContaining({
+        instanceRootLogicalId: '$instance',
+        targetObjectUuid: 'component-label',
+        componentType: 'cc.Label',
+        targetNodePath: 'Root/Panel/Label'
+      })
+    })]);
+  });
+
+  it('预制体编辑模式中的嵌套实例结构修改仍拒绝', () => {
     const target = targetDocument({
       tree: [{
         id: '$instance', name: 'panel', prefabInstance: { assetUuid: 'asset-panel' },
@@ -136,10 +338,10 @@ describe('buildDesignPlan', () => {
       }]
     });
     const plan = buildDesignPlan([
-      { kind: 'component.set_property', logicalId: '$label', componentType: 'cc.Label', propertyPath: 'string', value: '不可写' }
+      { kind: 'component.add', logicalId: '$label', targetUuid: 'node-label', componentType: 'cc.Button' }
     ], target, { documentEditMode: 'prefab' });
 
     expect(plan.items).toHaveLength(0);
-    expect(plan.unresolved[0]).toMatchObject({ path: '$label.string' });
+    expect(plan.unresolved[0]).toMatchObject({ path: '$label' });
   });
 });

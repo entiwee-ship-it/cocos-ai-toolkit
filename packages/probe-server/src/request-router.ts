@@ -4,6 +4,30 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+export interface RequestErrorPayload {
+  code: string;
+  message: string;
+  details: unknown;
+  stage?: string;
+  nextAction?: string;
+}
+
+export class RequestRouterError extends Error {
+  readonly code: string;
+  readonly details: unknown;
+  readonly stage?: string;
+  readonly nextAction?: string;
+
+  constructor(readonly payload: RequestErrorPayload) {
+    super(formatRequestError(payload));
+    this.name = 'RequestRouterError';
+    this.code = payload.code;
+    this.details = payload.details;
+    this.stage = payload.stage;
+    this.nextAction = payload.nextAction;
+  }
+}
+
 export class RequestRouter {
   private readonly pending = new Map<string, PendingRequest>();
 
@@ -18,7 +42,13 @@ export class RequestRouter {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error('OUTCOME_UNKNOWN'));
+        reject(new RequestRouterError({
+          code: 'OUTCOME_UNKNOWN',
+          message: `等待 Bridge 响应超过 ${timeoutMs}ms`,
+          details: { timeoutMs },
+          stage: 'unknown',
+          nextAction: '查询事务状态；确认结局前禁止重试写入'
+        }));
       }, timeoutMs);
 
       this.pending.set(requestId, { resolve, reject, timeout });
@@ -45,7 +75,7 @@ export class RequestRouter {
     if (ok) {
       request.resolve(payload);
     } else {
-      request.reject(new Error(`BRIDGE_REQUEST_FAILED: ${JSON.stringify(payload)}`));
+      request.reject(new RequestRouterError(normalizeRequestErrorPayload(payload)));
     }
 
     return true;
@@ -61,4 +91,37 @@ export class RequestRouter {
     }
     this.pending.clear();
   }
+}
+
+export function toServerErrorPayload(error: unknown): RequestErrorPayload {
+  if (error instanceof RequestRouterError) return error.payload;
+  if (error instanceof Error) {
+    return { code: error.message || 'UNKNOWN_SERVER_ERROR', message: error.message, details: {} };
+  }
+  return { code: 'UNKNOWN_SERVER_ERROR', message: 'Unknown server error', details: {} };
+}
+
+function normalizeRequestErrorPayload(payload: unknown): RequestErrorPayload {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return { code: 'BRIDGE_REQUEST_FAILED', message: 'Bridge request failed', details: payload };
+  }
+  const record = payload as Record<string, unknown>;
+  const code = typeof record.code === 'string' && record.code ? record.code : 'BRIDGE_REQUEST_FAILED';
+  const message = typeof record.message === 'string' && record.message ? record.message : code;
+  return {
+    code,
+    message,
+    details: record.details ?? {},
+    ...(typeof record.stage === 'string' ? { stage: record.stage } : {}),
+    ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {})
+  };
+}
+
+function formatRequestError(payload: RequestErrorPayload): string {
+  return [
+    payload.code,
+    payload.message !== payload.code ? payload.message : null,
+    payload.stage ? `stage=${payload.stage}` : null,
+    payload.nextAction ? `nextAction=${payload.nextAction}` : null
+  ].filter(Boolean).join(': ');
 }

@@ -518,7 +518,7 @@ export function registerCocosRuntimeGatedTools(
   }, async (input) => toToolResult(await service.instantiateRuntimePrefab(input)));
 
   server.registerTool('cocos_runtime_run_scenario', {
-    description: '执行自动场景验证：launch/wait-node/assert-property/dispatch-input/assert-console/capture/assert-image-diff 步骤编排，产出逐项证据报告。',
+    description: '执行 launch/wait/assert/input/capture 场景并产出逐项证据；SESSION_REQUIRED/LOST 时传有效 sessionId 或先 launch 后重跑。',
     inputSchema: {
       sessionId: zod.string().min(1).optional(),
       projectId: zod.string().min(1).optional(),

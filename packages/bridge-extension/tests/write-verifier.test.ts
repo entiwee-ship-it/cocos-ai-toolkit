@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import type { ComponentWriteOpResult } from '../src/component-writer.js';
 import type { NodeWriteOpResult } from '../src/node-writer.js';
 import type { WriteTransactionRequest } from '../src/transaction-manager.js';
@@ -61,6 +62,101 @@ describe('saveAndVerifyWriteTransaction', () => {
 
     expect(report.passed).toBe(true);
     expect(report.items[0]).toMatchObject({ expected: '节点存在', actual: '节点存在', passed: true });
+  });
+
+  it('node.create 保存后 UUID 重建时按稳定层级路径重定位', async () => {
+    const dependencies = createDependencies();
+    dependencies.getNodeInfo = async () => null;
+    (dependencies as WriteVerifierDependencies & {
+      getNodeInfoByStablePath(path: string): Promise<Record<string, unknown> | null>;
+    }).getNodeInfoByStablePath = async (path) => path === '/FriendsRoomView/CocosAiValidationView/Title'
+      ? { uuid: 'rebuilt-title', name: 'Title' }
+      : null;
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [{
+        operation: {
+          type: 'node.create',
+          parentNodeUuid: 'stale-parent',
+          name: 'Title',
+          resultNodeUuid: 'stale-title',
+          resultNodeStablePath: '/FriendsRoomView/CocosAiValidationView/Title'
+        },
+        nodeUuid: 'stale-title',
+        before: null,
+        after: { uuid: 'stale-title', name: 'Title' },
+        inverse: [{ type: 'node.delete', nodeUuid: 'stale-title' }]
+      }],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({ expected: '节点存在', actual: '节点存在', passed: true });
+  });
+
+  it('component.add 复用现有组件时作为 no-op 验证且不触发保存', async () => {
+    const dependencies = createDependencies();
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [{
+        operation: {
+          type: 'component.add',
+          nodeUuid: 'node-1',
+          componentType: 'cc.UITransform',
+          resultComponentUuid: 'comp-ui-transform'
+        },
+        componentUuid: 'comp-ui-transform',
+        before: { uuid: 'comp-ui-transform', type: 'cc.UITransform', enabled: true },
+        after: { uuid: 'comp-ui-transform', type: 'cc.UITransform', enabled: true },
+        inverse: [],
+        changed: false
+      } as never],
+      dependencies
+    );
+
+    expect(dependencies.calls).toEqual([]);
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({ expected: '组件存在', actual: '组件存在', passed: true });
+  });
+
+  it('component.add 保存后 UUID 重建时按节点稳定路径和同类型序号重定位', async () => {
+    const dependencies = createDependencies();
+    dependencies.getComponentInfo = async () => null;
+    (dependencies as WriteVerifierDependencies & {
+      getComponentInfoByStableLocator(
+        nodeStablePath: string,
+        componentType: string,
+        sameTypeIndex: number
+      ): Promise<Record<string, unknown> | null>;
+    }).getComponentInfoByStableLocator = async (nodeStablePath, componentType, sameTypeIndex) => (
+      nodeStablePath === '/FriendsRoomView~0/CocosAiValidationView~0/Title~0'
+      && componentType === 'cc.UITransform'
+      && sameTypeIndex === 0
+        ? { uuid: 'rebuilt-ui-transform', type: componentType, enabled: true }
+        : null
+    );
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [{
+        operation: {
+          type: 'component.add',
+          nodeUuid: 'stale-title',
+          componentType: 'cc.UITransform',
+          resultComponentUuid: 'stale-ui-transform',
+          resultComponentNodeStablePath: '/FriendsRoomView~0/CocosAiValidationView~0/Title~0',
+          resultComponentType: 'cc.UITransform',
+          resultComponentSameTypeIndex: 0
+        },
+        componentUuid: 'stale-ui-transform',
+        before: null,
+        after: { uuid: 'stale-ui-transform', type: 'cc.UITransform', enabled: true },
+        inverse: [{ type: 'component.remove', componentUuid: 'stale-ui-transform' }]
+      } as never],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({ expected: '组件存在', actual: '组件存在', passed: true });
   });
 
   it('node.delete 后节点仍可读到时验证失败', async () => {
@@ -131,6 +227,379 @@ describe('saveAndVerifyWriteTransaction', () => {
 
     expect(report.passed).toBe(true);
     expect(report.items[0]).toMatchObject({ expected: 'node-9', actual: 'node-9', passed: true });
+  });
+
+  it('set_reference 对引用数组逐项校验 UUID 与顺序', async () => {
+    const dependencies = createDependencies();
+    dependencies.getComponentProperty = async () => [
+      { uuid: 'frame-a' },
+      { uuid: 'frame-b' }
+    ];
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [{
+        operation: {
+          type: 'component.set_reference',
+          componentUuid: 'comp-1',
+          propertyPath: 'textureFrames',
+          reference: [
+            { kind: 'asset', assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true },
+            { kind: 'asset', assetUuid: 'texture-b', subAssetUuid: 'frame-b', assetType: 'cc.SpriteFrame', path: null, available: true }
+          ]
+        },
+        componentUuid: 'comp-1', before: null, after: null, inverse: []
+      }],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({
+      expected: ['frame-a', 'frame-b'], actual: ['frame-a', 'frame-b'], passed: true
+    });
+  });
+
+  it('set_property 对嵌套 ccclass 数组中的 Enum 与引用做结构化 roundtrip 校验', async () => {
+    const dependencies = createDependencies();
+    dependencies.getComponentProperty = async () => [
+      { mode: 2, target: { uuid: 'node-a' }, runtimeOnly: true },
+      { mode: 3, target: { uuid: 'frame-a' }, runtimeOnly: true }
+    ];
+    const value = [
+      { mode: 2, target: { kind: 'node', objectUuid: 'node-a', fileId: null, nodePath: null, available: true } },
+      { mode: 3, target: { kind: 'asset', assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true } }
+    ];
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [componentResult(
+        { componentUuid: 'comp-custom' },
+        { type: 'component.set_property', componentUuid: 'comp-custom', propertyPath: 'items', value }
+      )],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({ passed: true });
+  });
+
+  it('AssetDB move 与 write_meta 保存后重读 UUID 和元数据', async () => {
+    const dependencies = createDependencies();
+    dependencies.queryAssetInfo = async (assetUrl) => assetUrl === 'db://assets/b.ts'
+      ? { uuid: 'asset-a', type: 'cc.Script' }
+      : null;
+    dependencies.readAssetMeta = async () => ({ userData: { priority: 1 } });
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [
+        {
+          operation: {
+            type: 'asset.move', sourceUrl: 'db://assets/a.ts', targetUrl: 'db://assets/b.ts',
+            expectedAssetUuid: 'asset-a'
+          },
+          nodeUuid: null, assetUuid: 'asset-a', before: null, after: null, inverse: []
+        },
+        {
+          operation: {
+            type: 'asset.write_meta', assetUrl: 'db://assets/b.ts', expectedAssetUuid: 'asset-a',
+            meta: { userData: { priority: 1 } }
+          },
+          nodeUuid: null, assetUuid: 'asset-a', before: null, after: null, inverse: []
+        }
+      ],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ expected: 'asset-a', actual: 'asset-a', passed: true }),
+      expect.objectContaining({ expected: { userData: { priority: 1 } }, passed: true })
+    ]));
+  });
+
+  it('asset.restore_content 按 UUID 与目标内容 SHA256 独立重读验证', async () => {
+    const dependencies = createDependencies();
+    dependencies.queryAssetInfo = async () => ({ uuid: 'asset-a', type: 'cc.Prefab' });
+    dependencies.readAssetContent = async () => 'safe-backup';
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest({ save: false }),
+      [{
+        operation: {
+          type: 'asset.restore_content',
+          assetUrl: 'db://assets/ui/Dialog.prefab',
+          expectedAssetUuid: 'asset-a',
+          expectedCurrentSha256: 'a'.repeat(64),
+          content: 'safe-backup',
+          targetSha256: '25a62950a83df5994d4dd91b312e983dfe2a154bd541a5fbf2b76d3541db1092'
+        },
+        nodeUuid: null, assetUuid: 'asset-a', before: null, after: null, inverse: []
+      }],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({
+      expected: { assetUuid: 'asset-a', sha256: '25a62950a83df5994d4dd91b312e983dfe2a154bd541a5fbf2b76d3541db1092' },
+      actual: { assetUuid: 'asset-a', sha256: '25a62950a83df5994d4dd91b312e983dfe2a154bd541a5fbf2b76d3541db1092' },
+      passed: true
+    });
+  });
+
+  it('asset.update_text 按执行结果目标 SHA256 独立重读验证', async () => {
+    const content = 'export enum UIID {\n  Lobby,\n  CocosAiValidation,\n}\n';
+    const dependencies = createDependencies();
+    dependencies.queryAssetInfo = async () => ({ uuid: 'game-ui-config', type: 'cc.Script' });
+    dependencies.readAssetContent = async () => content;
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest({ save: false }),
+      [{
+        operation: {
+          type: 'asset.update_text',
+          assetUrl: 'db://assets/script/GameUIConfig.ts',
+          expectedAssetUuid: 'game-ui-config',
+          oldText: '  Lobby,',
+          newText: '  Lobby,\n  CocosAiValidation,',
+          resultTargetSha256: createHash('sha256').update(content).digest('hex')
+        },
+        nodeUuid: null, assetUuid: 'game-ui-config', before: null, after: null, inverse: []
+      }],
+      dependencies
+    );
+
+    expect(report.items[0]).toMatchObject({
+      expected: { assetUuid: 'game-ui-config', sha256: createHash('sha256').update(content).digest('hex') },
+      actual: { assetUuid: 'game-ui-config', sha256: createHash('sha256').update(content).digest('hex') },
+      passed: true
+    });
+  });
+
+  it('prefab.instance_override 同时验证最终值与精确 localID 覆盖记录', async () => {
+    const dependencies = createDependencies();
+    dependencies.getComponentProperty = async () => '新标题';
+    dependencies.getPrefabInstanceInfo = async (nodeUuid) => ({
+      nodeUuid,
+      name: 'Panel',
+      prefabAssetUuid: 'asset-panel',
+      sourceObjectFileId: 'panel-root',
+      instanceFileId: 'panel-instance',
+      state: 2,
+      isApplicable: true,
+      isRevertable: true,
+      isUnwrappable: true,
+      parentUuid: null,
+      childCount: 1,
+      overrideCount: 1,
+      overridePaths: ['string'],
+      overrideTargets: [{
+        path: 'string', targetFileId: 'nested-instance',
+        targetLocalIds: ['nested-instance', 'label-component']
+      }]
+    });
+    const report = await saveAndVerifyWriteTransaction(
+      writeRequest(),
+      [{
+        operation: {
+          type: 'prefab.instance_override', instanceRootUuid: 'instance-root',
+          targetObjectUuid: 'comp-1', propertyPath: 'string', value: '新标题',
+          resultTargetLocalIds: ['nested-instance', 'label-component']
+        },
+        nodeUuid: 'instance-root', assetUuid: null,
+        before: null, after: null, inverse: [],
+        targetLocalIds: ['nested-instance', 'label-component']
+      }],
+      dependencies
+    );
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({ passed: true });
+  });
+
+  it('prefab.instance_override 重载后用稳定路径和 FileID 重定位新 UUID', async () => {
+    const dependencies = createDependencies();
+    dependencies.getPrefabInstanceInfo = async (nodeUuid) => nodeUuid === 'instance-new'
+      ? prefabInfo({
+          nodeUuid,
+          stablePath: '/Scene~0/Panel~0',
+          prefabAssetUuid: 'asset-panel',
+          instanceFileId: 'instance-file-id',
+          overrideCount: 1,
+          overridePaths: ['string'],
+          overrideTargets: [{
+            path: 'string',
+            targetFileId: 'nested-instance',
+            targetLocalIds: ['nested-instance', 'label-component']
+          }]
+        })
+      : null;
+    dependencies.getNodeInfoByStablePath = async (stablePath) => stablePath === '/Scene~0/Panel~0'
+      ? { uuid: 'instance-new' }
+      : null;
+    const getPrefabTargetProperty = vi.fn(async () => '新标题');
+    (dependencies as WriteVerifierDependencies & {
+      getPrefabTargetProperty(
+        instanceRootUuid: string,
+        targetLocalIds: string[],
+        propertyPath: string
+      ): Promise<unknown>;
+    }).getPrefabTargetProperty = getPrefabTargetProperty;
+
+    const report = await saveAndVerifyWriteTransaction(writeRequest(), [{
+      operation: {
+        type: 'prefab.instance_override',
+        instanceRootUuid: 'instance-old',
+        targetObjectUuid: 'label-old',
+        propertyPath: 'string',
+        value: '新标题',
+        resultNodeStablePath: '/Scene~0/Panel~0',
+        resultPrefabAssetUuid: 'asset-panel',
+        resultPrefabInstanceFileId: 'instance-file-id',
+        resultTargetLocalIds: ['nested-instance', 'label-component']
+      },
+      nodeUuid: 'instance-old', assetUuid: null,
+      before: null, after: null, inverse: [],
+      targetLocalIds: ['nested-instance', 'label-component']
+    }], dependencies);
+
+    expect(report.passed).toBe(true);
+    expect(getPrefabTargetProperty).toHaveBeenCalledWith(
+      'instance-new',
+      ['nested-instance', 'label-component'],
+      'string'
+    );
+  });
+
+  it('prefab.revert_override 重载后同时验证覆盖已删除且属性已恢复源值', async () => {
+    const dependencies = createDependencies();
+    dependencies.getPrefabInstanceInfo = async (nodeUuid) => nodeUuid === 'instance-new'
+      ? prefabInfo({
+          nodeUuid,
+          stablePath: '/Scene~0/Panel~0',
+          prefabAssetUuid: 'asset-panel',
+          instanceFileId: 'instance-file-id',
+          overrideCount: 0,
+          overridePaths: [],
+          overrideTargets: []
+        })
+      : null;
+    dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'instance-new' });
+    const getPrefabTargetProperty = vi.fn(async () => 'Source Value');
+    (dependencies as WriteVerifierDependencies & {
+      getPrefabTargetProperty(
+        instanceRootUuid: string,
+        targetLocalIds: string[],
+        propertyPath: string
+      ): Promise<unknown>;
+    }).getPrefabTargetProperty = getPrefabTargetProperty;
+
+    const report = await saveAndVerifyWriteTransaction(writeRequest(), [{
+      operation: {
+        type: 'prefab.revert_override',
+        instanceRootUuid: 'instance-old',
+        targetObjectUuid: 'label-old',
+        propertyPath: 'string',
+        resultNodeStablePath: '/Scene~0/Panel~0',
+        resultPrefabAssetUuid: 'asset-panel',
+        resultPrefabInstanceFileId: 'instance-file-id',
+        resultTargetLocalIds: ['nested-instance', 'label-component'],
+        resultHadPreviousOverride: true,
+        resultPreviousOverrideValue: 'Override Applied'
+      },
+      nodeUuid: 'instance-old', assetUuid: null,
+      before: null, after: null, inverse: [],
+      targetLocalIds: ['nested-instance', 'label-component']
+    }], dependencies);
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0].actual).toMatchObject({
+      overrideRemoved: true,
+      restoredValue: 'Source Value'
+    });
+  });
+
+  it('node.rename 重载后用稳定路径验证新 UUID', async () => {
+    const dependencies = createDependencies();
+    dependencies.getNodeInfo = async () => null;
+    dependencies.getNodeInfoByStablePath = async (stablePath) => stablePath === '/Scene~0/Renamed~0'
+      ? { uuid: 'node-new', name: 'Renamed' }
+      : null;
+
+    const report = await saveAndVerifyWriteTransaction(writeRequest(), [nodeResult({
+      nodeUuid: 'node-old',
+      after: { uuid: 'node-old', name: 'Renamed', stablePath: '/Scene~0/Renamed~0' }
+    }, {
+      type: 'node.rename',
+      nodeUuid: 'node-old',
+      name: 'Renamed',
+      resultNodeStablePath: '/Scene~0/Renamed~0'
+    })], dependencies);
+
+    expect(report.passed).toBe(true);
+  });
+
+  it('node.delete 重载后仍能用删除前稳定路径发现残留节点', async () => {
+    const dependencies = createDependencies();
+    dependencies.getNodeInfo = async () => null;
+    dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'node-new', name: 'StillHere' });
+
+    const report = await saveAndVerifyWriteTransaction(writeRequest(), [nodeResult({
+      nodeUuid: 'node-old',
+      before: { uuid: 'node-old', name: 'StillHere', stablePath: '/Scene~0/StillHere~0' },
+      after: null
+    }, {
+      type: 'node.delete',
+      nodeUuid: 'node-old',
+      resultNodeStablePath: '/Scene~0/StillHere~0'
+    })], dependencies);
+
+    expect(report.passed).toBe(false);
+    expect(report.items[0].actual).toBe('节点仍存在');
+  });
+
+  it('component.set_property 重载后用节点路径和组件序号读取新 UUID', async () => {
+    const dependencies = createDependencies();
+    dependencies.getComponentInfo = async () => null;
+    dependencies.getComponentInfoByStableLocator = async () => ({
+      uuid: 'component-new', type: 'cc.Label', enabled: true
+    });
+    dependencies.getComponentProperty = async (componentUuid) => componentUuid === 'component-new'
+      ? 'Saved Value'
+      : undefined;
+
+    const report = await saveAndVerifyWriteTransaction(writeRequest(), [componentResult({
+      componentUuid: 'component-old',
+      after: null
+    }, {
+      type: 'component.set_property',
+      componentUuid: 'component-old',
+      propertyPath: 'string',
+      value: 'Saved Value',
+      resultComponentNodeStablePath: '/Scene~0/Label~0',
+      resultComponentType: 'cc.Label',
+      resultComponentSameTypeIndex: 0
+    })], dependencies);
+
+    expect(report.passed).toBe(true);
+  });
+
+  it('component.remove 重载后仍能用稳定 locator 发现残留组件', async () => {
+    const dependencies = createDependencies();
+    dependencies.getComponentInfo = async () => null;
+    dependencies.getComponentInfoByStableLocator = async () => ({
+      uuid: 'component-new', type: 'cc.Label', enabled: true
+    });
+
+    const report = await saveAndVerifyWriteTransaction(writeRequest(), [componentResult({
+      componentUuid: 'component-old',
+      before: null,
+      after: null
+    }, {
+      type: 'component.remove',
+      componentUuid: 'component-old',
+      resultComponentNodeStablePath: '/Scene~0/Label~0',
+      resultComponentType: 'cc.Label',
+      resultComponentSameTypeIndex: 0
+    })], dependencies);
+
+    expect(report.passed).toBe(false);
+    expect(report.items[0].actual).toBe('组件仍存在');
   });
 
   it('save 为 false 时不保存不重开，直接对编辑器现状重读验证', async () => {
@@ -227,6 +696,29 @@ function createDependencies(options: {
       overridePaths: [],
       overrideTargets: []
     }),
-    queryAssetInfo: async () => null
+    queryAssetInfo: async () => null,
+    readAssetMeta: async () => ({}),
+    readAssetContent: async () => ''
   };
+}
+
+function prefabInfo(overrides: Record<string, unknown> = {}) {
+  return {
+    nodeUuid: 'instance-root',
+    name: 'Panel',
+    stablePath: '/Scene~0/Panel~0',
+    prefabAssetUuid: 'asset-panel',
+    sourceObjectFileId: 'panel-root',
+    instanceFileId: 'instance-file-id',
+    state: 2,
+    isApplicable: true,
+    isRevertable: true,
+    isUnwrappable: true,
+    parentUuid: null,
+    childCount: 1,
+    overrideCount: 0,
+    overridePaths: [],
+    overrideTargets: [],
+    ...overrides
+  } as never;
 }

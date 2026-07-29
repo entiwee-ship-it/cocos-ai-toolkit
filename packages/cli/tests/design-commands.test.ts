@@ -757,6 +757,42 @@ describe('声明式 CLI 命令', () => {
       expected: 'missing', actual: 'missing', passed: true
     });
   });
+
+  it('prefab.instance_override 独立重读同时核对属性值和覆盖记录', () => {
+    const item = {
+      kind: 'prefab.instance_override',
+      target: '$label',
+      propertyPath: 'fontSize',
+      value: 28,
+      params: {
+        instanceRootLogicalId: '$instance',
+        componentUuid: 'component-label'
+      }
+    };
+    const context = {
+      nodeResolutions: { '$instance': 'node-root', '$label': 'node-label' },
+      componentResolutions: {},
+      transactionResult: null
+    };
+    const snapshot = createSnapshot(28);
+    snapshot.prefabInstances = [{
+      ...createPrefabInstance(),
+      propertyOverrides: [{
+        index: 0,
+        targetLocalIds: ['component-label-file'],
+        propertyPath: ['fontSize'],
+        declaredType: 'number',
+        sourceValue: 24,
+        overrideValue: 28,
+        effectiveValue: 28,
+        raw: {}
+      }]
+    }];
+
+    expect(verifyPlanItemFromSnapshot(item, context, snapshot)).toMatchObject({ passed: true });
+    snapshot.prefabInstances[0].propertyOverrides = [];
+    expect(verifyPlanItemFromSnapshot(item, context, snapshot)).toMatchObject({ passed: false });
+  });
 });
 
 interface DesignClient {

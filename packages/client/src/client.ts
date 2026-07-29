@@ -15,6 +15,32 @@ interface ServerResponse {
   payload: unknown;
 }
 
+export interface ProbeClientErrorPayload {
+  code: string;
+  message: string;
+  details: unknown;
+  stage?: string;
+  nextAction?: string;
+}
+
+export class ProbeClientError extends Error {
+  readonly code: string;
+  readonly originalMessage: string;
+  readonly details: unknown;
+  readonly stage?: string;
+  readonly nextAction?: string;
+
+  constructor(readonly payload: ProbeClientErrorPayload) {
+    super(formatProbeClientError(payload));
+    this.name = 'ProbeClientError';
+    this.code = payload.code;
+    this.originalMessage = payload.message;
+    this.details = payload.details;
+    this.stage = payload.stage;
+    this.nextAction = payload.nextAction;
+  }
+}
+
 export class ProbeClient {
   private socket: WebSocket | null = null;
   private readonly pending = new Map<string, PendingRequest>();
@@ -228,18 +254,24 @@ export class ProbeClient {
       return;
     }
 
-    const code = this.readErrorCode(response.payload);
-    pending.reject(new Error(code));
+    pending.reject(new ProbeClientError(this.readErrorPayload(response.payload)));
   }
 
-  private readErrorCode(payload: unknown): string {
-    if (payload && typeof payload === 'object' && 'code' in payload) {
-      const code = (payload as { code?: unknown }).code;
-      if (typeof code === 'string') {
-        return code;
-      }
+  private readErrorPayload(payload: unknown): ProbeClientErrorPayload {
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      const record = payload as Record<string, unknown>;
+      const code = typeof record.code === 'string' && record.code
+        ? record.code
+        : 'SERVER_REQUEST_FAILED';
+      return {
+        code,
+        message: typeof record.message === 'string' && record.message ? record.message : code,
+        details: record.details ?? {},
+        ...(typeof record.stage === 'string' ? { stage: record.stage } : {}),
+        ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {})
+      };
     }
-    return 'SERVER_REQUEST_FAILED';
+    return { code: 'SERVER_REQUEST_FAILED', message: 'Server request failed', details: payload };
   }
 
   private abortPending(code: string): void {
@@ -249,4 +281,16 @@ export class ProbeClient {
     }
     this.pending.clear();
   }
+}
+
+function formatProbeClientError(payload: ProbeClientErrorPayload): string {
+  return [
+    payload.code,
+    payload.message !== payload.code ? payload.message : null,
+    payload.stage ? `stage=${payload.stage}` : null,
+    payload.details && typeof payload.details === 'object'
+      ? `details=${JSON.stringify(payload.details)}`
+      : null,
+    payload.nextAction ? `nextAction=${payload.nextAction}` : null
+  ].filter(Boolean).join(': ');
 }

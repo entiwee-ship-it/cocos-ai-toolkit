@@ -5,6 +5,14 @@ import { describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { ArtifactStore } from '../src/artifact-store.js';
 import { ProbeServer } from '../src/server.js';
+import * as probeServerModule from '../src/server.js';
+
+describe('Probe Server 默认配置', () => {
+  it('Bridge 请求默认超时与 MCP 大型 Prefab 写入超时一致', () => {
+    expect((probeServerModule as unknown as { DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS?: number })
+      .DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS).toBe(180_000);
+  });
+});
 import { SessionRegistry } from '../src/session-registry.js';
 
 describe('SessionRegistry', () => {

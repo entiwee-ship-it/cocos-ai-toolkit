@@ -10,7 +10,7 @@ export interface NormalizedProperty {
 export function normalizeProperty(value: unknown): NormalizedProperty {
   const property = readObject(value);
   const declaredType = typeof property.type === 'string' ? property.type : null;
-  const rawValue = 'value' in property ? property.value : value;
+  const rawValue = readDumpValueDeep(value);
   return {
     declaredType,
     valueKind: classifyValueKind(declaredType, rawValue, property.extends),
@@ -55,4 +55,63 @@ export function readObject(value: unknown): Record<string, unknown> {
 export function readDumpValue(value: unknown): unknown {
   const object = readObject(value);
   return 'value' in object ? object.value : value;
+}
+
+export function readDumpValueDeep(value: unknown): unknown {
+  const unwrapped = readDumpValue(value);
+  if (Array.isArray(unwrapped)) return unwrapped.map(readDumpValueDeep);
+  if (!unwrapped || typeof unwrapped !== 'object') return unwrapped;
+  return Object.fromEntries(
+    Object.entries(unwrapped as Record<string, unknown>)
+      .map(([key, item]) => [key, readDumpValueDeep(item)])
+  );
+}
+
+/** 从 query-node Dump 读取组件 UUID 到类型映射。 */
+export function readNodeComponentUuids(nodeDump: unknown): Map<string, string> {
+  const components = new Map<string, string>();
+  const node = readObject(nodeDump);
+  const list = Array.isArray(node.__comps__) ? node.__comps__ : [];
+  for (const entry of list) {
+    const item = readObject(entry);
+    const type = typeof item.type === 'string' ? item.type : null;
+    const uuid = readDumpValue(readObject(item.value).uuid);
+    if (type && typeof uuid === 'string' && uuid) {
+      components.set(uuid, type);
+    }
+  }
+  return components;
+}
+
+/**
+ * 解析 create-component 的结果。Creator 会为新节点自动挂载 UITransform，
+ * 查询组件与 create-component 之间可能出现同类型组件已存在但没有 UUID 差集的竞态。
+ */
+export function resolveCreatedComponentUuid(
+  beforeNodeDump: unknown,
+  created: unknown,
+  afterNodeDump: unknown,
+  componentType: string
+): string | null {
+  const beforeUuids = readNodeComponentUuids(beforeNodeDump);
+  const createdObject = readObject(created);
+  const directUuid = typeof created === 'string'
+    ? created
+    : readDumpValue(createdObject.uuid);
+  if (typeof directUuid === 'string' && directUuid && !beforeUuids.has(directUuid)) {
+    return directUuid;
+  }
+
+  const afterUuids = readNodeComponentUuids(afterNodeDump);
+  for (const [uuid, type] of afterUuids) {
+    if (!beforeUuids.has(uuid) && type === componentType) {
+      return uuid;
+    }
+  }
+  for (const [uuid, type] of afterUuids) {
+    if (type === componentType) {
+      return uuid;
+    }
+  }
+  return null;
 }

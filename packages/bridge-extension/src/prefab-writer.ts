@@ -1,10 +1,13 @@
 import { ProbeError } from './probe-errors';
+import { createHash } from 'node:crypto';
 import type { WriteOperation } from './transaction-manager';
 
 /** 预制体实例节点的可序列化证据快照（对齐 Phase 1 只读模型的 __prefab__ 结构）。 */
 export interface PrefabInstanceInfo {
   nodeUuid: string;
   name: string;
+  /** 保存重载后会话 UUID 会变化；稳定层级路径用于重新定位实例根。 */
+  stablePath?: string;
   /** 源预制体资产 UUID（__prefab__.uuid）。 */
   prefabAssetUuid: string | null;
   /** 源对象 FileID（__prefab__.fileId）。 */
@@ -23,7 +26,11 @@ export interface PrefabInstanceInfo {
   /** 覆盖属性路径清单（点拼字符串，如 '_name'、'_lpos'）。 */
   overridePaths: string[];
   /** 覆盖目标清单：path 与 targetFileId（targetInfo.localID 首段），根挂载点覆盖的 targetFileId 等于 sourceObjectFileId。 */
-  overrideTargets: Array<{ path: string; targetFileId: string | null }>;
+  overrideTargets: Array<{
+    path: string;
+    targetFileId: string | null;
+    targetLocalIds?: string[];
+  }>;
 }
 
 /** 资产预检结果（query-asset-info 的最小必要字段）。 */
@@ -44,6 +51,12 @@ export interface PrefabWriterDependencies {
   instantiatePrefab(parentNodeUuid: string, prefabAssetUuid: string, name?: string): Promise<string>;
   /** 经门面 createPrefab 从场景节点生成预制体资产，返回资产 UUID。 */
   createPrefabFromNode(nodeUuid: string, assetUrl: string): Promise<string>;
+  createAsset(assetUrl: string, assetKind: 'folder' | 'component-script', content: string | null): Promise<PrefabAssetInfo>;
+  moveAsset(sourceUrl: string, targetUrl: string): Promise<void>;
+  readAssetMeta(assetUrl: string): Promise<Record<string, unknown>>;
+  writeAssetMeta(assetUrl: string, meta: Record<string, unknown>): Promise<void>;
+  readAssetContent(assetUrl: string): Promise<string>;
+  saveAssetContent(assetUrl: string, content: string): Promise<void>;
   deleteAsset(assetUrl: string): Promise<void>;
   revertPrefabInstance(instanceRootUuid: string): Promise<void>;
   applyPrefabInstance(instanceRootUuid: string): Promise<void>;
@@ -51,6 +64,17 @@ export interface PrefabWriterDependencies {
   linkPrefabInstance(nodeUuid: string, prefabAssetUuid: string): Promise<void>;
   /** 按属性路径重置实例节点属性为源值（Inspector 单属性还原同款路径）。 */
   resetNodeProperty(nodeUuid: string, propertyPath: string): Promise<void>;
+  setPrefabInstanceOverride(
+    instanceRootUuid: string,
+    targetObjectUuid: string,
+    propertyPath: string,
+    value: unknown
+  ): Promise<{ targetLocalIds: string[]; previous: { value: unknown } | null }>;
+  removePrefabInstanceOverride(
+    instanceRootUuid: string,
+    targetObjectUuid: string,
+    propertyPath: string
+  ): Promise<{ targetLocalIds: string[]; previous: { value: unknown } | null }>;
   /** 当前编辑文档的资产 UUID（替换源时防自嵌套循环）。 */
   getCurrentDocumentAssetUuid(): Promise<string | null>;
   /**
@@ -67,10 +91,13 @@ export interface PrefabWriteOpResult {
   nodeUuid: string | null;
   /** create_from_node 返回的新资产 UUID。 */
   assetUuid: string | null;
-  before: Partial<PrefabInstanceInfo> | null;
-  after: Partial<PrefabInstanceInfo> | null;
+  before: Partial<PrefabInstanceInfo> | Record<string, unknown> | null;
+  after: Partial<PrefabInstanceInfo> | Record<string, unknown> | null;
   /** 显式逆操作序列，供 step-undo-with-inverse 回滚路径使用。 */
   inverse: WriteOperation[];
+  targetLocalIds?: string[];
+  /** 精确覆盖写入/还原前的覆盖值；重载后验证源值恢复时使用。 */
+  previousOverride?: { value: unknown } | null;
 }
 
 /**
@@ -92,8 +119,22 @@ export async function executePrefabWriteOperation(
       return instantiatePrefab(operation as PrefabInstantiateOperation, dependencies);
     case 'prefab.create_from_node':
       return createFromNode(operation as PrefabCreateFromNodeOperation, dependencies);
+    case 'prefab.instance_override':
+      return instanceOverride(operation as PrefabInstanceOverrideOperation, dependencies);
     case 'prefab.delete_asset':
       return deleteAsset(operation as PrefabDeleteAssetOperation, dependencies);
+    case 'asset.create':
+      return createAsset(operation as AssetCreateOperation, dependencies);
+    case 'asset.move':
+      return moveAsset(operation as AssetMoveOperation, dependencies);
+    case 'asset.delete':
+      return deleteGenericAsset(operation as AssetIdentityOperation, dependencies);
+    case 'asset.write_meta':
+      return writeAssetMeta(operation as AssetWriteMetaOperation, dependencies);
+    case 'asset.update_text':
+      return updateAssetText(operation as AssetUpdateTextOperation, dependencies);
+    case 'asset.restore_content':
+      return restoreAssetContent(operation as AssetRestoreContentOperation, dependencies);
     case 'prefab.revert_override':
       return revertOverride(operation as PrefabRevertOverrideOperation, dependencies);
     case 'prefab.apply_to_source':
@@ -112,11 +153,45 @@ export async function executePrefabWriteOperation(
 type PrefabInstantiateOperation = WriteOperation & { prefabAssetUuid: string; parentNodeUuid: string; name?: string };
 type PrefabCreateFromNodeOperation = WriteOperation & { nodeUuid: string; assetUrl: string };
 type PrefabDeleteAssetOperation = WriteOperation & { assetUrl: string };
-type PrefabRevertOverrideOperation = WriteOperation & { instanceRootUuid: string; propertyPath?: string };
+type PrefabInstanceOverrideOperation = WriteOperation & {
+  instanceRootUuid: string;
+  targetObjectUuid: string;
+  targetNodePath?: string;
+  propertyPath: string;
+  value: unknown;
+};
+type PrefabRevertOverrideOperation = WriteOperation & {
+  instanceRootUuid: string;
+  targetObjectUuid?: string;
+  targetNodePath?: string;
+  propertyPath?: string;
+};
 type PrefabApplyToSourceOperation = WriteOperation & { instanceRootUuid: string };
 type PrefabInstanceOperation = WriteOperation & { instanceRootUuid: string };
 type PrefabLinkOperation = WriteOperation & { nodeUuid: string; prefabAssetUuid: string };
 type PrefabReplaceOperation = WriteOperation & { instanceRootUuid: string; newPrefabAssetUuid: string };
+type AssetCreateOperation = WriteOperation & {
+  assetUrl: string;
+  assetKind: 'folder' | 'component-script' | 'prefab';
+  content?: string;
+};
+type AssetMoveOperation = WriteOperation & {
+  sourceUrl: string;
+  targetUrl: string;
+  expectedAssetUuid: string;
+};
+type AssetIdentityOperation = WriteOperation & { assetUrl: string; expectedAssetUuid: string };
+type AssetWriteMetaOperation = AssetIdentityOperation & { meta: Record<string, unknown> };
+type AssetUpdateTextOperation = AssetIdentityOperation & {
+  expectedCurrentSha256?: string;
+  oldText: string;
+  newText: string;
+};
+type AssetRestoreContentOperation = AssetIdentityOperation & {
+  expectedCurrentSha256: string;
+  content: string;
+  targetSha256: string;
+};
 
 /**
  * 解除实例关联：门面 unlinkPrefab（自带 Undo 录制，实测 undo 可恢复关联）。
@@ -242,6 +317,32 @@ async function revertOverride(
     await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid),
     operation.instanceRootUuid
   );
+  if (operation.targetObjectUuid && operation.propertyPath) {
+    const removed = await dependencies.removePrefabInstanceOverride(
+      operation.instanceRootUuid,
+      operation.targetObjectUuid,
+      operation.propertyPath
+    );
+    const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
+    return {
+      nodeUuid: operation.instanceRootUuid,
+      assetUuid: null,
+      before,
+      after,
+      targetLocalIds: removed.targetLocalIds,
+      previousOverride: removed.previous,
+      inverse: removed.previous
+        ? [{
+            type: 'prefab.instance_override',
+            instanceRootUuid: operation.instanceRootUuid,
+            targetObjectUuid: operation.targetObjectUuid,
+            ...(operation.targetNodePath ? { targetNodePath: operation.targetNodePath } : {}),
+            propertyPath: operation.propertyPath,
+            value: removed.previous.value
+          }]
+        : []
+    };
+  }
   if (operation.propertyPath) {
     await dependencies.resetNodeProperty(operation.instanceRootUuid, operation.propertyPath);
   } else {
@@ -374,4 +475,348 @@ async function deleteAsset(
     // 资产删除不可由逆操作还原（内容已丢失），回滚链路到此前为止。
     inverse: []
   };
+}
+
+async function instanceOverride(
+  operation: PrefabInstanceOverrideOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const before = requireInstance(
+    await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid),
+    operation.instanceRootUuid
+  );
+  const written = await dependencies.setPrefabInstanceOverride(
+    operation.instanceRootUuid,
+    operation.targetObjectUuid,
+    operation.propertyPath,
+    operation.value
+  );
+  const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
+  return {
+    nodeUuid: operation.instanceRootUuid,
+    assetUuid: null,
+    before,
+    after,
+    targetLocalIds: written.targetLocalIds,
+    previousOverride: written.previous,
+    inverse: written.previous
+      ? [{
+          type: 'prefab.instance_override',
+          instanceRootUuid: operation.instanceRootUuid,
+          targetObjectUuid: operation.targetObjectUuid,
+          ...(operation.targetNodePath ? { targetNodePath: operation.targetNodePath } : {}),
+          propertyPath: operation.propertyPath,
+          value: written.previous.value
+        }]
+      : [{
+          type: 'prefab.revert_override',
+          instanceRootUuid: operation.instanceRootUuid,
+          targetObjectUuid: operation.targetObjectUuid,
+          ...(operation.targetNodePath ? { targetNodePath: operation.targetNodePath } : {}),
+          propertyPath: operation.propertyPath
+        }]
+  };
+}
+
+async function createAsset(
+  operation: AssetCreateOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  assertAssetUrl(operation.assetUrl);
+  if (operation.assetKind === 'prefab' || operation.assetUrl.toLowerCase().endsWith('.prefab')) {
+    throw new ProbeError('PREFAB_CREATION_REQUIRES_NODE', {
+      assetUrl: operation.assetUrl,
+      nextAction: '请使用 prefab.create_from_node 或 document.extract_subtree'
+    });
+  }
+  if (operation.assetKind === 'component-script') {
+    if (!operation.assetUrl.toLowerCase().endsWith('.ts') || !operation.content) {
+      throw new ProbeError('COMPONENT_SCRIPT_CONTENT_REQUIRED', { assetUrl: operation.assetUrl });
+    }
+  }
+  if (await dependencies.queryAssetInfo(operation.assetUrl)) {
+    throw new ProbeError('ASSET_ALREADY_EXISTS', { assetUrl: operation.assetUrl });
+  }
+  const created = await dependencies.createAsset(
+    operation.assetUrl,
+    operation.assetKind,
+    operation.assetKind === 'component-script' ? operation.content ?? null : null
+  );
+  const actual = await dependencies.queryAssetInfo(operation.assetUrl);
+  if (!actual) {
+    throw new ProbeError('ASSET_CREATE_POSTVERIFY_FAILED', { assetUrl: operation.assetUrl });
+  }
+  if (created.uuid && actual.uuid !== created.uuid) {
+    throw new ProbeError('ASSET_UUID_DRIFT', {
+      assetUrl: operation.assetUrl,
+      expectedAssetUuid: created.uuid,
+      actualAssetUuid: actual.uuid
+    });
+  }
+  return {
+    nodeUuid: null,
+    assetUuid: actual.uuid,
+    before: null,
+    after: { assetUrl: operation.assetUrl, assetUuid: actual.uuid, assetType: actual.type },
+    inverse: [{ type: 'asset.delete', assetUrl: operation.assetUrl, expectedAssetUuid: actual.uuid }]
+  };
+}
+
+async function moveAsset(
+  operation: AssetMoveOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  assertAssetUrl(operation.sourceUrl);
+  assertAssetUrl(operation.targetUrl);
+  if (operation.sourceUrl === operation.targetUrl) {
+    throw new ProbeError('ASSET_MOVE_NOOP', { assetUrl: operation.sourceUrl });
+  }
+  const source = await requireAssetIdentity(dependencies, operation.sourceUrl, operation.expectedAssetUuid);
+  if (await dependencies.queryAssetInfo(operation.targetUrl)) {
+    throw new ProbeError('ASSET_ALREADY_EXISTS', { assetUrl: operation.targetUrl });
+  }
+  await dependencies.moveAsset(operation.sourceUrl, operation.targetUrl);
+  const [oldLocation, moved] = await Promise.all([
+    dependencies.queryAssetInfo(operation.sourceUrl),
+    dependencies.queryAssetInfo(operation.targetUrl)
+  ]);
+  if (oldLocation || !moved || moved.uuid !== operation.expectedAssetUuid) {
+    await dependencies.moveAsset(operation.targetUrl, operation.sourceUrl).catch(() => undefined);
+    throw new ProbeError('ASSET_UUID_DRIFT', {
+      sourceUrl: operation.sourceUrl,
+      targetUrl: operation.targetUrl,
+      expectedAssetUuid: operation.expectedAssetUuid,
+      actualAssetUuid: moved?.uuid ?? null,
+      sourceStillExists: Boolean(oldLocation)
+    });
+  }
+  return {
+    nodeUuid: null,
+    assetUuid: moved.uuid,
+    before: { assetUrl: operation.sourceUrl, assetUuid: source.uuid, assetType: source.type },
+    after: { assetUrl: operation.targetUrl, assetUuid: moved.uuid, assetType: moved.type },
+    inverse: [{
+      type: 'asset.move',
+      sourceUrl: operation.targetUrl,
+      targetUrl: operation.sourceUrl,
+      expectedAssetUuid: operation.expectedAssetUuid
+    }]
+  };
+}
+
+async function deleteGenericAsset(
+  operation: AssetIdentityOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const existing = await requireAssetIdentity(dependencies, operation.assetUrl, operation.expectedAssetUuid);
+  await dependencies.deleteAsset(operation.assetUrl);
+  if (await dependencies.queryAssetInfo(operation.assetUrl)) {
+    throw new ProbeError('ASSET_DELETE_POSTVERIFY_FAILED', { assetUrl: operation.assetUrl });
+  }
+  return {
+    nodeUuid: null,
+    assetUuid: existing.uuid,
+    before: { assetUrl: operation.assetUrl, assetUuid: existing.uuid, assetType: existing.type },
+    after: null,
+    inverse: []
+  };
+}
+
+async function writeAssetMeta(
+  operation: AssetWriteMetaOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const existing = await requireAssetIdentity(dependencies, operation.assetUrl, operation.expectedAssetUuid);
+  const requestedUuid = operation.meta.uuid;
+  if (typeof requestedUuid === 'string' && requestedUuid !== operation.expectedAssetUuid) {
+    throw new ProbeError('ASSET_META_UUID_MUTATION_FORBIDDEN', {
+      assetUrl: operation.assetUrl,
+      expectedAssetUuid: operation.expectedAssetUuid,
+      requestedUuid
+    });
+  }
+  const beforeMeta = await dependencies.readAssetMeta(operation.assetUrl);
+  await dependencies.writeAssetMeta(operation.assetUrl, operation.meta);
+  const after = await requireAssetIdentity(dependencies, operation.assetUrl, operation.expectedAssetUuid);
+  return {
+    nodeUuid: null,
+    assetUuid: after.uuid,
+    before: { assetUrl: operation.assetUrl, assetUuid: existing.uuid, meta: beforeMeta },
+    after: { assetUrl: operation.assetUrl, assetUuid: after.uuid, meta: operation.meta },
+    inverse: [{
+      type: 'asset.write_meta',
+      assetUrl: operation.assetUrl,
+      expectedAssetUuid: operation.expectedAssetUuid,
+      meta: beforeMeta
+    }]
+  };
+}
+
+/**
+ * 通过 Creator AssetDB 恢复既有资产内容。
+ * 仅当资产 UUID 与当前内容 SHA256 都精确匹配时写入，并验证调用方声明的目标 SHA256，
+ * 防止 recovery 证据过期后覆盖用户的新改动。
+ *
+ * @param operation 带双 SHA256 前置的受控恢复操作。
+ * @param dependencies Creator AssetDB 读写依赖。
+ * @returns 恢复前后哈希证据与可逆恢复操作。
+ */
+async function restoreAssetContent(
+  operation: AssetRestoreContentOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  const existing = await requireAssetIdentity(dependencies, operation.assetUrl, operation.expectedAssetUuid);
+  const beforeContent = await dependencies.readAssetContent(operation.assetUrl);
+  const beforeSha256 = sha256(beforeContent);
+  if (beforeSha256 !== operation.expectedCurrentSha256) {
+    throw new ProbeError('ASSET_CONTENT_PRECONDITION_FAILED', {
+      assetUrl: operation.assetUrl,
+      expectedCurrentSha256: operation.expectedCurrentSha256,
+      actualCurrentSha256: beforeSha256
+    });
+  }
+  const computedTargetSha256 = sha256(operation.content);
+  if (computedTargetSha256 !== operation.targetSha256) {
+    throw new ProbeError('ASSET_CONTENT_TARGET_HASH_MISMATCH', {
+      assetUrl: operation.assetUrl,
+      expectedTargetSha256: operation.targetSha256,
+      actualTargetSha256: computedTargetSha256
+    });
+  }
+  await dependencies.saveAssetContent(operation.assetUrl, operation.content);
+  const [afterAsset, afterContent] = await Promise.all([
+    requireAssetIdentity(dependencies, operation.assetUrl, operation.expectedAssetUuid),
+    dependencies.readAssetContent(operation.assetUrl)
+  ]);
+  const afterSha256 = sha256(afterContent);
+  if (afterSha256 !== operation.targetSha256) {
+    throw new ProbeError('ASSET_CONTENT_POSTVERIFY_FAILED', {
+      assetUrl: operation.assetUrl,
+      expectedTargetSha256: operation.targetSha256,
+      actualTargetSha256: afterSha256
+    });
+  }
+  return {
+    nodeUuid: null,
+    assetUuid: afterAsset.uuid,
+    before: { assetUrl: operation.assetUrl, assetUuid: existing.uuid, sha256: beforeSha256 },
+    after: { assetUrl: operation.assetUrl, assetUuid: afterAsset.uuid, sha256: afterSha256 },
+    inverse: [{
+      type: 'asset.restore_content',
+      assetUrl: operation.assetUrl,
+      expectedAssetUuid: operation.expectedAssetUuid,
+      expectedCurrentSha256: afterSha256,
+      content: beforeContent,
+      targetSha256: beforeSha256
+    }]
+  };
+}
+
+/** 通过精确 UUID 与唯一旧文本锚点安全更新现有脚本文本资产。 */
+async function updateAssetText(
+  operation: AssetUpdateTextOperation,
+  dependencies: PrefabWriterDependencies
+): Promise<PrefabWriteOpResult> {
+  assertTextAssetUrl(operation.assetUrl);
+  const existing = await requireAssetIdentity(dependencies, operation.assetUrl, operation.expectedAssetUuid);
+  const beforeContent = await dependencies.readAssetContent(operation.assetUrl);
+  const beforeSha256 = sha256(beforeContent);
+  if (operation.expectedCurrentSha256 && beforeSha256 !== operation.expectedCurrentSha256) {
+    throw new ProbeError('ASSET_CONTENT_PRECONDITION_FAILED', {
+      assetUrl: operation.assetUrl,
+      expectedCurrentSha256: operation.expectedCurrentSha256,
+      actualCurrentSha256: beforeSha256
+    });
+  }
+  if (operation.oldText === operation.newText) {
+    throw new ProbeError('ASSET_TEXT_REPLACEMENT_NOOP', { assetUrl: operation.assetUrl });
+  }
+  const matches = findTextMatches(beforeContent, operation.oldText);
+  if (matches.length !== 1) {
+    throw new ProbeError('ASSET_TEXT_MATCH_COUNT_INVALID', {
+      assetUrl: operation.assetUrl,
+      matchCount: matches.length,
+      nextAction: '重新读取目标资产并提供只出现一次的精确 oldText'
+    });
+  }
+  const matchIndex = matches[0];
+  const targetContent = beforeContent.slice(0, matchIndex)
+    + operation.newText
+    + beforeContent.slice(matchIndex + operation.oldText.length);
+  const targetSha256 = sha256(targetContent);
+  await dependencies.saveAssetContent(operation.assetUrl, targetContent);
+  const [afterAsset, afterContent] = await Promise.all([
+    requireAssetIdentity(dependencies, operation.assetUrl, operation.expectedAssetUuid),
+    dependencies.readAssetContent(operation.assetUrl)
+  ]);
+  const afterSha256 = sha256(afterContent);
+  if (afterContent !== targetContent) {
+    throw new ProbeError('ASSET_CONTENT_POSTVERIFY_FAILED', {
+      assetUrl: operation.assetUrl,
+      expectedTargetSha256: targetSha256,
+      actualTargetSha256: afterSha256
+    });
+  }
+  return {
+    nodeUuid: null,
+    assetUuid: afterAsset.uuid,
+    before: { assetUrl: operation.assetUrl, assetUuid: existing.uuid, sha256: beforeSha256, matchCount: 1 },
+    after: { assetUrl: operation.assetUrl, assetUuid: afterAsset.uuid, sha256: afterSha256, matchCount: 1 },
+    inverse: [{
+      type: 'asset.restore_content',
+      assetUrl: operation.assetUrl,
+      expectedAssetUuid: operation.expectedAssetUuid,
+      expectedCurrentSha256: afterSha256,
+      content: beforeContent,
+      targetSha256: beforeSha256
+    }]
+  };
+}
+
+async function requireAssetIdentity(
+  dependencies: PrefabWriterDependencies,
+  assetUrl: string,
+  expectedAssetUuid: string
+): Promise<PrefabAssetInfo> {
+  assertAssetUrl(assetUrl);
+  const asset = await dependencies.queryAssetInfo(assetUrl);
+  if (!asset) throw new ProbeError('ASSET_NOT_FOUND', { assetUrl });
+  if (asset.uuid !== expectedAssetUuid) {
+    throw new ProbeError('ASSET_IDENTITY_MISMATCH', {
+      assetUrl,
+      expectedAssetUuid,
+      actualAssetUuid: asset.uuid
+    });
+  }
+  return asset;
+}
+
+function assertAssetUrl(assetUrl: string): void {
+  if (!assetUrl.startsWith('db://assets/') || assetUrl.includes('\\') || assetUrl.split('/').includes('..')) {
+    throw new ProbeError('ASSET_URL_INVALID', { assetUrl });
+  }
+}
+
+function assertTextAssetUrl(assetUrl: string): void {
+  assertAssetUrl(assetUrl);
+  const lower = assetUrl.toLowerCase();
+  if (!['.ts', '.js', '.json'].some((extension) => lower.endsWith(extension))) {
+    throw new ProbeError('ASSET_TEXT_TYPE_REQUIRED', { assetUrl, allowedExtensions: ['.ts', '.js', '.json'] });
+  }
+}
+
+function findTextMatches(content: string, search: string): number[] {
+  const matches: number[] = [];
+  let offset = 0;
+  while (offset <= content.length - search.length) {
+    const index = content.indexOf(search, offset);
+    if (index < 0) break;
+    matches.push(index);
+    offset = index + 1;
+  }
+  return matches;
+}
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
 }

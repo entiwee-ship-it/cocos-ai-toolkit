@@ -918,6 +918,43 @@ export function verifyPlanItemFromSnapshot(
         : materializeExpectedReference(item, context);
       return verificationItem(item, expected, property?.effectiveValue ?? null);
     }
+    case 'prefab.instance_override': {
+      const componentUuid = readPlanString(item, 'componentUuid')
+        ?? resolveContextComponentUuid(item, context);
+      const component = componentUuid ? findSnapshotComponentByUuid(snapshot, componentUuid) : undefined;
+      const property = component?.properties.find((entry) => entry.propertyPath === item.propertyPath);
+      const expectedValue = item.params?.resolveTo || Object.prototype.hasOwnProperty.call(item.params ?? {}, 'reference')
+        ? materializeExpectedReference(item, context)
+        : item.value;
+      const instanceRootLogicalId = readPlanString(item, 'instanceRootLogicalId');
+      const instanceRootUuid = instanceRootLogicalId
+        ? context.nodeResolutions[instanceRootLogicalId]
+        : undefined;
+      const relation = snapshot.prefabInstances.find((instance) => (
+        instance.instanceRootObjectUuid === instanceRootUuid
+      ));
+      const overrideRecorded = relation?.propertyOverrides.some((entry) => (
+        entry.propertyPath.join('.') === item.propertyPath
+      )) ?? false;
+      return verificationItem(
+        item,
+        { value: expectedValue, overrideRecorded: true },
+        { value: property?.effectiveValue ?? null, overrideRecorded }
+      );
+    }
+    case 'prefab.revert_override': {
+      const instanceRootLogicalId = readPlanString(item, 'instanceRootLogicalId');
+      const instanceRootUuid = instanceRootLogicalId
+        ? context.nodeResolutions[instanceRootLogicalId]
+        : undefined;
+      const relation = snapshot.prefabInstances.find((instance) => (
+        instance.instanceRootObjectUuid === instanceRootUuid
+      ));
+      const remaining = relation?.propertyOverrides.some((entry) => (
+        entry.propertyPath.join('.') === item.propertyPath
+      )) ?? false;
+      return verificationItem(item, 'override-removed', remaining ? 'override-present' : 'override-removed');
+    }
     case 'prefab.apply_to_source': {
       const sourcePrefabAssetUuid = readPlanString(item, 'sourcePrefabAssetUuid');
       return verificationItem(

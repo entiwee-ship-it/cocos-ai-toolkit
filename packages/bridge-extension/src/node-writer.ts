@@ -5,6 +5,8 @@ import type { WriteOperation } from './transaction-manager';
 export interface NodeInfo {
   uuid: string;
   name: string;
+  /** 保存重载后会话 UUID 可能重建；层级路径用于重读重定位。 */
+  stablePath?: string;
   active: boolean;
   layer: number;
   parentUuid: string | null;

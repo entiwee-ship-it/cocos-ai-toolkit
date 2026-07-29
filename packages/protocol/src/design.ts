@@ -10,10 +10,16 @@ import { PrefabImpactAnalysisSchema } from './write.js';
 /** 临时逻辑 ID：`$` 前缀，供目标文档内部引用接线。 */
 export const DesignLogicalIdSchema = z.string().regex(/^\$[A-Za-z][\w-]*$/, '逻辑 ID 必须以 $ 开头');
 
-/** 引用值：逻辑 ID 引用（执行期物化回填）或既有资产/节点引用。 */
-export const DesignReferenceValueSchema = z.union([
+/** 单个引用值：逻辑 ID 引用（执行期物化回填）或既有资产/节点引用。 */
+const DesignReferenceItemSchema = z.union([
   DesignLogicalIdSchema,
   ReferenceSchema
+]);
+
+/** 引用值：单引用或保持顺序的引用数组。 */
+export const DesignReferenceValueSchema = z.union([
+  DesignReferenceItemSchema,
+  z.array(DesignReferenceItemSchema)
 ]);
 
 /** 目标组件声明：类型、可选脚本 UUID、属性与引用。 */
@@ -29,6 +35,21 @@ export const DesignPrefabInstanceSchema = z.object({
   assetUuid: z.string().min(1),
   name: z.string().min(1).optional()
 });
+
+export const DesignDocumentOperationSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('document.extract_subtree'),
+    nodeId: DesignLogicalIdSchema,
+    assetUrl: z.string().startsWith('db://assets/').endsWith('.prefab')
+  }),
+  z.object({
+    type: z.literal('prefab.revert_override'),
+    instanceRootId: DesignLogicalIdSchema,
+    targetId: DesignLogicalIdSchema,
+    componentType: z.string().min(1).optional(),
+    propertyPath: z.string().min(1)
+  })
+]);
 
 export interface DesignTargetNodeInput {
   id: string;
@@ -64,6 +85,7 @@ export const DesignTargetDocumentSchema = z.object({
     assetUuid: z.string().min(1).optional()
   }),
   tree: z.array(DesignTargetNodeSchema),
+  operations: z.array(DesignDocumentOperationSchema).optional(),
   prune: z.boolean().optional()
 }).superRefine((target, context) => {
   // 逻辑 ID 全文唯一、自引用拒绝、悬空引用拒绝（引用必须指向文档内已声明的 ID）。
@@ -77,12 +99,7 @@ export const DesignTargetDocumentSchema = z.object({
       ids.add(node.id);
       if (node.references) {
         for (const value of Object.values(node.references)) {
-          if (typeof value === 'string' && value === node.id) {
-            context.addIssue({ code: 'custom', message: `逻辑 ID 自引用: ${node.id}` });
-          }
-          if (typeof value === 'string' && value.startsWith('$')) {
-            referencedIds.add(value);
-          }
+          collectReferencedIds(value, node.id, referencedIds, context);
         }
       }
       const componentTypes = new Set<string>();
@@ -95,12 +112,7 @@ export const DesignTargetDocumentSchema = z.object({
         }
         componentTypes.add(component.type);
         for (const value of Object.values(component.references ?? {})) {
-          if (typeof value === 'string' && value === node.id) {
-            context.addIssue({ code: 'custom', message: `逻辑 ID 自引用: ${node.id}` });
-          }
-          if (typeof value === 'string' && value.startsWith('$')) {
-            referencedIds.add(value);
-          }
+          collectReferencedIds(value, node.id, referencedIds, context);
         }
       }
       collectIds(node.children ?? []);
@@ -112,7 +124,36 @@ export const DesignTargetDocumentSchema = z.object({
       context.addIssue({ code: 'custom', message: `引用指向不存在的逻辑 ID: ${referencedId}` });
     }
   }
+  for (const operation of target.operations ?? []) {
+    if (operation.type === 'document.extract_subtree' && !ids.has(operation.nodeId)) {
+      context.addIssue({ code: 'custom', message: `抽取节点不存在: ${operation.nodeId}` });
+    }
+    if (operation.type === 'prefab.revert_override') {
+      if (!ids.has(operation.instanceRootId)) {
+        context.addIssue({ code: 'custom', message: `还原实例根不存在: ${operation.instanceRootId}` });
+      }
+      if (!ids.has(operation.targetId)) {
+        context.addIssue({ code: 'custom', message: `还原目标不存在: ${operation.targetId}` });
+      }
+    }
+  }
 });
+
+function collectReferencedIds(
+  value: z.infer<typeof DesignReferenceValueSchema>,
+  ownerId: string,
+  referencedIds: Set<string>,
+  context: z.RefinementCtx
+): void {
+  const values = Array.isArray(value) ? value : [value];
+  for (const item of values) {
+    if (typeof item !== 'string') continue;
+    if (item === ownerId) {
+      context.addIssue({ code: 'custom', message: `逻辑 ID 自引用: ${ownerId}` });
+    }
+    referencedIds.add(item);
+  }
+}
 
 /** 计划项：映射原子操作的人类可读形态，含 Override 标注与依赖。 */
 export const DesignPlanItemSchema = z.object({
@@ -152,6 +193,7 @@ export const DesignVerifyReportSchema = z.object({
 
 export type DesignTargetDocument = z.infer<typeof DesignTargetDocumentSchema>;
 export type DesignTargetNode = z.infer<typeof DesignTargetNodeSchema>;
+export type DesignDocumentOperation = z.infer<typeof DesignDocumentOperationSchema>;
 export type DesignReferenceValue = z.infer<typeof DesignReferenceValueSchema>;
 export type DesignPlanItem = z.infer<typeof DesignPlanItemSchema>;
 export type DesignPlan = z.infer<typeof DesignPlanSchema>;

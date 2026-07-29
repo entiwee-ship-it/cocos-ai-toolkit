@@ -26,9 +26,7 @@ describe('executeWriteSceneOperations', () => {
     expect(outcome.verification?.passed).toBe(true);
     expect(dependencies.calls).toEqual([
       'node:node.rename',
-      'component:component.set_property',
-      'saveDocument',
-      'reloadDocument'
+      'component:component.set_property'
     ]);
     // 证据保留每个操作的逆操作，供回滚编排
     const evidence = outcome.evidence as Array<{ inverse: unknown[] }>;
@@ -38,6 +36,28 @@ describe('executeWriteSceneOperations', () => {
 
   it('为新建节点和组件回填结果 UUID 供重读验证', async () => {
     const dependencies = createDependencies();
+    dependencies.executeNodeOperation = async (operation) => ({
+      nodeUuid: 'n1',
+      before: null,
+      after: {
+        uuid: 'n1',
+        name: String(operation.name ?? 'New'),
+        stablePath: '/FriendsRoomView/CocosAiValidationView/Title'
+      },
+      inverse: [{ type: 'node.delete', nodeUuid: 'n1' }]
+    });
+    dependencies.executeComponentOperation = async () => ({
+      componentUuid: 'c1',
+      before: null,
+      after: {
+        uuid: 'c1',
+        type: 'cc.Sprite',
+        enabled: true,
+        nodeStablePath: '/FriendsRoomView~0/CocosAiValidationView~0/Title~0',
+        sameTypeIndex: 0
+      },
+      inverse: [{ type: 'component.remove', componentUuid: 'c1' }]
+    });
     const outcome = await executeWriteSceneOperations({
       operations: [
         { type: 'node.create', parentNodeUuid: 'p', name: 'New' },
@@ -49,7 +69,13 @@ describe('executeWriteSceneOperations', () => {
 
     const evidence = outcome.evidence as Array<{ operation: Record<string, unknown> }>;
     expect(evidence[0].operation.resultNodeUuid).toBe('n1');
+    expect(evidence[0].operation.resultNodeStablePath).toBe('/FriendsRoomView/CocosAiValidationView/Title');
     expect(evidence[1].operation.resultComponentUuid).toBe('c1');
+    expect(evidence[1].operation).toMatchObject({
+      resultComponentNodeStablePath: '/FriendsRoomView~0/CocosAiValidationView~0/Title~0',
+      resultComponentType: 'cc.Sprite',
+      resultComponentSameTypeIndex: 0
+    });
     // 结果 UUID 一律回填并覆盖原操作值（create_from_node 重建节点后 UUID 变更的场景依赖覆盖语义）
     const outcomeExisting = await executeWriteSceneOperations({
       operations: [{ type: 'node.rename', nodeUuid: 'keep-me', name: 'X' }],
@@ -81,6 +107,98 @@ describe('executeWriteSceneOperations', () => {
     expect(evidence).toHaveLength(2);
     // 失败即停：不保存、不重读验证
     expect(dependencies.calls).not.toContain('saveDocument');
+  });
+
+  it('把 Prefab 实例稳定身份与目标 FileID 回填给重载后验证', async () => {
+    const dependencies = createDependencies();
+    dependencies.executePrefabOperation = async () => ({
+      nodeUuid: 'instance-old',
+      assetUuid: null,
+      before: null,
+      after: {
+        nodeUuid: 'instance-old',
+        stablePath: '/Scene~0/Panel~0',
+        prefabAssetUuid: 'asset-panel',
+        instanceFileId: 'instance-file-id'
+      },
+      targetLocalIds: ['nested-instance', 'label-component'],
+      previousOverride: { value: 'Override Applied' },
+      inverse: []
+    });
+
+    const outcome = await executeWriteSceneOperations({
+      operations: [{
+        type: 'prefab.revert_override',
+        instanceRootUuid: 'instance-old',
+        targetObjectUuid: 'label-old',
+        propertyPath: 'string'
+      }],
+      save: false,
+      undoGroup: 'prefab-stable-locator'
+    }, dependencies);
+
+    const evidence = outcome.evidence as Array<{ operation: Record<string, unknown> }>;
+    expect(evidence[0].operation).toMatchObject({
+      resultNodeStablePath: '/Scene~0/Panel~0',
+      resultPrefabAssetUuid: 'asset-panel',
+      resultPrefabInstanceFileId: 'instance-file-id',
+      resultTargetLocalIds: ['nested-instance', 'label-component'],
+      resultHadPreviousOverride: true,
+      resultPreviousOverrideValue: 'Override Applied'
+    });
+  });
+
+  it('全部操作均未改变文档时不保存也不重开', async () => {
+    const dependencies = createDependencies();
+    dependencies.executeComponentOperation = async (operation) => {
+      dependencies.calls.push(`component:${operation.type}`);
+      return {
+        componentUuid: 'c1',
+        before: null,
+        after: null,
+        inverse: [],
+        changed: false
+      };
+    };
+
+    const outcome = await executeWriteSceneOperations({
+      operations: [
+        { type: 'component.add', nodeUuid: 'n1', componentType: 'cc.UITransform', scriptUuid: null },
+        { type: 'component.add', nodeUuid: 'n1', componentType: 'cc.UITransform', scriptUuid: null }
+      ],
+      save: true,
+      undoGroup: 'idempotent-component-add'
+    }, dependencies);
+
+    expect(outcome.kind).toBe('success');
+    expect(outcome.verification?.passed).toBe(true);
+    expect(dependencies.calls).toEqual([
+      'component:component.add',
+      'component:component.add'
+    ]);
+  });
+
+  it('asset.* 操作与逆操作都路由到 Creator AssetDB 写执行器', async () => {
+    const dependencies = createDependencies();
+    await executeWriteSceneOperations({
+      operations: [{
+        type: 'asset.move', sourceUrl: 'db://assets/a.ts', targetUrl: 'db://assets/b.ts',
+        expectedAssetUuid: 'asset-a'
+      }],
+      save: false,
+      undoGroup: 'asset-move'
+    }, dependencies);
+    const result = await rollbackWriteSceneOperations([
+      executedOp('asset.move', {
+        inverse: [{
+          type: 'asset.move', sourceUrl: 'db://assets/b.ts', targetUrl: 'db://assets/a.ts',
+          expectedAssetUuid: 'asset-a'
+        }]
+      })
+    ], dependencies);
+
+    expect(result.succeeded).toBe(true);
+    expect(dependencies.calls).toEqual(['prefab:asset.move', 'prefab:asset.move']);
   });
 });
 
@@ -136,6 +254,29 @@ describe('Dump 路径读写', () => {
 
     expect(readDumpValueAtPath(dump, ['items', 1])).toBe('b');
     expect(readDumpValueAtPath(dump, ['settings', 'colors', 0])).toBe('#000');
+  });
+
+  it('读取整个 ccclass 数组时递归解包每个字段', () => {
+    const dump = {
+      type: 'CocosAiValidationComponent',
+      value: {
+        items: {
+          type: 'Array',
+          value: [{
+            type: 'CocosAiValidationItem',
+            value: {
+              label: { name: 'label', type: 'String', value: 'First' },
+              mode: { name: 'mode', type: 'Enum', value: 1 },
+              weight: { name: 'weight', type: 'Number', value: 10 }
+            }
+          }]
+        }
+      }
+    };
+
+    expect(readDumpValueAtPath(dump, ['items'])).toEqual([
+      { label: 'First', mode: 1, weight: 10 }
+    ]);
   });
 
   it('写入 Dump 嵌套值并返回新 Dump，不改动原对象', () => {

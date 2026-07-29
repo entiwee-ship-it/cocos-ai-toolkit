@@ -214,6 +214,33 @@ describe('buildComponentTypeSchema', () => {
     expect(schema.rawClassAttributes).toMatchObject({ type: 'cc.MissingScript' });
   });
 
+  it('递归解包 ccclass 数组的 Inspector 属性描述器', () => {
+    const schema = buildComponentTypeSchema({
+      value: {
+        items: {
+          name: 'items',
+          type: 'CocosAiValidationItem',
+          isArray: true,
+          value: [{
+            type: 'CocosAiValidationItem',
+            value: {
+              label: { name: 'label', type: 'String', value: 'First' },
+              mode: { name: 'mode', type: 'Enum', value: 1 },
+              weight: { name: 'weight', type: 'Number', value: 10 }
+            }
+          }]
+        }
+      },
+      type: 'CocosAiValidationComponent',
+      cid: 'validation-component',
+      extends: ['cc.Component', 'cc.Object']
+    });
+
+    expect(schema.properties.find((item) => item.propertyPath === 'items')?.currentValue).toEqual([
+      { label: 'First', mode: 1, weight: 10 }
+    ]);
+  });
+
   it('内建扩展组件不伪造脚本 UUID 缺口，同时保留未注册自定义组件诊断', () => {
     for (const className of ['sp.Skeleton', 'dragonBones.ArmatureDisplay']) {
       const schema = buildComponentTypeSchema({

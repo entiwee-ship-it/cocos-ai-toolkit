@@ -17,6 +17,7 @@ describe('buildBridgeHello', () => {
     expect(hello.payload.projectPath).toBe('E:/project');
     expect(hello.payload.creatorVersion).toBe('3.8.8');
     expect(BRIDGE_CAPABILITIES).toContain('probe.writeRevision');
+    expect(BRIDGE_CAPABILITIES).not.toContain('probe.createAsset');
   });
 });
 

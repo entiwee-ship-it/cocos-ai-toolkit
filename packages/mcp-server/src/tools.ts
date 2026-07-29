@@ -2,7 +2,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   DesignApplyCommittedError,
   DesignApplyConfirmError,
+  DesignApplyError,
   DesignApplyOutcomeUnknownError,
+  DesignApplyPrepareOutcomeUnknownError,
   DesignApplyPreparedError,
   DesignApplyRollbackError,
   applyDesignPlan,
@@ -38,6 +40,7 @@ import {
   PrefabGraphNodeSchema,
   ProjectCoverageSchema,
   RevisionPreconditionSchema,
+  ScenarioStepSchema,
   ScriptAssetRecordSchema,
   UnresolvedItemSchema,
   WriteOperationSchema,
@@ -381,7 +384,7 @@ const DesignPreviewSchema = z.object({
 
 const DesignPreviewOutputSchema = z.object({
   editor: EditorSessionSchema,
-  preview: DesignPreviewSchema
+  preview: DesignPreviewSchema.extend({ revision: RevisionPreconditionSchema })
 });
 
 const DesignVerifyOutputSchema = z.object({
@@ -396,7 +399,17 @@ const DesignExportOutputSchema = z.object({
 
 const DesignApplyOutputSchema = z.object({
   editor: EditorSessionSchema,
-  result: z.record(z.string(), z.unknown())
+  result: z.record(z.string(), z.unknown()),
+  previewVerification: z.object({
+    attempted: z.literal(true),
+    committed: z.literal(true),
+    report: z.record(z.string(), z.unknown())
+  }).optional()
+});
+
+const DesignPreviewVerificationInputSchema = z.object({
+  sessionId: z.string().min(1).optional(),
+  steps: z.array(ScenarioStepSchema).min(1)
 });
 
 export type EditorSession = z.infer<typeof EditorSessionSchema>;
@@ -1007,6 +1020,15 @@ interface DesignReadContext {
   inspect: DesignInspectPayload;
 }
 
+interface RuntimeScenarioService {
+  runRuntimeScenario(input: {
+    sessionId?: string;
+    projectId?: string;
+    editorInstanceId?: string;
+    steps: unknown[];
+  }): Promise<Record<string, unknown>>;
+}
+
 /**
  * 阶段四声明式工具服务。只读入口和门控入口共用同一套完整快照、差异、计划与导出引擎。
  */
@@ -1014,7 +1036,8 @@ export class CocosDesignToolService {
   constructor(
     private readonly options: CocosReadonlyToolServiceOptions,
     private readonly editors: CocosReadonlyToolService,
-    private readonly writes?: CocosWriteToolService
+    private readonly writes?: CocosWriteToolService,
+    private readonly runtimeScenarios?: RuntimeScenarioService
   ) {}
 
   /**
@@ -1049,7 +1072,7 @@ export class CocosDesignToolService {
     target: DesignTargetDocument;
   }) {
     const target = DesignTargetDocumentSchema.parse(input.target);
-    const context = await this.readDesignContext(input);
+    const context = await this.readDesignContext(input, undefined, target);
     const plan = await this.createPlan(context, target);
     const output = DesignPlanOutputSchema.parse({ editor: context.editor, plan });
     await this.audit('cocos_design_plan', input, output.plan);
@@ -1068,10 +1091,14 @@ export class CocosDesignToolService {
     target: DesignTargetDocument;
   }) {
     const target = DesignTargetDocumentSchema.parse(input.target);
-    const context = await this.readDesignContext(input);
+    const context = await this.readDesignContext(input, undefined, target);
     const plan = await this.createPlan(context, target);
     const preview = renderDesignPreview(plan);
-    const output = DesignPreviewOutputSchema.parse({ editor: context.editor, preview });
+    const revision = await this.captureDesignRevision(context);
+    const output = DesignPreviewOutputSchema.parse({
+      editor: context.editor,
+      preview: { ...preview, revision }
+    });
     await this.audit('cocos_design_preview', input, output.preview);
     return output;
   }
@@ -1088,7 +1115,7 @@ export class CocosDesignToolService {
     target: DesignTargetDocument;
   }) {
     const target = DesignTargetDocumentSchema.parse(input.target);
-    const context = await this.readDesignContext(input);
+    const context = await this.readDesignContext(input, undefined, target);
     const report = DesignVerifyReportSchema.parse(verifyDesignTarget(
       context.inspect.tree,
       target
@@ -1140,10 +1167,16 @@ export class CocosDesignToolService {
     target: DesignTargetDocument;
     executionId?: string;
     revision?: z.infer<typeof RevisionPreconditionSchema>;
+    verifyPreview?: z.infer<typeof DesignPreviewVerificationInputSchema>;
+    save?: boolean;
+    allowDirtyAfterFirstCommit?: boolean;
   }) {
     if (!this.writes) throw new Error('DESIGN_WRITES_DISABLED');
+    if (input.verifyPreview && !this.runtimeScenarios) {
+      throw new Error('PREVIEW_VERIFICATION_UNAVAILABLE:请启用 runtime scenario 服务后重试');
+    }
     const target = DesignTargetDocumentSchema.parse(input.target);
-    const context = await this.readDesignContext(input);
+    const context = await this.readDesignContext(input, undefined, target);
     const plan = await this.createPlan(context, target);
     const executionId = input.executionId ?? `mcp-design-${randomUUID()}`;
     const initialNodeResolutions = collectInitialNodeResolutions(context.inspect.tree, target.tree);
@@ -1152,10 +1185,48 @@ export class CocosDesignToolService {
       executionId,
       initialNodeResolutions,
       scope: target.document.scope,
+      save: input.save,
+      allowDirtyAfterFirstCommit: input.allowDirtyAfterFirstCommit,
       ...(input.revision ? { revision: input.revision } : {})
     });
-    const output = DesignApplyOutputSchema.parse({ editor: context.editor, result });
-    await this.audit('cocos_design_apply', input, output.result, executionId);
+    let previewVerification: z.infer<typeof DesignApplyOutputSchema>['previewVerification'];
+    if (input.verifyPreview && result.status === 'committed') {
+      const startedAt = new Date().toISOString();
+      try {
+        previewVerification = {
+          attempted: true,
+          committed: true,
+          report: await this.runtimeScenarios!.runRuntimeScenario({
+            sessionId: input.verifyPreview.sessionId,
+            projectId: input.projectId,
+            editorInstanceId: input.editorInstanceId,
+            steps: input.verifyPreview.steps
+          })
+        };
+      } catch (error) {
+        previewVerification = {
+          attempted: true,
+          committed: true,
+          report: {
+            passed: false,
+            steps: [],
+            startedAt,
+            finishedAt: new Date().toISOString(),
+            error: {
+              code: 'PREVIEW_VERIFICATION_FAILED',
+              message: readErrorMessage(error),
+              nextAction: '写入已经提交；请恢复 Preview 连接后单独重跑 cocos_runtime_run_scenario'
+            }
+          }
+        };
+      }
+    }
+    const output = DesignApplyOutputSchema.parse({
+      editor: context.editor,
+      result,
+      ...(previewVerification ? { previewVerification } : {})
+    });
+    await this.audit('cocos_design_apply', input, output, executionId);
     return output;
   }
 
@@ -1201,9 +1272,11 @@ export class CocosDesignToolService {
   /** 读取同一 revision 的完整分页快照并规整成声明式树。 */
   private async readDesignContext(
     input: { projectId: string; editorInstanceId?: string },
-    rootUuid?: string
+    rootUuid?: string,
+    target?: DesignTargetDocument
   ): Promise<DesignReadContext> {
     const editor = await this.editors.resolveEditor(input);
+    await this.ensureDesignTargetDocument(editor, target);
     assertCapability(editor, 'probe.documentSnapshot');
     const pages: DocumentSnapshot[] = [];
     const seenCursors = new Set<string>();
@@ -1233,6 +1306,63 @@ export class CocosDesignToolService {
     };
   }
 
+  /** 对声明式目标执行文档身份门禁；source-prefab 可自动打开，current-document 只报可行动错误。 */
+  private async ensureDesignTargetDocument(
+    editor: EditorSession,
+    target?: DesignTargetDocument
+  ): Promise<void> {
+    const expectedAssetUuid = target?.document.assetUuid;
+    if (!target || !expectedAssetUuid || target.document.scope === 'apply-to-source') return;
+    assertCapability(editor, 'probe.editorState');
+    const readState = async () => readEditorStateResponse(await this.options.probeClient.request(
+      'probe.editorState',
+      { selector: toSelector(editor), params: {} }
+    ));
+    const initialState = await readState();
+    if (initialState.document.assetUuid === expectedAssetUuid) return;
+    if (target.document.scope === 'current-document') {
+      throw new Error(createTargetDocumentNotOpenMessage(
+        expectedAssetUuid,
+        initialState.document.assetUuid
+      ));
+    }
+    assertCapability(editor, 'probe.openAsset');
+    const opened = readAssetOpenProbeResponse(await this.options.probeClient.request(
+      'probe.openAsset',
+      { selector: toSelector(editor), params: { uuid: expectedAssetUuid } }
+    ));
+    if (opened.uuid !== expectedAssetUuid) {
+      throw new Error(`TARGET_DOCUMENT_OPEN_IDENTITY_MISMATCH: expected=${expectedAssetUuid}; actual=${opened.uuid}`);
+    }
+    const deadline = Date.now() + 10_000;
+    while (true) {
+      const state = await readState();
+      if (state.document.assetUuid === expectedAssetUuid) return;
+      if (Date.now() >= deadline) {
+        throw new Error(createTargetDocumentNotOpenMessage(
+          expectedAssetUuid,
+          state.document.assetUuid
+        ));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  /** 捕获与当前设计文档绑定的完整写入前置，可直接传给 design_apply。 */
+  private async captureDesignRevision(context: DesignReadContext) {
+    assertCapability(context.editor, 'probe.writeRevision');
+    const snapshot = WriteRevisionSnapshotSchema.parse(await this.options.probeClient.request(
+      'probe.writeRevision',
+      { selector: toSelector(context.editor), params: {} }
+    ));
+    if (snapshot.documentId !== context.snapshot.document.assetUuid) {
+      throw new Error(
+        `REVISION_DOCUMENT_IDENTITY_MISMATCH: expected=${context.snapshot.document.assetUuid}; actual=${snapshot.documentId}`
+      );
+    }
+    return snapshot.revision;
+  }
+
   /** 使用现有写服务组装 core 声明式执行器需要的事务、重读和 revision 能力。 */
   private createApplyRuntime(
     input: { projectId: string; editorInstanceId?: string },
@@ -1242,13 +1372,52 @@ export class CocosDesignToolService {
     if (!this.writes) throw new Error('DESIGN_WRITES_DISABLED');
     const writes = this.writes;
     const client = this.options.probeClient;
-    const knownNodeUuids = new Set(readSnapshotNodeUuids(initialContext.snapshot));
-    const knownComponentUuids = new Set(readSnapshotComponentUuids(initialContext.snapshot));
+    const knownNodeKeys = new Set(initialContext.snapshot.nodes.map(readProbeNodeStableKey));
+    const knownComponentKeys = new Set(readSnapshotComponentEntries(initialContext.snapshot)
+      .flatMap(({ nodeUuid, component, sameTypeIndex }) => {
+        const node = findSnapshotNode(initialContext.snapshot, nodeUuid);
+        return node ? [readProbeComponentStableKey(node, component, sameTypeIndex)] : [];
+      }));
     const runtimeNodeResolutions = { ...initialNodeResolutions };
+    const runtimeComponentResolutions: Record<string, string> = {};
+    const nodeLocators = new Map<string, { fileId: string | null; path: string | null }>();
+    const componentLocators = new Map<string, {
+      nodeLogicalId: string;
+      fileId: string | null;
+      componentType: string;
+      sameTypeIndex: number;
+    }>();
+    for (const [logicalId, nodeUuid] of Object.entries(runtimeNodeResolutions)) {
+      const node = findSnapshotNode(initialContext.snapshot, nodeUuid);
+      if (node) nodeLocators.set(logicalId, readProbeNodeLocator(node));
+    }
     let cachedContext: DesignReadContext | null = initialContext;
     const readContext = async (): Promise<DesignReadContext> => {
       cachedContext ??= await this.readDesignContext(input);
       return cachedContext;
+    };
+    const refreshRuntimeNodeResolutions = (snapshot: DocumentSnapshot): void => {
+      for (const [logicalId, locator] of nodeLocators) {
+        const node = findSnapshotNodeByLocator(snapshot, locator);
+        const uuid = node ? readProbeNodeUuid(node) : null;
+        if (uuid) runtimeNodeResolutions[logicalId] = uuid;
+      }
+    };
+    const refreshRuntimeComponentResolutions = (snapshot: DocumentSnapshot): void => {
+      for (const [key, locator] of componentLocators) {
+        const nodeUuid = runtimeNodeResolutions[locator.nodeLogicalId];
+        if (!nodeUuid) continue;
+        const matches = findSnapshotComponentEntries(snapshot, nodeUuid, locator.componentType);
+        const component = locator.fileId
+          ? matches.find((entry) => entry.component.identity.fileId === locator.fileId)
+          : matches.find((entry) => entry.sameTypeIndex === locator.sameTypeIndex);
+        const uuid = component?.component.identity.objectUuid;
+        if (uuid) runtimeComponentResolutions[key] = uuid;
+      }
+    };
+    const refreshRuntimeResolutions = (snapshot: DocumentSnapshot): void => {
+      refreshRuntimeNodeResolutions(snapshot);
+      refreshRuntimeComponentResolutions(snapshot);
     };
     return {
       async prepare(request) {
@@ -1262,13 +1431,22 @@ export class CocosDesignToolService {
             impactAnalysis: request.impactAnalysis,
             operations: request.operations,
             save: request.save,
+            allowDirty: request.allowDirty,
             undoGroup: request.undoGroup
           })).result;
         } catch (error) {
           if (error instanceof CocosWriteAuditError) {
             throw new DesignApplyPreparedError(error.result, error.message);
           }
-          throw new DesignApplyOutcomeUnknownError(readErrorMessage(error));
+          if (isPrepareOutcomeUnknownError(error)) {
+            throw new DesignApplyPrepareOutcomeUnknownError(readErrorMessage(error));
+          }
+          const structured = readStructuredError(error);
+          throw new DesignApplyError(
+            structured?.code ?? 'DESIGN_PREPARE_FAILED',
+            readErrorMessage(error),
+            structured?.details
+          );
         }
       },
       async confirm(transactionId) {
@@ -1302,37 +1480,79 @@ export class CocosDesignToolService {
       },
       async resolveCreatedNode(_logicalId, item) {
         const { snapshot } = await readContext();
+        refreshRuntimeNodeResolutions(snapshot);
         const parentIdentity = readPlanString(item, 'parentLogicalId')
           ?? readPlanString(item, 'parentNodeUuid');
         const parentUuid = parentIdentity?.startsWith('$')
           ? runtimeNodeResolutions[parentIdentity]
           : parentIdentity;
         const expectedName = readPlanString(item, 'name');
-        const candidates = snapshot.nodes.filter((node) => {
-          const uuid = readProbeNodeUuid(node);
-          if (!uuid || knownNodeUuids.has(uuid)) return false;
-          if (parentUuid && node.parentObjectUuid !== parentUuid) return false;
+        const newNamedCandidates = snapshot.nodes.filter((node) => {
+          if (knownNodeKeys.has(readProbeNodeStableKey(node))) return false;
           return !expectedName || node.name === expectedName;
         });
-        for (const uuid of readSnapshotNodeUuids(snapshot)) knownNodeUuids.add(uuid);
-        const resolved = candidates.length === 1 ? readProbeNodeUuid(candidates[0]) : null;
-        if (resolved) runtimeNodeResolutions[_logicalId] = resolved;
+        const parentCandidates = parentUuid
+          ? newNamedCandidates.filter((node) => node.parentObjectUuid === parentUuid)
+          : newNamedCandidates;
+        for (const node of snapshot.nodes) knownNodeKeys.add(readProbeNodeStableKey(node));
+        const candidate = parentCandidates.length === 1
+          ? parentCandidates[0]
+          : parentCandidates.length === 0 && newNamedCandidates.length === 1
+            ? newNamedCandidates[0]
+            : undefined;
+        const resolved = candidate ? readProbeNodeUuid(candidate) : null;
+        if (resolved && candidate) {
+          runtimeNodeResolutions[_logicalId] = resolved;
+          nodeLocators.set(_logicalId, readProbeNodeLocator(candidate));
+        }
         return resolved;
       },
       async resolveComponent(nodeUuid, componentType, expectCreated = false) {
         const { snapshot } = await readContext();
-        const matches = findSnapshotComponents(snapshot, nodeUuid, componentType);
-        const newMatches = matches.filter((component) => {
-          const uuid = component.identity.objectUuid;
-          return uuid !== null && !knownComponentUuids.has(uuid);
+        const logicalId = Object.entries(runtimeNodeResolutions)
+          .find(([, resolvedUuid]) => resolvedUuid === nodeUuid)?.[0];
+        refreshRuntimeResolutions(snapshot);
+        const currentNodeUuid = logicalId ? runtimeNodeResolutions[logicalId] ?? nodeUuid : nodeUuid;
+        const matches = findSnapshotComponentEntries(snapshot, currentNodeUuid, componentType);
+        const newMatches = matches.filter((entry) => {
+          const node = findSnapshotNode(snapshot, currentNodeUuid);
+          return node !== undefined && !knownComponentKeys.has(
+            readProbeComponentStableKey(node, entry.component, entry.sameTypeIndex)
+          );
         });
         const resolved = expectCreated
           ? newMatches.length === 1 ? newMatches[0] : undefined
           : newMatches.length === 1
             ? newMatches[0]
             : newMatches.length === 0 && matches.length === 1 ? matches[0] : undefined;
-        for (const uuid of readSnapshotComponentUuids(snapshot)) knownComponentUuids.add(uuid);
-        return resolved?.identity.objectUuid ?? null;
+        const resolvedUuid = resolved?.component.identity.objectUuid ?? null;
+        if (resolvedUuid && logicalId && resolved) {
+          const key = `${logicalId}::${componentType}`;
+          runtimeComponentResolutions[key] = resolvedUuid;
+          componentLocators.set(key, {
+            nodeLogicalId: logicalId,
+            fileId: resolved.component.identity.fileId,
+            componentType,
+            sameTypeIndex: resolved.sameTypeIndex
+          });
+          const node = findSnapshotNode(snapshot, currentNodeUuid);
+          if (node) {
+            knownComponentKeys.add(readProbeComponentStableKey(
+              node,
+              resolved.component,
+              resolved.sameTypeIndex
+            ));
+          }
+        }
+        return resolvedUuid;
+      },
+      async refreshResolutions() {
+        const { snapshot } = await readContext();
+        refreshRuntimeResolutions(snapshot);
+        return {
+          nodeResolutions: { ...runtimeNodeResolutions },
+          componentResolutions: { ...runtimeComponentResolutions }
+        };
       },
       async verifyPlanItem(item, verificationContext) {
         return verifyPlanItemFromSnapshot(
@@ -1387,6 +1607,9 @@ function summarizeDesignSnapshot(
     nodes.set(uuid, toDesignCurrentNode(node, uuid));
     parents.set(uuid, node.parentObjectUuid ?? null);
   }
+  for (const entry of readSnapshotComponentEntries(snapshot)) {
+    nodes.get(entry.nodeUuid)?.components.push(toDesignCurrentComponent(entry.component));
+  }
   for (const [uuid, parentUuid] of parents) {
     if (!parentUuid) continue;
     const parent = nodes.get(parentUuid);
@@ -1406,6 +1629,7 @@ function summarizeDesignSnapshot(
       })
       .map(([, node]) => node);
   }
+  attachPrefabOverrideAddresses(tree, snapshot.prefabInstances);
   const risks = [
     ...snapshot.diagnostics
       .filter((item) => item.severity !== 'info')
@@ -1435,7 +1659,7 @@ function toDesignCurrentNode(node: ProbeNode, uuid: string): DesignCurrentNode {
     name: node.name ?? uuid,
     path: node.path ?? node.name ?? uuid,
     prefabAssetUuid: node.prefabContext?.sourcePrefabAssetUuid ?? null,
-    components: (node.components ?? []).map(toDesignCurrentComponent),
+    components: [],
     children: []
   };
 }
@@ -1447,7 +1671,9 @@ function toDesignCurrentComponent(component: ProbeComponent): DesignCurrentNode[
   const propertySources: Record<string, string> = {};
   for (const property of component.properties) {
     propertySources[property.propertyPath] = property.valueSource;
-    if (property.valueKind.endsWith('-reference')) references[property.propertyPath] = property.effectiveValue;
+    if (property.valueKind.endsWith('-reference') || isReferenceArray(property.effectiveValue)) {
+      references[property.propertyPath] = property.effectiveValue;
+    }
     else properties[property.propertyPath] = property.effectiveValue;
   }
   return {
@@ -1458,6 +1684,61 @@ function toDesignCurrentComponent(component: ProbeComponent): DesignCurrentNode[
     references,
     propertySources
   };
+}
+
+function attachPrefabOverrideAddresses(
+  tree: DesignCurrentNode[],
+  prefabInstances: DocumentSnapshot['prefabInstances']
+): void {
+  const roots = prefabInstances
+    .filter((instance): instance is typeof instance & {
+      instanceRootObjectUuid: string;
+      hostNodePath: string;
+      sourcePrefabAssetUuid: string;
+    } => Boolean(instance.instanceRootObjectUuid && instance.hostNodePath && instance.sourcePrefabAssetUuid))
+    .sort((left, right) => right.hostNodePath.length - left.hostNodePath.length);
+  const rootsByUuid = new Map(roots.map((instance) => [instance.instanceRootObjectUuid, instance]));
+  const visit = (nodes: DesignCurrentNode[]): void => {
+    for (const node of nodes) {
+      const instanceRoot = rootsByUuid.get(node.uuid);
+      if (instanceRoot) node.prefabAssetUuid = instanceRoot.sourcePrefabAssetUuid;
+      const owner = roots.find((instance) => (
+        node.uuid !== instance.instanceRootObjectUuid
+        && node.path.startsWith(`${instance.hostNodePath}/`)
+      ));
+      if (owner) {
+        node.prefabOverrideAddress = {
+          instanceRootUuid: owner.instanceRootObjectUuid,
+          instanceRootPath: owner.hostNodePath,
+          nodePath: node.path,
+          internalNodePath: node.path.slice(owner.hostNodePath.length + 1)
+        };
+      }
+      visit(node.children);
+    }
+  };
+  visit(tree);
+}
+
+function isReferenceArray(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every(isReferenceLikeValue);
+}
+
+function isReferenceLikeValue(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  if (['node', 'component', 'asset', 'missing'].includes(String(record.kind))) return true;
+  if (['subAssetUuid', 'assetUuid', 'objectUuid', 'serializedUuid', 'uuid']
+    .some((key) => typeof record[key] === 'string' && record[key])) return true;
+  const nested = record.value;
+  return Boolean(
+    nested
+    && typeof nested === 'object'
+    && typeof (nested as Record<string, unknown>).uuid === 'string'
+    && (nested as Record<string, unknown>).uuid
+  );
 }
 
 /** 把机器计划转为带序号和说明文本的零执行预览。 */
@@ -1522,6 +1803,34 @@ function verifyPlanItemFromSnapshot(
   if (item.kind === 'script.wait_for_compile') {
     return createDesignVerificationItem(item, 'script-asset-available', 'script-asset-available');
   }
+  if (item.kind === 'document.extract_subtree') {
+    const assetUrl = readPlanString(item, 'assetUrl');
+    const assetVerification = assetUrl
+      ? context.transactionResult?.verification?.items.find((entry) => (
+          entry.passed
+          && entry.description.includes(assetUrl)
+          && typeof entry.actual === 'string'
+          && entry.actual.length > 0
+        ))
+      : undefined;
+    const sourcePrefabAssetUuid = typeof assetVerification?.actual === 'string'
+      ? assetVerification.actual
+      : null;
+    const relation = snapshot.prefabInstances.find((instance) => (
+      instance.instanceRootObjectUuid === targetUuid
+      && instance.sourcePrefabAssetUuid === sourcePrefabAssetUuid
+    ));
+    return createDesignVerificationItem(
+      item,
+      { assetUrl, instanceRootObjectUuid: targetUuid ?? null, sourcePrefabAssetUuid },
+      {
+        assetUrlVerified: Boolean(assetVerification),
+        instanceRootObjectUuid: relation?.instanceRootObjectUuid ?? null,
+        sourcePrefabAssetUuid: relation?.sourcePrefabAssetUuid ?? null
+      },
+      Boolean(assetUrl && targetUuid && sourcePrefabAssetUuid && relation)
+    );
+  }
   if (item.kind === 'node.create' || item.kind === 'prefab.instantiate') {
     const node = targetUuid ? findSnapshotNode(snapshot, targetUuid) : undefined;
     const expectedName = readPlanString(item, 'name');
@@ -1554,7 +1863,9 @@ function verifyPlanItemFromSnapshot(
       ? createDesignVerificationItem(item, componentUuid ?? 'resolved-component', actual?.identity.objectUuid ?? 'missing')
       : createDesignVerificationItem(item, 'missing', actual ? 'exists' : 'missing');
   }
-  if (item.kind === 'component.set_property' || item.kind === 'component.set_reference') {
+  if (item.kind === 'component.set_property'
+    || item.kind === 'component.set_reference'
+    || item.kind === 'prefab.instance_override') {
     const componentType = readPlanString(item, 'componentType');
     const componentUuid = readPlanString(item, 'componentUuid')
       ?? (componentType ? context.componentResolutions[`${item.target}::${componentType}`] : undefined);
@@ -1564,13 +1875,57 @@ function verifyPlanItemFromSnapshot(
       return createDesignVerificationItem(item, item.value, property?.effectiveValue ?? null);
     }
     const resolveTo = readPlanString(item, 'resolveTo');
-    const expected = resolveTo ? context.nodeResolutions[resolveTo] ?? null : item.params?.reference;
+    const expected = item.kind === 'prefab.instance_override' && !resolveTo && !('reference' in (item.params ?? {}))
+      ? item.value
+      : resolveTo ? context.nodeResolutions[resolveTo] ?? null : item.params?.reference;
     const actual = property?.effectiveValue;
+    if (item.kind === 'component.set_reference') {
+      const expectedIdentity = readDesignReferenceIdentity(expected, context);
+      const actualIdentity = readDesignReferenceIdentity(actual, context);
+      return createDesignVerificationItem(
+        item,
+        expected,
+        actual ?? null,
+        referenceIdentityIsResolved(expectedIdentity)
+          && isDeepStrictEqual(expectedIdentity, actualIdentity)
+      );
+    }
     const actualIdentity = resolveTo
       && actual && typeof actual === 'object'
       ? (actual as { objectUuid?: unknown }).objectUuid
       : actual;
+    if (item.kind === 'prefab.instance_override') {
+      const instanceRootLogicalId = readPlanString(item, 'instanceRootLogicalId');
+      const instanceRootUuid = instanceRootLogicalId
+        ? context.nodeResolutions[instanceRootLogicalId]
+        : null;
+      const relation = snapshot.prefabInstances.find((instance) => (
+        instance.instanceRootObjectUuid === instanceRootUuid
+      ));
+      const overrideRecorded = relation?.propertyOverrides.some((entry) => (
+        entry.propertyPath.join('.') === item.propertyPath
+      )) ?? false;
+      return createDesignVerificationItem(
+        item,
+        { value: expected, overrideRecorded: true },
+        { value: actualIdentity ?? null, overrideRecorded },
+        isDeepStrictEqual(expected, actualIdentity ?? null) && overrideRecorded
+      );
+    }
     return createDesignVerificationItem(item, expected, actualIdentity ?? null);
+  }
+  if (item.kind === 'prefab.revert_override') {
+    const instanceRootLogicalId = readPlanString(item, 'instanceRootLogicalId');
+    const instanceRootUuid = instanceRootLogicalId
+      ? context.nodeResolutions[instanceRootLogicalId]
+      : null;
+    const relation = snapshot.prefabInstances.find((instance) => (
+      instance.instanceRootObjectUuid === instanceRootUuid
+    ));
+    const remaining = relation?.propertyOverrides.some((entry) => (
+      entry.propertyPath.join('.') === item.propertyPath
+    )) ?? false;
+    return createDesignVerificationItem(item, 'override-removed', remaining ? 'override-present' : 'override-removed');
   }
   if (item.kind === 'prefab.apply_to_source') {
     const sourcePrefabAssetUuid = readPlanString(item, 'sourcePrefabAssetUuid');
@@ -1601,6 +1956,42 @@ function createDesignVerificationItem(
   };
 }
 
+function readDesignReferenceIdentity(
+  value: unknown,
+  context: DesignApplyVerificationContext
+): string | string[] | null {
+  if (Array.isArray(value)) {
+    return value.map((entry) => readSingleDesignReferenceUuid(entry, context) ?? '');
+  }
+  return readSingleDesignReferenceUuid(value, context);
+}
+
+function readSingleDesignReferenceUuid(
+  value: unknown,
+  context: DesignApplyVerificationContext
+): string | null {
+  if (typeof value === 'string') {
+    return value.startsWith('$') ? context.nodeResolutions[value] ?? null : value;
+  }
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  for (const key of ['subAssetUuid', 'assetUuid', 'objectUuid', 'serializedUuid', 'uuid']) {
+    if (typeof record[key] === 'string' && record[key]) return record[key] as string;
+  }
+  const nested = record.value;
+  if (nested && typeof nested === 'object') {
+    const nestedUuid = (nested as Record<string, unknown>).uuid;
+    if (typeof nestedUuid === 'string' && nestedUuid) return nestedUuid;
+  }
+  return null;
+}
+
+function referenceIdentityIsResolved(value: string | string[] | null): boolean {
+  return typeof value === 'string'
+    ? value.length > 0
+    : Array.isArray(value) && value.length > 0 && value.every(Boolean);
+}
+
 function readPlanString(item: DesignPlanItem, key: string): string | null {
   const value = item.params?.[key];
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -1611,37 +2002,250 @@ function findSnapshotNode(snapshot: DocumentSnapshot, uuid: string): ProbeNode |
 }
 
 function findSnapshotComponentByUuid(snapshot: DocumentSnapshot, uuid: string): ProbeComponent | undefined {
-  for (const node of snapshot.nodes) {
-    const component = node.components?.find((entry) => entry.identity.objectUuid === uuid);
-    if (component) return component;
-  }
-  return undefined;
+  return readSnapshotComponentEntries(snapshot)
+    .find((entry) => entry.component.identity.objectUuid === uuid)
+    ?.component;
 }
 
-function findSnapshotComponents(
+function findSnapshotComponentEntries(
   snapshot: DocumentSnapshot,
   nodeUuid: string,
   componentType: string
-): ProbeComponent[] {
-  return findSnapshotNode(snapshot, nodeUuid)?.components?.filter((component) =>
-    (component.qualifiedName ?? component.className ?? component.identity.typeId) === componentType
-  ) ?? [];
+): SnapshotComponentEntry[] {
+  return readSnapshotComponentEntries(snapshot)
+    .filter((entry) => entry.nodeUuid === nodeUuid)
+    .filter((entry) =>
+      (entry.component.qualifiedName ?? entry.component.className ?? entry.component.identity.typeId) === componentType
+    );
 }
 
 function readProbeNodeUuid(node: ProbeNode): string | null {
   return node.identity.objectUuid ?? node.identity.sessionId;
 }
 
-function readSnapshotNodeUuids(snapshot: DocumentSnapshot): string[] {
-  return snapshot.nodes.map(readProbeNodeUuid).filter((uuid): uuid is string => uuid !== null);
+function readProbeNodeLocator(node: ProbeNode): { fileId: string | null; path: string | null } {
+  return {
+    fileId: node.identity.fileId,
+    path: node.path || null
+  };
 }
 
-function readSnapshotComponentUuids(snapshot: DocumentSnapshot): string[] {
-  return snapshot.nodes.flatMap((node) =>
-    (node.components ?? [])
-      .map((component) => component.identity.objectUuid)
-      .filter((uuid): uuid is string => uuid !== null)
+function findSnapshotNodeByLocator(
+  snapshot: DocumentSnapshot,
+  locator: { fileId: string | null; path: string | null }
+): ProbeNode | undefined {
+  if (locator.fileId) {
+    const fileMatches = snapshot.nodes.filter((node) => node.identity.fileId === locator.fileId);
+    if (fileMatches.length === 1) return fileMatches[0];
+  }
+  return locator.path ? snapshot.nodes.find((node) => node.path === locator.path) : undefined;
+}
+
+function readProbeNodeStableKey(node: ProbeNode): string {
+  const locator = readProbeNodeLocator(node);
+  if (locator.fileId || locator.path) return `node:${locator.fileId ?? ''}:${locator.path ?? ''}`;
+  return `node-uuid:${readProbeNodeUuid(node) ?? ''}`;
+}
+
+interface SnapshotComponentEntry {
+  nodeUuid: string;
+  component: ProbeComponent;
+  componentIndex: number;
+  sameTypeIndex: number;
+}
+
+/** 统一读取真实 document-scan 顶层组件，并兼容旧快照的节点内组件。 */
+function readSnapshotComponentEntries(snapshot: DocumentSnapshot): SnapshotComponentEntry[] {
+  const entries: Array<Omit<SnapshotComponentEntry, 'sameTypeIndex'>> = snapshot.componentSchemas.map((schema) => ({
+    nodeUuid: schema.nodeUuid,
+    component: componentSchemaToProbeComponent(schema),
+    componentIndex: schema.componentIndex
+  }));
+  const knownUuids = new Set(snapshot.componentSchemas.map((schema) => schema.componentUuid));
+  for (const node of snapshot.nodes) {
+    const nodeUuid = readProbeNodeUuid(node);
+    if (!nodeUuid) continue;
+    for (const [componentIndex, component] of (node.components ?? []).entries()) {
+      const componentUuid = component.identity.objectUuid;
+      if (componentUuid && knownUuids.has(componentUuid)) continue;
+      entries.push({ nodeUuid, component, componentIndex });
+    }
+  }
+  const occurrences = new Map<string, number>();
+  return entries.map((entry) => {
+    const componentType = entry.component.qualifiedName
+      ?? entry.component.className
+      ?? entry.component.identity.typeId
+      ?? '';
+    const key = `${entry.nodeUuid}::${componentType}`;
+    const sameTypeIndex = occurrences.get(key) ?? 0;
+    occurrences.set(key, sameTypeIndex + 1);
+    return { ...entry, sameTypeIndex };
+  });
+}
+
+/** 把组件 Schema 的当前值与引用还原为声明式层既有的 ProbeComponent 视图。 */
+function componentSchemaToProbeComponent(
+  schema: DocumentSnapshot['componentSchemas'][number]
+): ProbeComponent {
+  return {
+    kind: 'component',
+    identity: {
+      sessionId: null,
+      objectUuid: schema.componentUuid,
+      assetUuid: null,
+      fileId: schema.componentFileId,
+      typeId: schema.typeId,
+      scriptUuid: schema.scriptUuid
+    },
+    className: schema.className,
+    qualifiedName: schema.qualifiedName,
+    scriptPath: schema.scriptPath,
+    inheritance: schema.inheritance,
+    properties: schema.properties.flatMap(componentSchemaPropertyToProbeProperties),
+    rawSerializedState: schema.rawClassAttributes
+  };
+}
+
+type ComponentSchemaProperty = DocumentSnapshot['componentSchemas'][number]['properties'][number];
+type ComponentSchemaReference = ComponentSchemaProperty['references'][number];
+type ProbeProperty = ProbeComponent['properties'][number];
+
+/** 把顶层组件属性还原为基础值，并补出数组或嵌套对象内引用的精确属性路径。 */
+function componentSchemaPropertyToProbeProperties(property: ComponentSchemaProperty): ProbeProperty[] {
+  const base: ProbeProperty = {
+    propertyPath: property.propertyPath,
+    serializedName: property.serializedName,
+    displayName: property.displayName,
+    declaredType: property.declaredType,
+    actualType: property.actualType,
+    valueKind: property.valueKind,
+    nullable: property.nullable,
+    serializable: property.serializable,
+    visible: property.visible,
+    readonly: property.readonly,
+    defaultValue: property.defaultValue,
+    effectiveValue: property.valueKind.endsWith('-reference') && property.references.length === 1
+      ? property.references[0]
+      : property.currentValue,
+    sourceValue: property.currentValue,
+    overrideValue: null,
+    valueSource: 'local',
+    inspectorMetadata: property.inspectorMetadata,
+    raw: property.rawClassAttributes
+  };
+  if (property.valueKind.endsWith('-reference') || property.references.length === 0) {
+    return [base];
+  }
+
+  const paths: string[] = [];
+  collectSchemaReferencePaths(
+    property.rawClassAttributes,
+    property.propertyPath,
+    null,
+    paths,
+    new Set<unknown>(),
+    0
   );
+  if (paths.length !== property.references.length) return [base];
+  return [
+    base,
+    ...paths.map((propertyPath, index): ProbeProperty => ({
+      ...base,
+      propertyPath,
+      serializedName: propertyPath,
+      displayName: propertyPath,
+      declaredType: null,
+      actualType: null,
+      valueKind: schemaReferenceValueKind(property.references[index]),
+      nullable: false,
+      defaultValue: null,
+      effectiveValue: property.references[index],
+      sourceValue: property.references[index]
+    }))
+  ];
+}
+
+function collectSchemaReferencePaths(
+  value: unknown,
+  propertyPath: string,
+  inheritedKind: 'node' | 'component' | 'asset' | null,
+  paths: string[],
+  visited: Set<unknown>,
+  depth: number
+): void {
+  if (depth > 8 || !value || typeof value !== 'object' || visited.has(value)) return;
+  visited.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectSchemaReferencePaths(
+      item, `${propertyPath}[${index}]`, inheritedKind, paths, visited, depth + 1
+    ));
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const expectedKind = readSchemaReferenceKind(record) ?? inheritedKind;
+  const currentValue = Object.prototype.hasOwnProperty.call(record, 'value') ? record.value : value;
+  if (record.isArray === true || Array.isArray(currentValue)) {
+    if (Array.isArray(currentValue)) {
+      currentValue.forEach((item, index) => collectSchemaReferencePaths(
+        item, `${propertyPath}[${index}]`, expectedKind, paths, visited, depth + 1
+      ));
+    }
+    return;
+  }
+  if (expectedKind) {
+    paths.push(propertyPath);
+    return;
+  }
+  if (currentValue !== value) {
+    collectSchemaReferencePaths(currentValue, propertyPath, null, paths, visited, depth + 1);
+    return;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (key === 'default' || key === 'elementTypeData') continue;
+    collectSchemaReferencePaths(child, `${propertyPath}.${key}`, null, paths, visited, depth + 1);
+  }
+}
+
+function readSchemaReferenceKind(
+  property: Record<string, unknown>
+): 'node' | 'component' | 'asset' | null {
+  const type = typeof property.type === 'string' ? property.type : null;
+  const inheritance = Array.isArray(property.extends)
+    ? property.extends.filter((item): item is string => typeof item === 'string')
+    : [];
+  if (type === 'cc.Node') return 'node';
+  if (inheritance.includes('cc.Component')) return 'component';
+  if (
+    inheritance.includes('cc.Asset')
+    || type === 'cc.Script'
+    || type === 'cc.Prefab'
+    || type === 'cc.SpriteFrame'
+    || type === 'cc.RenderTexture'
+  ) return 'asset';
+  return null;
+}
+
+function schemaReferenceValueKind(
+  reference: ComponentSchemaReference
+): ProbeProperty['valueKind'] {
+  if (reference.kind === 'node') return 'node-reference';
+  if (reference.kind === 'component') return 'component-reference';
+  if (reference.kind === 'asset') return 'asset-reference';
+  if (reference.expectedKind === 'node') return 'node-reference';
+  if (reference.expectedKind === 'component') return 'component-reference';
+  if (reference.expectedKind === 'asset') return 'asset-reference';
+  return 'unknown-serialized';
+}
+
+function readProbeComponentStableKey(
+  node: ProbeNode,
+  component: ProbeComponent,
+  sameTypeIndex: number
+): string {
+  const componentType = component.qualifiedName ?? component.className ?? component.identity.typeId ?? '';
+  return `${readProbeNodeStableKey(node)}:component:${componentType}:${sameTypeIndex}`;
 }
 
 function readResultStatus(result: unknown): string {
@@ -1784,7 +2388,7 @@ export function registerCocosDesignReadonlyTools(
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(await service.planDesign(input)));
   server.registerTool('cocos_design_preview', {
-    description: '渲染声明式计划的逐项预览、Override 标注、影响面和风险，不执行写入。',
+    description: '渲染计划、Override、影响面和风险，并返回可直接 apply 的 revision；TARGET_DOCUMENT_NOT_OPEN 时按 nextAction 打开或自动定位目标。',
     inputSchema: {
       ...ProjectSelectorInput,
       target: DesignTargetDocumentSchema
@@ -1800,18 +2404,19 @@ export function registerCocosDesignGatedTools(
   service: CocosDesignToolService
 ): void {
   server.registerTool('cocos_design_apply', {
-    description: '按声明式计划拆分事务执行，逐项重读验证，失败时逆序回滚。',
+    description: '按计划事务写入并重读；REVISION_* 时重跑 preview，OUTCOME_UNKNOWN 时查事务状态；verifyPreview 在 committed 后复用 runtime scenario。',
     inputSchema: {
       ...ProjectSelectorInput,
       target: DesignTargetDocumentSchema,
       executionId: z.string().min(1).optional(),
-      revision: RevisionPreconditionSchema.optional()
+      revision: RevisionPreconditionSchema.optional(),
+      verifyPreview: DesignPreviewVerificationInputSchema.optional()
     },
     outputSchema: DesignApplyOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.applyDesign(input)));
   server.registerTool('cocos_design_verify', {
-    description: '独立重读 Creator 当前状态，逐项核对声明式目标。',
+    description: '独立重读 Creator 当前状态并逐项核对；失败时检查 report.items 后修正目标，不要把 verify 失败当作未提交。',
     inputSchema: {
       ...ProjectSelectorInput,
       target: DesignTargetDocumentSchema
@@ -1820,7 +2425,7 @@ export function registerCocosDesignGatedTools(
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(await service.verifyDesign(input)));
   server.registerTool('cocos_design_export', {
-    description: '把当前文档或指定子树导出为可 round-trip 的声明式目标文档。',
+    description: '把当前文档或子树导出为 round-trip 目标；DESIGN_ROOT_NOT_FOUND 时重新 inspect 并使用真实 rootUuid。',
     inputSchema: {
       ...ProjectSelectorInput,
       rootUuid: z.string().min(1).optional(),
@@ -1876,6 +2481,11 @@ function readAssetOpenProbeResponse(value: unknown): z.infer<typeof AssetOpenPro
     throw new Error(`ASSET_OPEN_INVALID:${result.error.message}`);
   }
   return result.data;
+}
+
+function createTargetDocumentNotOpenMessage(expected: string, actual: string | null): string {
+  return `TARGET_DOCUMENT_NOT_OPEN: expected=${expected}; actual=${actual ?? 'unknown'}; `
+    + `nextAction=请先调用 cocos_asset_open 打开目标资产，或使用 source-prefab 允许自动打开`;
 }
 
 function readComponentProbeResponse(value: unknown): z.infer<typeof ComponentProbeResponseSchema> {
@@ -2411,6 +3021,31 @@ function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function readStructuredError(error: unknown): { code: string; details?: unknown } | null {
+  if (!error || typeof error !== 'object') return null;
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : null;
+  if (!code) return null;
+  return {
+    code,
+    ...('details' in error ? { details: error.details } : {})
+  };
+}
+
+function isPrepareOutcomeUnknownError(error: unknown): boolean {
+  const structured = readStructuredError(error);
+  if (structured && [
+    'SERVER_REQUEST_TIMEOUT',
+    'CLIENT_NOT_CONNECTED',
+    'SERVER_CONNECTION_CLOSED'
+  ].includes(structured.code)) return true;
+  const message = readErrorMessage(error);
+  return [
+    'SERVER_REQUEST_TIMEOUT',
+    'CLIENT_NOT_CONNECTED',
+    'SERVER_CONNECTION_CLOSED'
+  ].some((code) => message.includes(code));
+}
+
 const WRITE_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: true
@@ -2462,6 +3097,7 @@ export class CocosWriteToolService {
     impactAnalysis?: PrefabImpactAnalysis;
     operations: unknown[];
     save: boolean;
+    allowDirty?: boolean;
     undoGroup: string;
   }) {
     const editor = await this.editors.resolveEditor(input);
@@ -2474,6 +3110,7 @@ export class CocosWriteToolService {
       ...(input.impactAnalysis ? { impactAnalysis: input.impactAnalysis } : {}),
       operations: input.operations,
       save: input.save,
+      ...(input.allowDirty === true ? { allowDirty: true } : {}),
       undoGroup: input.undoGroup
     });
     const result = WriteTransactionResultSchema.parse(await this.options.probeClient.request(

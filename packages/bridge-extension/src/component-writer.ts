@@ -15,6 +15,8 @@ export interface ComponentInfo {
   uuid: string;
   type: string;
   nodeUuid: string;
+  nodeStablePath?: string | null;
+  sameTypeIndex?: number;
   enabled: boolean;
   /** 自定义脚本组件的脚本资产 UUID；内置组件为 null。 */
   scriptUuid?: string | null;
@@ -57,6 +59,7 @@ export interface ScriptMountGuardDependencies {
  */
 export interface ComponentWriterDependencies {
   getComponentInfo(componentUuid: string): Promise<ComponentInfo | null>;
+  findComponentInfo(nodeUuid: string, componentType: string): Promise<ComponentInfo | null>;
   nodeExists(nodeUuid: string): Promise<boolean>;
   addComponent(nodeUuid: string, componentType: string, scriptUuid: string | null): Promise<string>;
   removeComponent(componentUuid: string): Promise<void>;
@@ -76,6 +79,8 @@ export interface ComponentWriteOpResult {
   after: Record<string, unknown> | null;
   /** 显式逆操作序列，供 step-undo-with-inverse 回滚路径使用。 */
   inverse: WriteOperation[];
+  /** false 表示目标状态原本已满足，本次执行未产生任何文档变更。 */
+  changed?: boolean;
 }
 
 /**
@@ -149,6 +154,24 @@ async function addComponent(
     // 内置组件不允许携带脚本 UUID，防止调用方混淆挂载路径。
     throw new ProbeError('INVALID_WRITE_OPERATION', { type: operation.type, field: 'scriptUuid' });
   }
+  const existing = await dependencies.findComponentInfo(nodeUuid, componentType);
+  if (existing) {
+    const snapshot = {
+      uuid: existing.uuid,
+      type: existing.type,
+      nodeUuid: existing.nodeUuid,
+      ...(existing.nodeStablePath ? { nodeStablePath: existing.nodeStablePath } : {}),
+      ...(existing.sameTypeIndex === undefined ? {} : { sameTypeIndex: existing.sameTypeIndex }),
+      enabled: existing.enabled
+    };
+    return {
+      componentUuid: existing.uuid,
+      before: snapshot,
+      after: snapshot,
+      inverse: [],
+      changed: false
+    };
+  }
   if (scriptUuid !== null) {
     // 自定义脚本必须先过挂载守卫：核对资产索引、编译完成、类注册完成，
     // 任何一步失败都不执行挂载，避免产生 MissingScript。
@@ -162,7 +185,13 @@ async function addComponent(
   return {
     componentUuid,
     before: null,
-    after: { uuid: componentUuid, type: after.type, enabled: after.enabled },
+    after: {
+      uuid: componentUuid,
+      type: after.type,
+      enabled: after.enabled,
+      ...(after.nodeStablePath ? { nodeStablePath: after.nodeStablePath } : {}),
+      ...(after.sameTypeIndex === undefined ? {} : { sameTypeIndex: after.sameTypeIndex })
+    },
     inverse: [{ type: 'component.remove', componentUuid }]
   };
 }
@@ -243,12 +272,20 @@ async function setComponentReference(
   const info = await requireComponentInfo(dependencies, componentUuid);
   const segments = parsePropertyPath(propertyPath);
   assertWritableSchema(info, segments);
-  const reference = operation.reference as WriteReferenceValue;
-  if (reference.kind === 'missing' || reference.available === false) {
-    throw new ProbeError('REFERENCE_NOT_AVAILABLE', { componentUuid, propertyPath, kind: reference.kind });
-  }
-  if (!await dependencies.resolveReference(reference)) {
-    throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { componentUuid, propertyPath, reference });
+  const reference = operation.reference as WriteReferenceValue | WriteReferenceValue[];
+  const references = Array.isArray(reference) ? reference : [reference];
+  for (let index = 0; index < references.length; index += 1) {
+    const item = references[index];
+    if (item.kind === 'missing' || item.available === false) {
+      throw new ProbeError('REFERENCE_NOT_AVAILABLE', {
+        componentUuid, propertyPath, index, kind: item.kind
+      });
+    }
+    if (!await dependencies.resolveReference(item)) {
+      throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', {
+        componentUuid, propertyPath, index, reference: item
+      });
+    }
   }
   const oldValue = readValueAtPath(info.properties, segments, propertyPath);
   const schemaProperty = findSchemaProperty(info, segments);
@@ -305,44 +342,47 @@ function buildReferenceInverse(
   declaredType: string | null,
   oldValue: unknown
 ): WriteOperation[] {
-  const record = readObject(oldValue);
-  if (typeof record.kind === 'string' && record.kind) {
-    return [{ type: 'component.set_reference', componentUuid, propertyPath, reference: oldValue }];
+  if (Array.isArray(oldValue)) {
+    return [{
+      type: 'component.set_reference',
+      componentUuid,
+      propertyPath,
+      reference: oldValue.map((item) => normalizeReferenceValue(item, declaredType))
+    }];
   }
-  const oldUuid = readReferenceDumpUuid(oldValue);
-  if (!oldUuid) {
+  const normalized = normalizeReferenceValue(oldValue, declaredType);
+  if (!normalized) {
     return [{ type: 'component.clear_reference', componentUuid, propertyPath }];
   }
+  return [{ type: 'component.set_reference', componentUuid, propertyPath, reference: normalized }];
+}
+
+function normalizeReferenceValue(
+  value: unknown,
+  declaredType: string | null
+): WriteReferenceValue | null {
+  const record = readObject(value);
+  if (typeof record.kind === 'string' && record.kind) return record as WriteReferenceValue;
+  const oldUuid = readReferenceDumpUuid(value);
+  if (!oldUuid) return null;
   const fileId = typeof record.fileId === 'string' && record.fileId ? record.fileId : null;
-  if (declaredType === 'cc.Node') {
-    return [{
-      type: 'component.set_reference',
-      componentUuid,
-      propertyPath,
-      reference: { kind: 'node', objectUuid: oldUuid, fileId, nodePath: null, available: true }
-    }];
+  const itemType = declaredType?.endsWith('[]') ? declaredType.slice(0, -2) : declaredType;
+  if (itemType === 'cc.Node') {
+    return { kind: 'node', objectUuid: oldUuid, fileId, nodePath: null, available: true };
   }
-  if (declaredType && declaredType.endsWith('Component')) {
-    return [{
-      type: 'component.set_reference',
-      componentUuid,
-      propertyPath,
-      reference: { kind: 'component', objectUuid: oldUuid, fileId, typeId: declaredType, nodePath: null, available: true }
-    }];
+  if (itemType && itemType.endsWith('Component')) {
+    return {
+      kind: 'component', objectUuid: oldUuid, fileId, typeId: itemType, nodePath: null, available: true
+    };
   }
-  return [{
-    type: 'component.set_reference',
-    componentUuid,
-    propertyPath,
-    reference: {
-      kind: 'asset',
-      assetUuid: oldUuid,
-      subAssetUuid: typeof record.subAssetUuid === 'string' && record.subAssetUuid ? record.subAssetUuid : null,
-      assetType: declaredType,
-      path: null,
-      available: true
-    }
-  }];
+  return {
+    kind: 'asset',
+    assetUuid: oldUuid,
+    subAssetUuid: typeof record.subAssetUuid === 'string' && record.subAssetUuid ? record.subAssetUuid : null,
+    assetType: declaredType,
+    path: null,
+    available: true
+  };
 }
 
 /** 读取引用 Dump 形态（{uuid}/{assetUuid}/{objectUuid}）中的目标 UUID；空引用返回 null。 */

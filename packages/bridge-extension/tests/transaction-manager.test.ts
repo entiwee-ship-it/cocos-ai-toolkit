@@ -8,6 +8,50 @@ import {
   type WriteRollbackEvidence,
   type WriteTransactionRequest
 } from '../src/transaction-manager.js';
+import * as transactionManagerModule from '../src/transaction-manager.js';
+
+describe('captureWriteRevisionFromDocument', () => {
+  it('未保存临时文档没有磁盘路径时保留层级指纹并跳过文档哈希', async () => {
+    const captureWriteRevisionFromDocument = (
+      transactionManagerModule as unknown as {
+        captureWriteRevisionFromDocument?: (
+          identity: {
+            documentId: string;
+            hierarchySha256: string;
+            prefabGraphSha256: string | null;
+            dirty: boolean | null;
+          },
+          readDocumentAsset: (documentId: string) => Promise<Buffer>
+        ) => Promise<WriteRevisionCapture>;
+      }
+    ).captureWriteRevisionFromDocument;
+    expect(captureWriteRevisionFromDocument).toBeTypeOf('function');
+
+    const capture = await captureWriteRevisionFromDocument!(
+      {
+        documentId: 'temporary-scene',
+        hierarchySha256: 'hierarchy-a',
+        prefabGraphSha256: null,
+        dirty: false
+      },
+      async () => {
+        throw new ProbeError('ASSET_FILE_PATH_UNAVAILABLE');
+      }
+    );
+
+    expect(capture).toEqual({
+      documentId: 'temporary-scene',
+      dirty: false,
+      fingerprint: {
+        document: null,
+        hierarchy: 'sha256:hierarchy-a',
+        assetDatabase: null,
+        scriptCompilation: null,
+        prefabGraph: null
+      }
+    });
+  });
+});
 
 describe('validateWriteTransactionRequest（经 prepare 触发）', () => {
   it('拒绝缺少幂等键的写事务请求', async () => {
@@ -66,6 +110,56 @@ describe('validateWriteTransactionRequest（经 prepare 触发）', () => {
       ]
     }));
     expect(result.status).toBe('validated');
+  });
+
+  it('受控资产内容恢复必须携带完整内容与两个 SHA256 前置', async () => {
+    const manager = createManager();
+    await expect(manager.prepare(writeRequest({
+      operations: [{
+        type: 'asset.restore_content',
+        assetUrl: 'db://assets/ui/Dialog.prefab',
+        expectedAssetUuid: 'dialog-prefab',
+        expectedCurrentSha256: 'a'.repeat(64),
+        content: '[]',
+        targetSha256: 'b'.repeat(64)
+      }],
+      save: false
+    }))).resolves.toMatchObject({ status: 'validated' });
+    await expect(createManager().prepare(writeRequest({
+      operations: [{
+        type: 'asset.restore_content',
+        assetUrl: 'db://assets/ui/Dialog.prefab',
+        expectedAssetUuid: 'dialog-prefab',
+        expectedCurrentSha256: 'bad',
+        content: '[]',
+        targetSha256: 'b'.repeat(64)
+      }],
+      save: false
+    }))).rejects.toThrow('INVALID_WRITE_OPERATION');
+  });
+
+  it('安全文本替换接受可选 SHA256 前置并拒绝相同新旧文本', async () => {
+    await expect(createManager().prepare(writeRequest({
+      operations: [{
+        type: 'asset.update_text',
+        assetUrl: 'db://assets/script/GameUIConfig.ts',
+        expectedAssetUuid: 'game-ui-config',
+        expectedCurrentSha256: 'a'.repeat(64),
+        oldText: 'UIID.Lobby,',
+        newText: 'UIID.Lobby,\n  UIID.CocosAiValidation,'
+      }],
+      save: false
+    }))).resolves.toMatchObject({ status: 'validated' });
+    await expect(createManager().prepare(writeRequest({
+      operations: [{
+        type: 'asset.update_text',
+        assetUrl: 'db://assets/script/GameUIConfig.ts',
+        expectedAssetUuid: 'game-ui-config',
+        oldText: 'UIID.Lobby,',
+        newText: 'UIID.Lobby,'
+      }],
+      save: false
+    }))).rejects.toThrow('INVALID_WRITE_OPERATION');
   });
 });
 
@@ -126,6 +220,21 @@ describe('WriteTransactionManager Revision 前置', () => {
     await expect(confirmManager.confirm({ transactionId: prepared.transactionId }))
       .rejects.toThrow('DIRTY_DOCUMENT');
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('显式不保存且层级 revision 匹配时允许同一临时流程继续写脏文档', async () => {
+    const execute = vi.fn(async () => successOutcome());
+    const manager = createManager({
+      captureRevision: async () => revisionCapture({ dirty: true }),
+      execute
+    });
+    const request = writeRequest({ save: false, allowDirty: true });
+
+    const prepared = await manager.prepare(request);
+    const result = await manager.confirm({ transactionId: prepared.transactionId });
+
+    expect(result.status).toBe('committed');
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it('Revision 前置不一致时拒绝执行并返回冲突范围、旧值和当前值', async () => {
@@ -281,6 +390,13 @@ describe('WriteTransactionManager 超时与未知结局', () => {
     const result = await manager.confirm({ transactionId: prepared.transactionId });
 
     expect(result.status).toBe('outcome-unknown');
+    expect(result.failure).toMatchObject({
+      code: 'WRITE_EXECUTION_TIMEOUT',
+      stage: 'apply',
+      inputSummary: { scope: 'current-document', operationCount: 1, save: true },
+      originalError: { code: 'WRITE_EXECUTION_TIMEOUT', details: { timeoutMs: 1 } },
+      nextAction: '查询 transactionStatus；确认结局前禁止重试写入'
+    });
 
     const retried = await manager.prepare(writeRequest());
     expect(retried.status).toBe('outcome-unknown');

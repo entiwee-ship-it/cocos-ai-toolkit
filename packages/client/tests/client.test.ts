@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { ProbeClient } from '../src/client.js';
+import { ProbeClient, ProbeClientError } from '../src/client.js';
 
 interface ClientMessage {
   method?: string;
@@ -202,6 +202,40 @@ describe('ProbeClient shared behavior', () => {
       await expect(client.request('probe.editorState', {})).rejects.toThrow(
         'EDITOR_INSTANCE_NOT_FOUND'
       );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it('服务端失败响应保留原始 message、details、stage 和 nextAction', async () => {
+    const payload = {
+      code: 'PROPERTY_READONLY',
+      message: 'Creator 拒绝写入只读属性',
+      details: { propertyPath: 'spriteFrame' },
+      stage: 'apply',
+      nextAction: '改用可写属性或移除该计划项'
+    };
+    const server = await startTestServer((socket, message) => {
+      socket.send(JSON.stringify({
+        type: 'response', correlationId: message.requestId, ok: false, payload
+      }));
+    });
+    const client = new ProbeClient(server.url);
+
+    try {
+      await client.connect();
+      const error = await client.request('probe.writeConfirm', {}).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ProbeClientError);
+      expect(error).toMatchObject({
+        code: payload.code,
+        originalMessage: payload.message,
+        details: payload.details,
+        stage: payload.stage,
+        nextAction: payload.nextAction
+      });
+      expect((error as Error).message).toContain('Creator 拒绝写入只读属性');
+      expect((error as Error).message).toContain('改用可写属性或移除该计划项');
     } finally {
       await client.close();
       await server.close();

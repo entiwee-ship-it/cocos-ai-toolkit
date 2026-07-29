@@ -90,7 +90,7 @@ Server 在真实监听成功后会向 stdout 输出 `probe-server.ready` JSON。
 ```powershell
 $env:COCOS_AI_PROBE_SERVER_URL = 'ws://127.0.0.1:32188'
 $env:COCOS_AI_MCP_REPORT_ROOT = (Resolve-Path 'reports').Path
-node packages/mcp-server/dist/run.js
+node packages/mcp-server/dist/run.js --profile=prefab
 ```
 
 环境变量：
@@ -109,9 +109,15 @@ AI 客户端配置 MCP 命令时，应直接执行 `node <工具仓库绝对路�
 # 只有明确需要只读会话时才传：
 & scripts/install-codex-mcp.ps1 -SkipBuild -Readonly
 & scripts/check-codex-mcp.ps1 -Readonly
+
+# 排障、事务恢复或运行态取证才安装完整工具档：
+& scripts/install-codex-mcp.ps1 -SkipBuild -Profile full
+& scripts/check-codex-mcp.ps1 -Profile full
 ```
 
-安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目。默认附加 `--enable-writes`；传 `-Readonly` 才关闭写工具。健康检查会核对安装模式、Probe 端口、实际启动 stdio MCP、列出工具并调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
+安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目。默认附加 `--profile=prefab --enable-writes`；传 `-Readonly` 才关闭写工具，传 `-Profile full` 才切换到 37 工具调试档。健康检查会核对安装模式、profile、精确工具集合、Toolkit/MCP/Bridge 版本和源码提交，再调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
+
+Prefab 新建、子树抽取、嵌套实例 Override、引用数组、Enum/嵌套对象和 `verifyPreview` 的标准调用见 [使用手册](docs/usage-playbook.md)。
 
 ## 更新运行时到最新代码
 
@@ -121,7 +127,7 @@ AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-works
 & E:/xile-workspace/cocos-ai-toolkit/scripts/update-runtime.ps1
 ```
 
-脚本会依次完成：fetch 远程并把运行时 Worktree 的本地 `runtime` 分支重置到 `origin/master`、依赖清单变化时执行 `npm install`、代码变化或产物缺失时执行全量 `npm run build`、重启 Probe Server 并等待端口就绪。运行时 Worktree 存在未提交的 tracked 改动时会中止，避免覆盖手工修改。
+脚本会依次完成：fetch 远程并让运行时 Worktree 以 detached HEAD 对齐 `origin/master`、依赖清单变化时执行 `npm install`、代码变化或产物缺失时执行全量 `npm run build`、重启 Probe Server 并等待端口就绪。它不会创建额外本地分支；运行时 Worktree 存在未提交的 tracked 改动时会中止，避免覆盖手工修改。
 
 执行完后按提示生效：MCP Server 是 AI 客户端在会话启动时拉起的 stdio 进程，需要重启 Kimi Code / Codex 会话加载新构建；若 Bridge Extension 有变更，还需要在 Cocos Creator 中刷新/重启扩展。常用参数：`-SkipProbeRestart` 只同步代码和构建不重启 Probe，`-Force` 强制重新安装依赖和构建，`-TargetRef` 可指定同步到其它远程引用。
 
@@ -139,56 +145,29 @@ AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-works
 
 默认用 Junction 挂接到仓库，仓库更新技能即更新；`-Copy` 改为复制（复制后更新需重装），`-Force` 覆盖同名旧安装。技能列表在 AI 会话启动时加载，安装后重启会话生效。
 
-MCP 默认注册以下十八个只读工具：
+MCP 默认使用 `prefab` profile。Codex 默认写入安装精确暴露以下 7 个高层工具：
 
 | 工具 | 用途 |
 | --- | --- |
 | `cocos_editor_list` | 列出全部已连接 Creator 实例；唯一不要求 `projectId` 的全局入口 |
-| `cocos_editor_state` | 读取并校验指定编辑器状态 |
-| `cocos_asset_search` | 搜索完整 AssetDB 索引并分页返回资产 |
-| `cocos_asset_inspect` | 读取单资产详情、可选原始 Meta、依赖和反向使用者 |
-| `cocos_asset_open` | 通过 Creator AssetDB 打开已索引资产并校验回执身份 |
-| `cocos_component_schema` | 读取默认或自定义组件的完整 Schema、脚本 UUID/路径和可选原始 Dump |
-| `cocos_document_snapshot` | 读取当前文档的摘要或完整 Creator 分页快照 |
-| `cocos_prefab_graph` | 扫描项目、落盘完整 Prefab 图，并分页返回节点和边 |
-| `cocos_project_scan` | 执行可断点续扫的完整项目只读扫描并分页返回文档摘要 |
-| `cocos_design_inspect` | 读取当前文档或指定子树的声明式结构、组件、Override 和风险摘要 |
-| `cocos_design_plan` | 对比当前文档与目标文档，生成最小差异和有序计划 |
-| `cocos_design_preview` | 渲染逐项操作、Override、影响面和风险，零执行 |
-| `cocos_preview_sessions` | 列出工具管理的 Preview 页面会话 |
-| `cocos_runtime_get_hierarchy` | 读取 Preview 运行时整树或指定 `path` 子树，可排除 inactive 子树 |
-| `cocos_runtime_inspect_component` | 读取运行时组件属性包 |
-| `cocos_runtime_get_console` | 按游标和级别读取运行时 Console |
-| `cocos_runtime_watch_property` | 有界监听运行时属性变化 |
-| `cocos_runtime_capture` | 截图、裁剪及节点边界/锚点叠加 |
+| `cocos_prefab_search` | 只搜索 Prefab 资产并分页返回 |
+| `cocos_prefab_inspect` | 自动校验类型、打开 Prefab、等待就绪并返回结构和引用 |
+| `cocos_prefab_create` | 先预览，再通过 Creator 从声明式节点树生成 Prefab |
+| `cocos_prefab_edit` | 自动打开、预览、事务应用并独立验证 Prefab |
+| `cocos_prefab_delete` | 检查反向引用，精确确认后删除不可回滚的资产 |
+| `cocos_prefab_verify` | 自动打开目标并独立验证声明式树 |
 
-编辑态工具除 `cocos_editor_list` 外都必须传 `projectId`；同一项目连接多个 Creator 实例时还必须传 `editorInstanceId`，工具不会按“最近连接”隐式选择。Preview 与运行时工具使用 `sessionId` 绑定工具自行启动的页面会话。
+裸启动没有 `--enable-writes` 时只保留其中 4 个只读工具：editor list、search、inspect、verify。除 editor list 外都必须传 `projectId`；同一项目多实例时还必须传 `editorInstanceId`。
 
-`cocos_project_scan` 和 `cocos_prefab_graph` 的完整报告与 checkpoint 只会写入 `COCOS_AI_MCP_REPORT_ROOT`。AI 只能传相对 `.json` 路径；绝对路径、盘符、UNC、完整 `..` 分段、目录、符号链接和越界 Junction 都会在任何 Creator 请求前被拒绝。MCP 响应只包含摘要、有界页和不透明 cursor，不会把完整项目报告一次塞进 AI 上下文。cursor 翻页读取已落盘报告，不会重新打开 Creator 资产。
+创建、编辑、删除统一使用 `mode: preview | apply`。Agent 先读取 preview 的操作、风险和引用影响，再以相同目标 apply；删除还要求 `confirmAssetUrl` 与真实 URL 完全一致，存在反向引用时必须额外确认。外部进程始终禁止手写 `.prefab`、`.scene` 或 `.meta` JSON。
 
-MCP Server 裸启动仍保持只读；Codex 安装脚本默认为开发环境附加 `--enable-writes`。事务写工具、Preview 启停、运行时动作和 `cocos_design_apply/verify/export` 在该参数存在时注册：
+需要排查底层事务、运行态 Preview、完整项目扫描或恢复未知写结果时，显式使用完整调试档：
 
 ```powershell
-node packages/mcp-server/dist/run.js --enable-writes
+node packages/mcp-server/dist/run.js --profile=full --enable-writes
 ```
 
-门控运行时工具包括 `cocos_preview_launch`、`cocos_preview_stop`、`cocos_runtime_invoke_method`、`cocos_runtime_sample_window`、`cocos_runtime_dispatch_input`、`cocos_runtime_instantiate_prefab` 和 `cocos_runtime_run_scenario`。当前 Preview 通道由 Probe Server 自行启动外部 Chrome/Edge 页面；运行时 Prefab 实例化只改页面内存，不写工程文件。apply 与运行时动作标注为破坏性；verify/export 虽然只读，但与 apply 共用门控。声明式与运行时 MCP 调用都会写入报告根下的审计日志。
-
-`cocos_runtime_sample_window` 在单次页面执行内完成整个采样窗口，适合验证 220ms 一类容易被跨进程轮询错过的短过渡。它支持逐帧或固定间隔采样、采样前安全调用一个组件方法，并在节点中途销毁后保留 `nodeValid: false` 的证据帧：
-
-```json
-{
-  "sessionId": "<preview-session-id>",
-  "path": "Scene/Canvas/login",
-  "componentType": "LoginView",
-  "properties": ["opacity", "state.progress"],
-  "mode": "perFrame",
-  "durationMs": 220,
-  "trigger": { "method": "startTransition", "args": [] }
-}
-```
-
-固定间隔模式把 `mode` 改为 `{ "intervalMs": 20 }`。异步 trigger 不会阻塞首帧采样；窗口结束时仍未完成则 `trigger.pending` 为 `true`。如果 Preview 页面暂停了 `requestAnimationFrame`，wall-clock watchdog 会在窗口到期时返回已有样本并标记 `timedOut: true`，不会让请求无限挂起。`properties` 最多 20 项，`durationMs` 最大 55000；高刷新率下样本超过 3600 条时结果带 `truncated: true`。
+`full` profile 原样保留原有 33 个工具，不叠加 6 个 Prefab 门面，因此不会变成 39 个。底层 CLI、运行时工具、报告根约束和各阶段验证脚本仍保留在后续章节；日常 Agent 技能只教授 7 个高层工具。
 
 ## 选择编辑器和准备样本
 
@@ -297,9 +276,7 @@ node packages/cli/dist/index.js transaction-rollback --project-id <project-id> -
 - Revision 前置不一致返回 `REVISION_CONFLICT` 及冲突明细；执行超时标记 `outcome-unknown`，禁止盲目重试。
 - 写事务审计落盘到 `<报告根>/write-journal/<transactionId>.jsonl`（JSONL，含调用来源、参数、验证结果和状态历史）；CLI 默认报告根为 `reports`，可用 `COCOS_AI_REPORT_ROOT` 覆盖。
 
-MCP 写工具（`cocos_write_prepare` 等五个和 `cocos_design_apply`）以及阶段四门控只读工具
-（`cocos_design_verify`、`cocos_design_export`）默认不注册，仅当 MCP Server 以显式
-`--enable-writes` 启动时开放；环境变量无法开启。响应按协议 Schema 校验，声明式调用和写事务均写入审计。
+`full` profile 的 MCP 写工具默认不注册，仅当 MCP Server 以显式 `--enable-writes` 启动时开放；环境变量无法开启。响应按协议 Schema 校验，声明式调用和写事务均写入审计。
 
 ## 运行统一 Phase 0 验证
 
@@ -369,7 +346,7 @@ pwsh -NoProfile -File scripts/run-phase-2-write-validation.ps1 `
 
 - Bridge 仅连接 `127.0.0.1`。
 - 不允许执行任意 JavaScript。
-- MCP Server 裸启动只暴露十七个只读工具；Codex 安装脚本默认显式传入 `--enable-writes`，`-Readonly` 可切回只读。
+- MCP Server 默认 `prefab` 档：裸启动暴露 4 个只读工具，Codex 默认安装暴露 11 个 Prefab/AssetDB 高层工具；`full` 调试档才暴露底层工具。
 - 真实项目可直接写入，不强制隔离 Worktree。Revision、事务状态、保存重读和回滚验证仍保留，避免把失败或未知结局当成成功。
 - 外部进程不得直接写 `.prefab`、`.scene` 或 `.meta`。
 - Scene、Undo、保存和恢复全部由 Creator 执行；外部只读磁盘计算指纹。

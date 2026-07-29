@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import { BridgeClient } from './bridge-client';
+import { BridgeClient, type BridgeLifecycleEvent } from './bridge-client';
 import { buildBridgeHello, probeEditorState } from './editor-state';
 import type { CreatorDocumentIdentity } from './creator-document-identity';
 import { debugEditorMessage } from './debug-editor-message';
@@ -9,16 +8,34 @@ import { ProbeError } from './probe-errors';
 import { probeAssets } from './asset-probe';
 import { probeAssetIndex } from './asset-index';
 import {
+  executeMainAssetWrite,
+  rollbackMainAssetWrite,
+  type MainAssetWriteDependencies
+} from './main-asset-write';
+import { executeBridgeWrite } from './main-write-router';
+import type { VerifiedOperation } from './write-verifier';
+import {
   InMemoryWriteTransactionStore,
   WriteTransactionManager,
+  captureWriteRevisionFromDocument,
   type RevisionFingerprint,
   type WriteRevisionCapture,
   type WriteRollbackEvidence,
   type WriteTransactionRecord
 } from './transaction-manager';
 
-const BRIDGE_VERSION = '0.1.28';
+const BRIDGE_VERSION = '0.2.5';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
+
+const BRIDGE_LIFECYCLE_LOG_NAMES: Record<BridgeLifecycleEvent['type'], string> = {
+  connecting: '正在连接探针服务',
+  'socket-open': '探针连接已建立',
+  'hello-sent': '已发送身份握手',
+  ready: '扩展初始化完成',
+  disconnected: '探针连接已断开',
+  'retry-scheduled': '已安排重新连接',
+  disposed: '扩展已卸载'
+};
 
 let client: BridgeClient | null = null;
 let cachedScriptPathsByUuid: Array<[string, string]> | null = null;
@@ -46,11 +63,14 @@ const writeTransactionManager = new WriteTransactionManager({
     }
   },
   captureRevision: async () => captureWriteRevision(),
-  execute: async (transaction) => forwardToScene('writeExecute', {
+  execute: async (transaction) => executeBridgeWrite({
     operations: transaction.request.operations,
     save: transaction.request.save,
     undoGroup: transaction.request.undoGroup
-  }) as never,
+  }, {
+    executeMainAssetWrite: (input) => executeMainAssetWrite(input, buildMainAssetWriteDependencies()),
+    executeSceneWrite: (input) => forwardToScene('writeExecute', input) as never
+  }),
   rollback: async (transaction) => rollbackWriteTransaction(transaction)
 });
 
@@ -61,18 +81,9 @@ export function load(): void {
   const projectPath = project.path;
   const projectId = process.env.COCOS_AI_PROJECT_ID ?? project.uuid ?? projectPath;
   const creatorVersion = process.env.COCOS_CREATOR_VERSION ?? app.version ?? '3.8.x-unknown';
+  const probeUrl = process.env.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL;
 
-  client = new BridgeClient({
-    url: process.env.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL,
-    sessionToken: process.env.COCOS_AI_SESSION_TOKEN,
-    hello: () => buildBridgeHello({
-      processId: process.pid,
-      projectPath,
-      projectId,
-      creatorVersion,
-      bridgeVersion: BRIDGE_VERSION
-    }),
-    handlers: {
+  const handlers: Readonly<Record<string, (payload: unknown) => Promise<unknown>>> = {
       'probe.editorState': () => probeEditorStateWithDocumentIdentity(),
       'probe.assets': (payload) => probeAssets(payload),
       'probe.assetIndex': () => probeAssetIndexWithScriptCache(),
@@ -94,7 +105,6 @@ export function load(): void {
       'probe.transactionList': async () => writeTransactionManager.list(),
       'probe.transactionRollback': (payload) => writeTransactionManager.rollback(payload),
       'probe.createPrefab': (payload) => forwardToScene('createPrefabFromNode', payload),
-      'probe.createAsset': (payload) => forwardToScene('createAssetEmpty', payload),
       'probe.deleteAsset': (payload) => forwardToScene('deleteAsset', payload),
       'probe.refreshAsset': (payload) => forwardToScene('refreshAsset', payload),
       'probe.debugPrefabLifecycle': (payload) => forwardToScene('debugPrefabLifecycle', payload),
@@ -107,7 +117,29 @@ export function load(): void {
         method,
         (payload: unknown) => forwardToScene(sceneMethod, payload)
       ]))
-    }
+  };
+  logBridgeLifecycle('扩展开始加载', {
+    扩展版本: BRIDGE_VERSION,
+    Creator版本: creatorVersion,
+    项目ID: projectId,
+    项目路径: projectPath,
+    进程ID: process.pid,
+    探针地址: probeUrl,
+    能力数量: Object.keys(handlers).length
+  });
+
+  client = new BridgeClient({
+    url: probeUrl,
+    sessionToken: process.env.COCOS_AI_SESSION_TOKEN,
+    hello: () => buildBridgeHello({
+      processId: process.pid,
+      projectPath,
+      projectId,
+      creatorVersion,
+      bridgeVersion: BRIDGE_VERSION
+    }),
+    handlers,
+    onLifecycleEvent: logBridgeClientLifecycle
   });
   client.connect();
 }
@@ -116,6 +148,43 @@ export function unload(): void {
   client?.dispose();
   client = null;
   cachedScriptPathsByUuid = null;
+}
+
+function logBridgeClientLifecycle(event: BridgeLifecycleEvent): void {
+  logBridgeLifecycle(
+    BRIDGE_LIFECYCLE_LOG_NAMES[event.type],
+    localizeBridgeLifecycleDetails(event)
+  );
+}
+
+function localizeBridgeLifecycleDetails(event: BridgeLifecycleEvent): Record<string, unknown> {
+  switch (event.type) {
+    case 'connecting':
+    case 'socket-open':
+      return { 地址: event.url };
+    case 'disconnected':
+      return { 关闭码: event.code, 原因: event.reason };
+    case 'retry-scheduled':
+      return { 重试次数: event.attempt, 等待毫秒: event.delayMs };
+    case 'hello-sent':
+    case 'ready':
+    case 'disposed':
+      return {};
+  }
+}
+
+function logBridgeLifecycle(eventName: string, details: Record<string, unknown>): void {
+  const message = `[CocosAI][Bridge] ${eventName} ${JSON.stringify(details)}`;
+  try {
+    const editorGlobal = Editor as unknown as Record<string, unknown>;
+    if (typeof editorGlobal.log === 'function') {
+      (editorGlobal.log as (text: string) => void)(message);
+      return;
+    }
+  } catch {
+    // Creator 日志 API 不可用时继续回退到进程控制台。
+  }
+  console.log(message);
 }
 
 /**
@@ -159,19 +228,7 @@ async function captureWriteRevision(): Promise<WriteRevisionCapture> {
     prefabGraphSha256: string | null;
     dirty: boolean | null;
   };
-  const content = await readDocumentAsset(identity.documentId);
-  const documentSha256 = createHash('sha256').update(content).digest('hex');
-  return {
-    documentId: identity.documentId,
-    dirty: identity.dirty,
-    fingerprint: {
-      document: `sha256:${documentSha256}`,
-      hierarchy: `sha256:${identity.hierarchySha256}`,
-      assetDatabase: null,
-      scriptCompilation: null,
-      prefabGraph: identity.prefabGraphSha256 ? `sha256:${identity.prefabGraphSha256}` : null
-    }
-  };
+  return captureWriteRevisionFromDocument(identity, readDocumentAsset);
 }
 
 /**
@@ -183,10 +240,17 @@ async function captureWriteRevision(): Promise<WriteRevisionCapture> {
 async function rollbackWriteTransaction(
   transaction: WriteTransactionRecord
 ): Promise<WriteRollbackEvidence> {
-  const result = await forwardToScene('writeRollback', {
-    executed: transaction.executionEvidence ?? [],
-    save: transaction.request.save
-  }) as { succeeded: boolean; failedAt: number | null };
+  const executed = Array.isArray(transaction.executionEvidence)
+    ? transaction.executionEvidence as VerifiedOperation[]
+    : [];
+  const assetOnly = executed.length > 0
+    && executed.every((entry) => entry.operation.type.startsWith('asset.'));
+  const result = assetOnly
+    ? await rollbackMainAssetWrite(executed, buildMainAssetWriteDependencies())
+    : await forwardToScene('writeRollback', {
+        executed,
+        save: transaction.request.save
+      }) as { succeeded: boolean; failedAt: number | null };
   if (!result.succeeded) {
     return { attempted: true, succeeded: false, undoGroupId: null, verifiedClean: false };
   }
@@ -201,6 +265,56 @@ async function rollbackWriteTransaction(
   } catch {
     return { attempted: true, succeeded: true, undoGroupId: null, verifiedClean: null };
   }
+}
+
+function buildMainAssetWriteDependencies(): MainAssetWriteDependencies {
+  return {
+    queryAssetInfo: async (uuidOrUrl) => {
+      const value = await Editor.Message.request('asset-db', 'query-asset-info', uuidOrUrl).catch(() => null);
+      const record = readObject(value);
+      return typeof record.uuid === 'string' && record.uuid
+        ? { uuid: record.uuid, type: typeof record.type === 'string' ? record.type : null }
+        : null;
+    },
+    createAsset: async (assetUrl, _assetKind, content) => {
+      const value = await Editor.Message.request('asset-db', 'create-asset', assetUrl, content as never);
+      const record = readObject(value);
+      if (typeof record.uuid !== 'string' || !record.uuid) {
+        throw new ProbeError('ASSET_CREATE_FAILED', { assetUrl });
+      }
+      return { uuid: record.uuid, type: typeof record.type === 'string' ? record.type : null };
+    },
+    moveAsset: async (sourceUrl, targetUrl) => {
+      await Editor.Message.request('asset-db', 'move-asset', sourceUrl, targetUrl);
+    },
+    readAssetMeta: async (assetUrl) => {
+      const value = await Editor.Message.request('asset-db', 'query-asset-meta', assetUrl);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new ProbeError('ASSET_META_NOT_FOUND', { assetUrl });
+      }
+      return value as unknown as Record<string, unknown>;
+    },
+    writeAssetMeta: async (assetUrl, meta) => {
+      await Editor.Message.request('asset-db', 'save-asset-meta', assetUrl, JSON.stringify(meta));
+    },
+    readAssetContent: async (assetUrl) => {
+      const filePath = await Editor.Message.request('asset-db', 'query-path', assetUrl);
+      if (typeof filePath !== 'string' || !filePath) {
+        throw new ProbeError('ASSET_PATH_NOT_FOUND', { assetUrl });
+      }
+      return readFile(filePath, 'utf8');
+    },
+    saveAssetContent: async (assetUrl, content) => {
+      const value = await Editor.Message.request('asset-db', 'save-asset', assetUrl, content);
+      const record = readObject(value);
+      if (typeof record.uuid !== 'string' || !record.uuid) {
+        throw new ProbeError('ASSET_SAVE_FAILED', { assetUrl });
+      }
+    },
+    deleteAsset: async (assetUrl) => {
+      await Editor.Message.request('asset-db', 'delete-asset', assetUrl as never);
+    }
+  };
 }
 
 /** 指纹逐维比对：前置为 null 的维度不参与判定。 */

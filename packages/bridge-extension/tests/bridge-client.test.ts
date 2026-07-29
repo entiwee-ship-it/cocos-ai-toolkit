@@ -4,10 +4,104 @@ import { WebSocketServer } from 'ws';
 import { DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES } from '../../protocol/src/transport.js';
 import {
   BRIDGE_WEBSOCKET_MAX_PAYLOAD_BYTES,
-  BridgeClient
+  BridgeClient,
+  type BridgeLifecycleEvent
 } from '../src/bridge-client';
 
 describe('BridgeClient WebSocket transport', () => {
+  it('按 connecting/socket-open/hello-sent/ready 顺序报告成功握手', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const events: BridgeLifecycleEvent[] = [];
+    let resolveReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    server.once('connection', (socket) => {
+      socket.once('message', (raw) => {
+        const hello = JSON.parse(raw.toString()) as { method?: string };
+        expect(hello.method).toBe('bridge.hello');
+        socket.send(JSON.stringify({
+          type: 'response',
+          correlationId: 'bridge.hello',
+          ok: true,
+          payload: {}
+        }));
+      });
+    });
+    const client = new BridgeClient({
+      url: `ws://127.0.0.1:${port}`,
+      hello: () => ({ method: 'bridge.hello', payload: {} }),
+      handlers: {},
+      onLifecycleEvent: (event) => {
+        events.push(event);
+        if (event.type === 'ready') resolveReady?.();
+      }
+    });
+
+    try {
+      client.connect();
+      await ready;
+      expect(events.map((event) => event.type)).toEqual([
+        'connecting',
+        'socket-open',
+        'hello-sent',
+        'ready'
+      ]);
+    } finally {
+      client.dispose();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('断线后报告重连计划，dispose 后报告释放且不再连接', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const events: BridgeLifecycleEvent[] = [];
+    let connectionCount = 0;
+    let resolveRetry: (() => void) | undefined;
+    const retryScheduled = new Promise<void>((resolve) => {
+      resolveRetry = resolve;
+    });
+    server.on('connection', (socket) => {
+      connectionCount += 1;
+      socket.once('message', () => socket.close(1012, 'test restart'));
+    });
+    const client = new BridgeClient({
+      url: `ws://127.0.0.1:${port}`,
+      hello: () => ({ method: 'bridge.hello', payload: {} }),
+      handlers: {},
+      reconnectBaseMs: 40,
+      reconnectMaxMs: 40,
+      onLifecycleEvent: (event) => {
+        events.push(event);
+        if (event.type === 'retry-scheduled') resolveRetry?.();
+      }
+    });
+
+    try {
+      client.connect();
+      await retryScheduled;
+      client.dispose();
+      await new Promise<void>((resolve) => setTimeout(resolve, 80));
+
+      expect(events.map((event) => event.type)).toEqual([
+        'connecting',
+        'socket-open',
+        'hello-sent',
+        'disconnected',
+        'retry-scheduled',
+        'disposed'
+      ]);
+      expect(connectionCount).toBe(1);
+    } finally {
+      client.dispose();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('与共享协议保持相同的有限默认上限', () => {
     expect(BRIDGE_WEBSOCKET_MAX_PAYLOAD_BYTES).toBe(
       DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES

@@ -1,19 +1,42 @@
 export class ProbeError extends Error {
   constructor(
     readonly code: string,
-    readonly details: Record<string, unknown> = {}
+    readonly details: Record<string, unknown> = {},
+    message = code
   ) {
-    super(code);
+    super(message);
     this.name = 'ProbeError';
   }
 }
 
-export function toProbeErrorPayload(error: unknown): { code: string; details: Record<string, unknown> } {
+export interface ProbeErrorPayload {
+  code: string;
+  message: string;
+  details: Record<string, unknown>;
+  stage?: string;
+  nextAction?: string;
+}
+
+export function toProbeErrorPayload(error: unknown): ProbeErrorPayload {
   if (error instanceof ProbeError) {
-    return { code: error.code, details: error.details };
+    const stage = typeof error.details.stage === 'string' ? error.details.stage : undefined;
+    const nextAction = typeof error.details.nextAction === 'string'
+      ? error.details.nextAction
+      : undefined;
+    return {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      ...(stage ? { stage } : {}),
+      ...(nextAction ? { nextAction } : {})
+    };
   }
   if (error instanceof Error) {
-    return { code: error.message || 'BRIDGE_HANDLER_FAILED', details: {} };
+    return {
+      code: 'BRIDGE_HANDLER_FAILED',
+      message: error.message || 'Bridge handler failed',
+      details: {}
+    };
   }
-  return { code: 'BRIDGE_HANDLER_FAILED', details: {} };
+  return { code: 'BRIDGE_HANDLER_FAILED', message: 'Bridge handler failed', details: {} };
 }

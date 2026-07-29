@@ -50,6 +50,7 @@ export const WriteTransactionRequestSchema = z.object({
   impactAnalysis: PrefabImpactAnalysisSchema.optional(),
   operations: z.array(WriteOperationSchema).min(1),
   save: z.boolean(),
+  allowDirty: z.boolean().optional(),
   undoGroup: z.string().min(1)
 }).superRefine((request, context) => {
   if ((request.scope === 'source-prefab' || request.scope === 'apply-to-source') && !request.impactAnalysis) {
@@ -69,6 +70,18 @@ export const WriteTransactionRequestSchema = z.object({
     context.addIssue({
       code: 'custom',
       message: 'prefab.apply_to_source 操作要求 revision.prefabGraph 前置指纹'
+    });
+  }
+  if (request.allowDirty && request.save) {
+    context.addIssue({
+      code: 'custom',
+      message: 'allowDirty 仅允许用于 save=false 的临时文档事务'
+    });
+  }
+  if (request.allowDirty && !request.revision.hierarchy) {
+    context.addIssue({
+      code: 'custom',
+      message: 'allowDirty 必须携带 revision.hierarchy 以防覆盖未知脏状态'
     });
   }
 });
@@ -114,7 +127,15 @@ export const WriteFailureSchema = z.object({
   message: z.string().min(1),
   operationIndex: z.number().int().nonnegative().nullable().optional(),
   conflicts: z.array(WriteConflictSchema).optional(),
-  details: z.unknown().optional()
+  details: z.unknown().optional(),
+  stage: z.enum(['plan', 'prepare', 'apply', 'save', 'verify', 'rollback', 'unknown']).optional(),
+  inputSummary: z.record(z.string(), z.unknown()).optional(),
+  originalError: z.object({
+    code: z.string().min(1),
+    message: z.string().min(1).optional(),
+    details: z.unknown().optional()
+  }).optional(),
+  nextAction: z.string().min(1).optional()
 });
 
 /**

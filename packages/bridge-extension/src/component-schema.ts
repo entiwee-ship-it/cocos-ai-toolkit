@@ -1,4 +1,4 @@
-import { classifyValueKind, readDumpValue, readObject } from './raw-reflection';
+import { classifyValueKind, readDumpValue, readDumpValueDeep, readObject } from './raw-reflection';
 import { normalizeSerializedReferences, type NormalizedReference } from './reference-normalizer';
 
 const PROPERTY_CONSUMED_KEYS = new Set([
@@ -191,8 +191,8 @@ export { normalizeSerializedReferences } from './reference-normalizer';
 function buildPropertySchema(propertyPath: string, rawValue: unknown): ComponentPropertySchemaResult {
   const property = readObject(rawValue);
   const declaredType = readString(property.type);
-  const currentValue = readDumpValue(property);
-  const defaultValue = 'default' in property ? readDumpValue(property.default) : null;
+  const currentValue = readDumpValueDeep(property);
+  const defaultValue = 'default' in property ? readDumpValueDeep(property.default) : null;
   const references = normalizeSerializedReferences(property);
   const inspectorMetadata: Record<string, unknown> = {};
   for (const key of INSPECTOR_METADATA_KEYS) {

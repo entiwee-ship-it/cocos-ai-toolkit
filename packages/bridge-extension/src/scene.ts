@@ -274,68 +274,6 @@ async function deleteAsset(request: unknown): Promise<unknown> {
 }
 
 /**
- * 在资产库创建空 Node Prefab（内容与 Creator 3.8.8 内置模板 default_file_content/prefab/default.prefab 一致）。
- * 对既有路径先拒绝，避免触发 Creator"文件已存在"模态框无限阻塞。
- */
-async function createAssetEmpty(request: unknown): Promise<unknown> {
-  const input = readObject(unwrapRequest(request));
-  const assetUrl = typeof input.assetUrl === 'string' && input.assetUrl ? input.assetUrl : null;
-  if (!assetUrl) throw new ProbeError('ASSET_URL_REQUIRED');
-  if (!assetUrl.endsWith('.prefab')) throw new ProbeError('ASSET_URL_NOT_PREFAB', { assetUrl });
-  const existing = await Editor.Message.request('asset-db', 'query-asset-info', assetUrl);
-  if (existing) {
-    throw new ProbeError('ASSET_ALREADY_EXISTS', { assetUrl });
-  }
-  const assetName = assetUrl.slice(assetUrl.lastIndexOf('/') + 1, -'.prefab'.length);
-  const content = JSON.stringify(buildEmptyPrefabTemplate(assetName));
-  const created = await Editor.Message.request('asset-db', 'create-asset', assetUrl, content);
-  const info = readObject(created);
-  return {
-    assetUuid: typeof info.uuid === 'string' ? info.uuid : null,
-    assetUrl,
-    type: info.type ?? null
-  };
-}
-
-/** Creator 3.8.8 内置 Node Prefab 模板（default_file_content/prefab/default.prefab），_name 按资产名填充。 */
-function buildEmptyPrefabTemplate(assetName: string): unknown[] {
-  return [
-    {
-      __type__: 'cc.Prefab',
-      _name: assetName,
-      _objFlags: 0,
-      _native: '',
-      data: { __id__: 1 },
-      optimizationPolicy: 0,
-      asyncLoadAssets: false,
-      persistent: false
-    },
-    {
-      __type__: 'cc.Node',
-      _name: assetName,
-      _objFlags: 0,
-      _parent: null,
-      _children: [],
-      _active: true,
-      _components: [],
-      _prefab: { __id__: 2 },
-      _lpos: { __type__: 'cc.Vec3', x: 0, y: 0, z: 0 },
-      _lrot: { __type__: 'cc.Quat', x: 0, y: 0, z: 0, w: 1 },
-      _lscale: { __type__: 'cc.Vec3', x: 1, y: 1, z: 1 },
-      _layer: 1073741824,
-      _euler: { __type__: 'cc.Vec3', x: 0, y: 0, z: 0 },
-      _id: ''
-    },
-    {
-      __type__: 'cc.PrefabInfo',
-      root: { __id__: 1 },
-      asset: { __id__: 0 },
-      fileId: 'c46/YsCPVOJYA4mWEpNYRx'
-    }
-  ];
-}
-
-/**
  * 从场景节点生成预制体资产（cce.SceneFacadeManager.createPrefab）。
  * 对既有路径先拒绝，避免触发 Creator"文件已存在"模态框无限阻塞。
  */
@@ -958,7 +896,6 @@ export const methods = {
   debugPrefabLifecycle,
   debugPrefabFacade,
   createPrefabFromNode,
-  createAssetEmpty,
   deleteAsset,
   refreshAsset
 };

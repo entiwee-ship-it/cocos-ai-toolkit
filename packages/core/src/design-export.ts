@@ -337,6 +337,11 @@ function referenceMatches(
   expected: unknown,
   resolutions: Map<string, DesignCurrentNode | null>
 ): boolean {
+  if (Array.isArray(expected)) {
+    return Array.isArray(actual)
+      && actual.length === expected.length
+      && expected.every((item, index) => referenceMatches(actual[index], item, resolutions));
+  }
   if (typeof expected === 'string' && expected.startsWith('$')) {
     const resolved = resolutions.get(expected);
     return Boolean(
@@ -345,7 +350,24 @@ function referenceMatches(
       && (actual as { objectUuid?: unknown }).objectUuid === resolved?.uuid
     );
   }
+  const expectedIdentity = readReferenceIdentity(expected);
+  const actualIdentity = readReferenceIdentity(actual);
+  if (expectedIdentity && actualIdentity) return expectedIdentity === actualIdentity;
   return isDeepStrictEqual(actual, expected);
+}
+
+function readReferenceIdentity(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  for (const key of ['subAssetUuid', 'assetUuid', 'objectUuid', 'serializedUuid', 'uuid']) {
+    if (typeof record[key] === 'string' && record[key]) return record[key] as string;
+  }
+  const nested = record.value;
+  if (nested && typeof nested === 'object') {
+    const uuid = (nested as Record<string, unknown>).uuid;
+    if (typeof uuid === 'string' && uuid) return uuid;
+  }
+  return null;
 }
 
 function verificationItem(

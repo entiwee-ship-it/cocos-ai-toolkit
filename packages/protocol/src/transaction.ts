@@ -130,7 +130,7 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
     type: z.literal('component.set_reference'),
     componentUuid: z.string().min(1),
     propertyPath: z.string().min(1),
-    reference: ReferenceSchema
+    reference: z.union([ReferenceSchema, z.array(ReferenceSchema)])
   }),
   z.object({
     type: z.literal('component.clear_reference'),
@@ -142,6 +142,53 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
     componentUuid: z.string().min(1),
     propertyPath: z.string().min(1),
     length: z.number().int().nonnegative()
+  }),
+  z.object({
+    type: z.literal('asset.create'),
+    assetUrl: z.string().min(1),
+    assetKind: z.enum(['folder', 'component-script']),
+    content: z.string().min(1).optional()
+  }).superRefine((operation, context) => {
+    if (operation.assetKind === 'component-script' && !operation.content) {
+      context.addIssue({ code: 'custom', message: 'component-script 创建必须提供 content' });
+    }
+  }),
+  z.object({
+    type: z.literal('asset.move'),
+    sourceUrl: z.string().min(1),
+    targetUrl: z.string().min(1),
+    expectedAssetUuid: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal('asset.delete'),
+    assetUrl: z.string().min(1),
+    expectedAssetUuid: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal('asset.write_meta'),
+    assetUrl: z.string().min(1),
+    expectedAssetUuid: z.string().min(1),
+    meta: z.record(z.string(), z.unknown())
+  }),
+  z.object({
+    type: z.literal('asset.update_text'),
+    assetUrl: z.string().min(1),
+    expectedAssetUuid: z.string().min(1),
+    expectedCurrentSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    oldText: z.string().min(1),
+    newText: z.string().min(1)
+  }).superRefine((operation, context) => {
+    if (operation.oldText === operation.newText) {
+      context.addIssue({ code: 'custom', message: '文本替换的新旧内容不能相同' });
+    }
+  }),
+  z.object({
+    type: z.literal('asset.restore_content'),
+    assetUrl: z.string().min(1),
+    expectedAssetUuid: z.string().min(1),
+    expectedCurrentSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    content: z.string().min(1),
+    targetSha256: z.string().regex(/^[0-9a-f]{64}$/)
   }),
   // 阶段三预制体语义操作：实例化、生成、还原覆盖、应用到源、替换源、解除与重新关联。
   z.object({
@@ -156,10 +203,24 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
     assetUrl: z.string().min(1)
   }),
   z.object({
+    type: z.literal('prefab.instance_override'),
+    instanceRootUuid: z.string().min(1),
+    targetObjectUuid: z.string().min(1),
+    targetNodePath: z.string().min(1).optional(),
+    propertyPath: z.string().min(1),
+    value: z.unknown()
+  }),
+  z.object({
     type: z.literal('prefab.revert_override'),
     instanceRootUuid: z.string().min(1),
+    targetObjectUuid: z.string().min(1).optional(),
+    targetNodePath: z.string().min(1).optional(),
     // 省略为整实例还原；提供时按属性路径细粒度还原。
     propertyPath: z.string().min(1).optional()
+  }).superRefine((operation, context) => {
+    if (operation.targetObjectUuid && !operation.propertyPath) {
+      context.addIssue({ code: 'custom', message: '精确还原必须提供 propertyPath' });
+    }
   }),
   z.object({
     type: z.literal('prefab.apply_to_source'),

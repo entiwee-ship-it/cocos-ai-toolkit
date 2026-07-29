@@ -217,4 +217,43 @@ describe('computeDesignDiff', () => {
     const diff = computeDesignDiff(current, tree, false);
     expect(diff.filter((item) => item.kind === 'reference.set')).toHaveLength(0);
   });
+
+  it('引用数组按逐项身份和顺序比较', () => {
+    const assetReference = {
+      kind: 'asset' as const,
+      assetUuid: 'texture-a',
+      subAssetUuid: 'frame-a',
+      assetType: 'cc.SpriteFrame',
+      path: null,
+      available: true
+    };
+    const current = [currentNode({
+      children: [
+        currentNode({ uuid: 'u-label', name: 'title', path: 'root/title' }),
+        currentNode({
+          uuid: 'u-list', name: 'list', path: 'root/list',
+          components: [{
+            type: 'FrameList', properties: {},
+            references: { textureFrames: [assetReference, { kind: 'node', objectUuid: 'u-label' }] }
+          }]
+        })
+      ]
+    })];
+    const tree = [targetNode({
+      id: '$root', name: 'root',
+      children: [
+        targetNode({ id: '$label', name: 'title' }),
+        targetNode({
+          id: '$list', name: 'list',
+          components: [{ type: 'FrameList', references: { textureFrames: [assetReference, '$label'] } }]
+        })
+      ]
+    })];
+
+    expect(computeDesignDiff(current, tree, false).filter((item) => item.kind === 'reference.set')).toHaveLength(0);
+    tree[0].children![1].components![0].references!.textureFrames.reverse();
+    expect(computeDesignDiff(current, tree, false)).toContainEqual(expect.objectContaining({
+      kind: 'reference.set', propertyPath: 'textureFrames'
+    }));
+  });
 });

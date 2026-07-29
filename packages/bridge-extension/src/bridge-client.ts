@@ -11,6 +11,15 @@ interface BridgeRequest {
   payload: unknown;
 }
 
+export type BridgeLifecycleEvent =
+  | { type: 'connecting'; url: string }
+  | { type: 'socket-open'; url: string }
+  | { type: 'hello-sent' }
+  | { type: 'ready' }
+  | { type: 'disconnected'; code: number; reason: string }
+  | { type: 'retry-scheduled'; attempt: number; delayMs: number }
+  | { type: 'disposed' };
+
 export interface BridgeClientOptions {
   url: string;
   sessionToken?: string;
@@ -20,6 +29,8 @@ export interface BridgeClientOptions {
   reconnectMaxMs?: number;
   /** WebSocket 单条消息的最大接收字节数。 */
   maxPayload?: number;
+  /** Bridge 连接生命周期事件；回调异常不会影响连接主链路。 */
+  onLifecycleEvent?: (event: BridgeLifecycleEvent) => void;
 }
 
 export class BridgeClient {
@@ -42,21 +53,27 @@ export class BridgeClient {
     const headers = this.options.sessionToken
       ? { Authorization: `Bearer ${this.options.sessionToken}` }
       : undefined;
+    this.emitLifecycle({ type: 'connecting', url: this.options.url });
     const socket = new WebSocket(this.options.url, { headers, maxPayload });
     this.socket = socket;
 
     socket.on('open', () => {
       this.reconnectAttempt = 0;
+      this.emitLifecycle({ type: 'socket-open', url: this.options.url });
       socket.send(JSON.stringify(this.options.hello()));
+      this.emitLifecycle({ type: 'hello-sent' });
     });
     socket.on('message', (raw) => void this.handleMessage(socket, raw));
-    socket.on('close', () => this.handleClose(socket));
+    socket.on('close', (code, reason) => this.handleClose(socket, code, reason.toString()));
     socket.on('error', () => {
       socket.close();
     });
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
     this.disposed = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -65,9 +82,13 @@ export class BridgeClient {
     const socket = this.socket;
     this.socket = null;
     socket?.close();
+    this.emitLifecycle({ type: 'disposed' });
   }
 
   private async handleMessage(socket: WebSocket, raw: RawData): Promise<void> {
+    if (this.handleBridgeHelloResponse(raw)) {
+      return;
+    }
     const request = this.parseRequest(raw);
     if (!request) {
       return;
@@ -90,6 +111,25 @@ export class BridgeClient {
     }
   }
 
+  private handleBridgeHelloResponse(raw: RawData): boolean {
+    try {
+      const value = JSON.parse(raw.toString()) as {
+        type?: unknown;
+        correlationId?: unknown;
+        ok?: unknown;
+      };
+      if (value.type !== 'response' || value.correlationId !== 'bridge.hello') {
+        return false;
+      }
+      if (value.ok === true) {
+        this.emitLifecycle({ type: 'ready' });
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private parseRequest(raw: RawData): BridgeRequest | null {
     try {
       const value = JSON.parse(raw.toString()) as Partial<BridgeRequest>;
@@ -109,11 +149,12 @@ export class BridgeClient {
     socket.send(JSON.stringify({ type: 'response', correlationId, ok, payload }));
   }
 
-  private handleClose(socket: WebSocket): void {
+  private handleClose(socket: WebSocket, code: number, reason: string): void {
     if (this.socket !== socket) {
       return;
     }
     this.socket = null;
+    this.emitLifecycle({ type: 'disconnected', code, reason });
     if (this.disposed) {
       return;
     }
@@ -122,10 +163,23 @@ export class BridgeClient {
     const maximum = this.options.reconnectMaxMs ?? 10_000;
     const delay = Math.min(maximum, base * (2 ** this.reconnectAttempt));
     this.reconnectAttempt += 1;
+    this.emitLifecycle({
+      type: 'retry-scheduled',
+      attempt: this.reconnectAttempt,
+      delayMs: delay
+    });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
     }, delay);
+  }
+
+  private emitLifecycle(event: BridgeLifecycleEvent): void {
+    try {
+      this.options.onLifecycleEvent?.(event);
+    } catch {
+      // 生命周期日志失败不能影响 Bridge 连接和重连。
+    }
   }
 }
 

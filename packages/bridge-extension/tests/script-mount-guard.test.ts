@@ -171,6 +171,7 @@ function createDependencies(options: {
           schema: []
         }
       : null,
+    findComponentInfo: async () => null,
     nodeExists: async () => true,
     addComponent: options.addComponent ?? (async () => 'comp-new-1'),
     removeComponent: async () => {},

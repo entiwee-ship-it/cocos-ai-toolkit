@@ -81,6 +81,38 @@ describe('DesignTargetDocumentSchema', () => {
     expect(DesignTargetDocumentSchema.parse(target)).toBeTruthy();
   });
 
+  it('接受引用数组并校验其中每个逻辑 ID', () => {
+    const target = createValidTarget();
+    target.tree[0].children![1] = {
+      id: '$btn',
+      name: 'okBtn',
+      references: {
+        textureFrames: [
+          { kind: 'asset', assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true },
+          '$label'
+        ]
+      }
+    };
+    expect(DesignTargetDocumentSchema.parse(target)).toBeTruthy();
+
+    target.tree[0].children![1].references!.textureFrames[1] = '$missing';
+    expect(() => DesignTargetDocumentSchema.parse(target)).toThrow('引用指向不存在的逻辑 ID');
+  });
+
+  it('document.extract_subtree 只接受文档内节点并要求 Prefab 目标路径', () => {
+    const target = createValidTarget();
+    target.operations = [{
+      type: 'document.extract_subtree', nodeId: '$label', assetUrl: 'db://assets/ui/Label.prefab'
+    }];
+    expect(DesignTargetDocumentSchema.parse(target)).toBeTruthy();
+
+    target.operations[0].nodeId = '$missing';
+    expect(() => DesignTargetDocumentSchema.parse(target)).toThrow('抽取节点不存在');
+    target.operations[0].nodeId = '$label';
+    target.operations[0].assetUrl = 'db://assets/ui/Label.json';
+    expect(() => DesignTargetDocumentSchema.parse(target)).toThrow();
+  });
+
   it('拒绝不合规的逻辑 ID 形态', () => {
     const target = createValidTarget();
     target.tree[0].id = 'dialog';

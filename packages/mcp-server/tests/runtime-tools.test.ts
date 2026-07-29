@@ -100,10 +100,16 @@ afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-async function createHarness(probeClient: ReadonlyProbeClient, options: { enableWrites?: boolean } = {}) {
+async function createHarness(
+  probeClient: ReadonlyProbeClient,
+  options: { enableWrites?: boolean; profile?: 'prefab' | 'full' } = {}
+) {
   const reportRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-mcp-runtime-'));
   temporaryRoots.push(reportRoot);
-  const server = createCocosMcpServer({ probeClient, reportRoot }, options);
+  const server = createCocosMcpServer(
+    { probeClient, reportRoot },
+    { profile: 'full', ...options }
+  );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'runtime-test-client', version: '0.1.0' });
   await Promise.all([

@@ -44,6 +44,10 @@ export interface DesignApplyRuntime {
     item: DesignPlanItem,
     context: DesignApplyVerificationContext
   ): Promise<DesignApplyVerificationItem>;
+  refreshResolutions?(context: DesignApplyVerificationContext): Promise<{
+    nodeResolutions?: Record<string, string>;
+    componentResolutions?: Record<string, string>;
+  }>;
   waitForScript?(scriptUuid: string): Promise<void>;
   captureRevision?(): Promise<RevisionPrecondition>;
 }
@@ -55,6 +59,7 @@ export interface DesignApplyOptions {
   scope?: WriteScope;
   revision?: RevisionPrecondition;
   save?: boolean;
+  allowDirtyAfterFirstCommit?: boolean;
 }
 
 export interface DesignApplyFailedStep {
@@ -152,6 +157,14 @@ export class DesignApplyOutcomeUnknownError extends DesignApplyError {
   }
 }
 
+/** prepare 请求已发出但无法确认事务是否登记，需要先查询事务状态。 */
+export class DesignApplyPrepareOutcomeUnknownError extends DesignApplyError {
+  constructor(message: string) {
+    super('DESIGN_PREPARE_OUTCOME_UNKNOWN', message);
+    this.name = 'DesignApplyPrepareOutcomeUnknownError';
+  }
+}
+
 interface ApplyState {
   nodeResolutions: Record<string, string>;
   componentResolutions: Record<string, string>;
@@ -201,6 +214,9 @@ const SUPPORTED_PLAN_KINDS = new Set([
   'component.remove',
   'component.set_property',
   'component.set_reference',
+  'document.extract_subtree',
+  'prefab.instance_override',
+  'prefab.revert_override',
   'prefab.apply_to_source',
   'script.wait_for_compile'
 ]);
@@ -238,6 +254,7 @@ export async function applyDesignPlan(
     const group = groups[groupIndex];
     try {
       const result = await executePlanGroup(group, plan.impactAnalysis, runtime, options, state);
+      await refreshStateResolutions(runtime, state, result);
       for (const entry of group.entries) {
         const verification = await runtime.verifyPlanItem(entry.item, {
           nodeResolutions: state.nodeResolutions,
@@ -270,7 +287,10 @@ export async function applyDesignPlan(
         state.transactions.push(WriteTransactionResultSchema.parse(error.transactionResult));
         state.outcomeUnknown = true;
         recordAuditFailure(state, 'prepare', error.transactionResult.transactionId, error.message);
-      } else if (error instanceof DesignApplyOutcomeUnknownError) {
+      } else if (
+        error instanceof DesignApplyOutcomeUnknownError
+        || error instanceof DesignApplyPrepareOutcomeUnknownError
+      ) {
         state.outcomeUnknown = true;
       }
       const failedEntry = selectFailedEntry(group, error);
@@ -387,6 +407,7 @@ async function executePlanGroup(
     return null;
   }
 
+  await refreshStateResolutions(runtime, state, state.transactions.at(-1) ?? null);
   const operations: WriteOperation[] = [];
   for (const entry of group.entries) {
     try {
@@ -404,6 +425,9 @@ async function executePlanGroup(
     impactAnalysis,
     operations,
     save: options.save ?? true,
+    ...(options.allowDirtyAfterFirstCommit === true && state.committedTransactionIds.length > 0
+      ? { allowDirty: true }
+      : {}),
     undoGroup: `design-apply-${options.executionId}`
   });
 
@@ -413,6 +437,7 @@ async function executePlanGroup(
   if (prepared.status === 'committed' && prepared.duplicateOf) {
     state.committedTransactionIds.push(transactionId);
     assertCommittedCoverage(prepared, operations.length);
+    await refreshStateResolutions(runtime, state, prepared);
     await updateGroupResolutions(group, prepared, runtime, state);
     return prepared;
   }
@@ -465,8 +490,24 @@ async function executePlanGroup(
   }
   state.committedTransactionIds.push(transactionId);
   assertCommittedCoverage(confirmed, operations.length);
+  await refreshStateResolutions(runtime, state, confirmed);
   await updateGroupResolutions(group, confirmed, runtime, state);
   return confirmed;
+}
+
+async function refreshStateResolutions(
+  runtime: DesignApplyRuntime,
+  state: ApplyState,
+  transactionResult: WriteTransactionResult | null
+): Promise<void> {
+  if (!runtime.refreshResolutions) return;
+  const refreshed = await runtime.refreshResolutions({
+    nodeResolutions: state.nodeResolutions,
+    componentResolutions: state.componentResolutions,
+    transactionResult
+  });
+  Object.assign(state.nodeResolutions, refreshed.nodeResolutions ?? {});
+  Object.assign(state.componentResolutions, refreshed.componentResolutions ?? {});
 }
 
 /**
@@ -553,6 +594,39 @@ async function materializeOperation(
         propertyPath: requirePropertyPath(item),
         reference: materializeReference(params, state)
       };
+    case 'document.extract_subtree':
+      return {
+        type: 'prefab.create_from_node',
+        nodeUuid: requireNodeResolution(
+          readString(params, 'nodeLogicalId') ?? readString(params, 'nodeUuid') ?? item.target,
+          state
+        ),
+        assetUrl: requireString(params, 'assetUrl')
+      };
+    case 'prefab.instance_override': {
+      const targetNodePath = readString(params, 'targetNodePath');
+      const overrideValue = hasOwn(params, 'resolveTo') || hasOwn(params, 'reference')
+        ? materializeReference(params, state)
+        : item.value;
+      return {
+        type: 'prefab.instance_override',
+        instanceRootUuid: requireNodeResolution(requireString(params, 'instanceRootLogicalId'), state),
+        targetObjectUuid: await requireOverrideTargetObject(item, runtime, state),
+        ...(targetNodePath ? { targetNodePath } : {}),
+        propertyPath: requirePropertyPath(item),
+        value: overrideValue
+      };
+    }
+    case 'prefab.revert_override': {
+      const targetNodePath = readString(params, 'targetNodePath');
+      return {
+        type: 'prefab.revert_override',
+        instanceRootUuid: requireNodeResolution(requireString(params, 'instanceRootLogicalId'), state),
+        targetObjectUuid: await requireOverrideTargetObject(item, runtime, state),
+        ...(targetNodePath ? { targetNodePath } : {}),
+        propertyPath: requirePropertyPath(item)
+      };
+    }
     case 'prefab.apply_to_source':
       return {
         type: 'prefab.apply_to_source',
@@ -610,18 +684,55 @@ async function requireComponentResolution(
   return resolved;
 }
 
-function materializeReference(params: DesignPlanItem['params'], state: ApplyState): Reference {
+function materializeReference(params: DesignPlanItem['params'], state: ApplyState): Reference | Reference[] {
   const resolveTo = readString(params, 'resolveTo');
   if (resolveTo) {
-    return {
-      kind: 'node',
-      objectUuid: requireNodeResolution(resolveTo, state),
-      fileId: null,
-      nodePath: null,
-      available: true
-    };
+    return materializeLogicalNodeReference(resolveTo, state);
   }
-  return ReferenceSchema.parse(params?.reference);
+  return materializeReferenceValue(params?.reference, state);
+}
+
+async function requireOverrideTargetObject(
+  item: DesignPlanItem,
+  runtime: DesignApplyRuntime,
+  state: ApplyState
+): Promise<string> {
+  const directUuid = readString(item.params, 'targetObjectUuid');
+  if (directUuid) return directUuid;
+  const componentType = readString(item.params, 'componentType');
+  if (componentType) return requireComponentResolution(item, runtime, state);
+  return requireNodeResolution(
+    readString(item.params, 'targetObjectLogicalId')
+      ?? readString(item.params, 'targetNodeLogicalId')
+      ?? item.target,
+    state
+  );
+}
+
+function materializeReferenceValue(value: unknown, state: ApplyState): Reference | Reference[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const materialized = materializeReferenceValue(item, state);
+      if (Array.isArray(materialized)) {
+        throw new DesignApplyError('INVALID_REFERENCE_ARRAY', '引用数组不能嵌套数组');
+      }
+      return materialized;
+    });
+  }
+  if (typeof value === 'string' && value.startsWith('$')) {
+    return materializeLogicalNodeReference(value, state);
+  }
+  return ReferenceSchema.parse(value);
+}
+
+function materializeLogicalNodeReference(logicalId: string, state: ApplyState): Reference {
+  return {
+    kind: 'node',
+    objectUuid: requireNodeResolution(logicalId, state),
+    fileId: null,
+    nodePath: null,
+    available: true
+  };
 }
 
 async function failApply(
@@ -922,7 +1033,10 @@ function buildExecutionGroups(items: DesignPlanItem[]): PlanExecutionGroup[] {
  * @returns 组件身份与属性路径组成的键；非属性或引用写返回 null。
  */
 function planItemWriteKey(item: DesignPlanItem): string | null {
-  if (item.kind !== 'component.set_property' && item.kind !== 'component.set_reference') return null;
+  if (item.kind !== 'component.set_property'
+    && item.kind !== 'component.set_reference'
+    && item.kind !== 'prefab.instance_override'
+    && item.kind !== 'prefab.revert_override') return null;
   const componentIdentity = readString(item.params, 'componentUuid')
     ?? `${item.target}::${readString(item.params, 'componentType') ?? ''}`;
   return `${componentIdentity}::${item.propertyPath ?? ''}`;
@@ -937,7 +1051,15 @@ function planItemWriteKey(item: DesignPlanItem): string | null {
  */
 function executionGroupCategory(item: DesignPlanItem, index: number): string {
   if (item.kind === 'script.wait_for_compile') return 'script-wait';
-  if (item.kind === 'component.set_property' || item.kind === 'component.set_reference') {
+  if (item.kind === 'component.set_property'
+    && readString(item.params, 'componentType') === 'cc.UITransform'
+    && item.propertyPath === 'contentSize') {
+    return 'layout-final';
+  }
+  if (item.kind === 'component.set_property'
+    || item.kind === 'component.set_reference'
+    || item.kind === 'prefab.instance_override'
+    || item.kind === 'prefab.revert_override') {
     return 'property-reference';
   }
   if (item.kind === 'node.delete' || item.kind === 'component.remove') return 'destructive';

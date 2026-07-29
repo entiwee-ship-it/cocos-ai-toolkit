@@ -37,6 +37,25 @@ describe('component.add / remove / enable', () => {
     expect(dependencies.calls).toContain('addComponent:node-1:cc.Button');
   });
 
+  it('节点已有同类组件时复用现有组件且不重复挂载', async () => {
+    const dependencies = createDependencies();
+    const result = await executeComponentWriteOperation(
+      { type: 'component.add', nodeUuid: 'node-2', componentType: 'cc.UITransform', scriptUuid: null },
+      dependencies
+    );
+
+    expect(result.componentUuid).toBe('comp-ui-transform');
+    expect(result.before).toMatchObject({
+      uuid: 'comp-ui-transform',
+      type: 'cc.UITransform',
+      enabled: true
+    });
+    expect(result.after).toEqual(result.before);
+    expect(result.inverse).toEqual([]);
+    expect((result as { changed?: boolean }).changed).toBe(false);
+    expect(dependencies.calls).not.toContain('addComponent:node-2:cc.UITransform');
+  });
+
   it('移除组件并保留 before 证据', async () => {
     const dependencies = createDependencies();
     const result = await executeComponentWriteOperation(
@@ -166,6 +185,32 @@ describe('component.set_reference / clear_reference', () => {
       componentUuid: 'comp-1',
       propertyPath: 'clickEvents[0].target'
     }]);
+  });
+
+  it('引用数组逐项校验、整体写入并生成数组逆操作', async () => {
+    const dependencies = createDependencies();
+    const references = [
+      { kind: 'asset', assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true },
+      { kind: 'asset', assetUuid: 'texture-b', subAssetUuid: 'frame-b', assetType: 'cc.SpriteFrame', path: null, available: true }
+    ];
+    const result = await executeComponentWriteOperation({
+      type: 'component.set_reference',
+      componentUuid: 'comp-4',
+      propertyPath: 'textureFrames',
+      reference: references
+    }, dependencies);
+
+    expect(result.after).toMatchObject({ reference: references });
+    expect(result.inverse).toEqual([{
+      type: 'component.set_reference',
+      componentUuid: 'comp-4',
+      propertyPath: 'textureFrames',
+      reference: [
+        { kind: 'asset', assetUuid: 'old-frame-a', subAssetUuid: null, assetType: 'cc.SpriteFrame[]', path: null, available: true },
+        { kind: 'asset', assetUuid: 'old-frame-b', subAssetUuid: null, assetType: 'cc.SpriteFrame[]', path: null, available: true }
+      ]
+    }]);
+    expect(dependencies.calls.filter((call) => call.startsWith('resolveReference:'))).toHaveLength(2);
   });
 
   it('失效引用（missing / unavailable）拒绝写入', async () => {
@@ -306,6 +351,7 @@ describe('component.resize_array', () => {
 
 interface MockDependencies extends ComponentWriterDependencies {
   calls: string[];
+  findComponentInfo(nodeUuid: string, componentType: string): Promise<ComponentInfo | null>;
 }
 
 function createDependencies(options: {
@@ -360,6 +406,24 @@ function createDependencies(options: {
       { propertyPath: 'emptyRef', declaredType: 'cc.Node', readonly: false, isArray: false }
     ]
   });
+  components.set('comp-4', {
+    uuid: 'comp-4',
+    type: 'FrameList',
+    nodeUuid: 'node-2',
+    enabled: true,
+    properties: { textureFrames: [{ uuid: 'old-frame-a' }, { uuid: 'old-frame-b' }] },
+    schema: [
+      { propertyPath: 'textureFrames', declaredType: 'cc.SpriteFrame[]', readonly: false, isArray: true }
+    ]
+  });
+  components.set('comp-ui-transform', {
+    uuid: 'comp-ui-transform',
+    type: 'cc.UITransform',
+    nodeUuid: 'node-2',
+    enabled: true,
+    properties: {},
+    schema: []
+  });
 
   const readPath = (value: unknown, segments: Array<string | number>): unknown => {
     let current = value;
@@ -381,6 +445,11 @@ function createDependencies(options: {
   return {
     calls,
     getComponentInfo: async (componentUuid) => components.get(componentUuid) ?? null,
+    findComponentInfo: async (nodeUuid, componentType) => (
+      [...components.values()].find((component) => (
+        component.nodeUuid === nodeUuid && component.type === componentType
+      )) ?? null
+    ),
     nodeExists: async (nodeUuid) => nodeUuid === 'node-1' || nodeUuid === 'node-2',
     addComponent: async (nodeUuid, componentType) => {
       calls.push(`addComponent:${nodeUuid}:${componentType}`);

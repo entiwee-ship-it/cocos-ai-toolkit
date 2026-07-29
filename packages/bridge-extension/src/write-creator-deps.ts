@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { ProbeError } from './probe-errors';
 import type { NodeInfo, NodeWriterDependencies } from './node-writer';
 import {
@@ -11,6 +12,16 @@ import { readDumpValueAtPath } from './write-scene-channel';
 import { saveAndVerifyWriteTransaction, type WriteVerifierDependencies } from './write-verifier';
 import type { PrefabInstanceInfo, PrefabWriterDependencies } from './prefab-writer';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
+import {
+  readRuntimeWriteClassAttributes,
+  readRuntimeWriteObjectConstructor,
+  resolveRuntimeWriteValue,
+  type RuntimeWriteReference
+} from './runtime-write-value';
+import {
+  readNodeComponentUuids,
+  resolveCreatedComponentUuid
+} from './raw-reflection';
 
 /**
  * Creator Scene 进程真实能力到写通道依赖的适配层。
@@ -29,6 +40,25 @@ const { director, js, instantiate } = require('cc') as {
 const ccModule = require('cc') as Record<string, any>;
 
 type RuntimeNode = Record<string, any>;
+
+interface RuntimePropertyOverride {
+  targetInfo: { localID: string[] } | null;
+  propertyPath: string[];
+  value: unknown;
+}
+
+interface RuntimePrefabInstance {
+  propertyOverrides: RuntimePropertyOverride[];
+  targetMap: Record<string, unknown>;
+  findPropertyOverride?(localIds: string[], propertyPath: string[]): RuntimePropertyOverride | null | undefined;
+  removePropertyOverride?(localIds: string[], propertyPath: string[]): void;
+}
+
+interface PrefabUtilities {
+  TargetInfo: new () => { localID: string[] };
+  PropertyOverrideInfo: new () => RuntimePropertyOverride;
+  generateTargetMap(node: RuntimeNode, targetMap: Record<string, unknown>, isRoot: boolean): void;
+}
 
 /**
  * 操作可见性：选中目标节点并在 Creator 控制台打印操作日志。
@@ -202,21 +232,40 @@ export function buildNodeWriterDependencies(): NodeWriterDependencies {
 
 /** 构造组件原子写依赖（含自定义脚本挂载守卫）。 */
 export function buildComponentWriterDependencies(): ComponentWriterDependencies {
+  const getComponentInfo: ComponentWriterDependencies['getComponentInfo'] = async (componentUuid) => {
+    const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
+    if (!raw) return null;
+    const schema = buildComponentTypeSchema(raw);
+    const runtime = findRuntimeComponent(componentUuid);
+    const nodeUuid = runtime ? readRuntimeUuid(runtime.node) : readComponentNodeUuid(raw) ?? '';
+    const componentType = schema.className ?? readObject(raw).type as string ?? '';
+    const sameTypeComponents = nodeUuid
+      ? [...readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid)).entries()]
+          .filter(([, type]) => type === componentType)
+      : [];
+    const sameTypeIndex = sameTypeComponents.findIndex(([uuid]) => uuid === componentUuid);
+    return {
+      uuid: componentUuid,
+      type: componentType,
+      nodeUuid,
+      ...(runtime ? { nodeStablePath: buildRuntimeNodeStablePath(runtime.node) } : {}),
+      ...(sameTypeIndex < 0 ? {} : { sameTypeIndex }),
+      enabled: runtime ? Boolean(runtime.component.enabled) : readEnabledFromDump(raw),
+      scriptUuid: schema.scriptUuid,
+      properties: readComponentCurrentValues(schema.properties),
+      schema: schema.properties.map(toWriteSchema)
+    };
+  };
   return {
-    getComponentInfo: async (componentUuid) => {
-      const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
-      if (!raw) return null;
-      const schema = buildComponentTypeSchema(raw);
-      const runtime = findRuntimeComponent(componentUuid);
-      return {
-        uuid: componentUuid,
-        type: schema.className ?? readObject(raw).type as string ?? '',
-        nodeUuid: runtime ? readRuntimeUuid(runtime.node) : readComponentNodeUuid(raw) ?? '',
-        enabled: runtime ? Boolean(runtime.component.enabled) : readEnabledFromDump(raw),
-        scriptUuid: schema.scriptUuid,
-        properties: readComponentCurrentValues(schema.properties),
-        schema: schema.properties.map(toWriteSchema)
-      };
+    getComponentInfo,
+    findComponentInfo: async (nodeUuid, componentType) => {
+      const nodeDump = await Editor.Message.request('scene', 'query-node', nodeUuid);
+      for (const [componentUuid, currentType] of readNodeComponentUuids(nodeDump)) {
+        if (currentType !== componentType) continue;
+        const info = await getComponentInfo(componentUuid);
+        if (info) return info;
+      }
+      return null;
     },
     nodeExists: async (nodeUuid) => {
       return Boolean(await Editor.Message.request('scene', 'query-node', nodeUuid));
@@ -245,21 +294,21 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
         }
       }
       // create-component 不保证返回可用 UUID：按前后组件清单差集确认新组件身份。
-      const beforeUuids = readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid));
+      const beforeNodeDump = await Editor.Message.request('scene', 'query-node', nodeUuid);
       const created = await Editor.Message.request('scene', 'create-component', {
         uuid: nodeUuid,
         component: componentType
       });
-      const directUuid = typeof created === 'string' ? created : readObject(created).uuid;
-      if (typeof directUuid === 'string' && directUuid && !beforeUuids.has(directUuid)) {
-        return directUuid;
-      }
-      const afterUuids = readNodeComponentUuids(await Editor.Message.request('scene', 'query-node', nodeUuid));
-      for (const [uuid, type] of afterUuids) {
-        if (!beforeUuids.has(uuid) && type === componentType) {
-          focusAndLog(nodeUuid, `节点 ${describeNode(nodeUuid)} 挂载组件 ${componentType}`);
-          return uuid;
-        }
+      const afterNodeDump = await Editor.Message.request('scene', 'query-node', nodeUuid);
+      const componentUuid = resolveCreatedComponentUuid(
+        beforeNodeDump,
+        created,
+        afterNodeDump,
+        componentType
+      );
+      if (componentUuid) {
+        focusAndLog(nodeUuid, `节点 ${describeNode(nodeUuid)} 挂载组件 ${componentType}`);
+        return componentUuid;
       }
       throw new ProbeError('COMPONENT_ADD_FAILED', { nodeUuid, componentType });
     },
@@ -316,7 +365,12 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       (container as Record<string | number, unknown>)[leafKey] = await resolveRuntimeWriteValue(
         value,
         currentValue,
-        propertyPath
+        propertyPath,
+        {
+          resolveReference: resolveCreatorReference,
+          createObject: (_value, nestedPath) => createCreatorSerializedObject(runtime.component, nestedPath),
+          resolveSpecialValue: resolveCreatorSpecialValue
+        }
       );
       focusAndLog(
         readRuntimeUuid(runtime.node),
@@ -392,11 +446,21 @@ export function buildWriteVerifierDependencies(): WriteVerifierDependencies {
       await Editor.Message.request('scene', 'save-scene');
     },
     reloadDocument: async () => {
-      // 等价刷新：保存后重新解析文档身份，强制后续读取走最新状态。
-      await captureCurrentDocumentIdentity();
+      const facade = resolveSceneFacade();
+      if (!facade || typeof facade.softReloadScene !== 'function') {
+        throw new ProbeError('CREATOR_SOFT_RELOAD_UNAVAILABLE');
+      }
+      const reloaded = await (facade.softReloadScene as () => Promise<unknown>).call(facade);
+      if (reloaded !== true) {
+        throw new ProbeError('CREATOR_SOFT_RELOAD_FAILED', { result: reloaded ?? null });
+      }
     },
     getNodeInfo: async (nodeUuid) => {
       const node = findRuntimeNode(nodeUuid);
+      return node ? runtimeNodeInfo(node) as unknown as Record<string, unknown> : null;
+    },
+    getNodeInfoByStablePath: async (stablePath) => {
+      const node = findRuntimeNodeByStablePath(stablePath);
       return node ? runtimeNodeInfo(node) as unknown as Record<string, unknown> : null;
     },
     getComponentInfo: async (componentUuid) => {
@@ -409,13 +473,42 @@ export function buildWriteVerifierDependencies(): WriteVerifierDependencies {
         enabled: runtime ? Boolean(runtime.component.enabled) : readEnabledFromDump(raw)
       };
     },
+    getComponentInfoByStableLocator: async (nodeStablePath, componentType, sameTypeIndex) => {
+      const node = findRuntimeNodeByStablePath(nodeStablePath);
+      if (!node) return null;
+      const nodeUuid = readRuntimeUuid(node);
+      const matches = [...readNodeComponentUuids(
+        await Editor.Message.request('scene', 'query-node', nodeUuid)
+      ).entries()].filter(([, type]) => type === componentType);
+      const componentUuid = matches[sameTypeIndex]?.[0];
+      if (!componentUuid) return null;
+      const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
+      if (!raw) return null;
+      const runtime = findRuntimeComponent(componentUuid);
+      return {
+        uuid: componentUuid,
+        type: componentType,
+        enabled: runtime ? Boolean(runtime.component.enabled) : readEnabledFromDump(raw)
+      };
+    },
     getComponentProperty: async (componentUuid, propertyPath) => {
       const raw = await Editor.Message.request('scene', 'query-component', componentUuid);
       if (!raw) return undefined;
       return readDumpValueAtPath(raw, parsePropertyPath(propertyPath));
     },
     getPrefabInstanceInfo: async (nodeUuid) => readPrefabInstanceInfo(nodeUuid),
-    queryAssetInfo: async (uuidOrUrl) => queryPrefabAssetInfo(uuidOrUrl)
+    getPrefabTargetProperty: async (instanceRootUuid, targetLocalIds, propertyPath) => {
+      return readRuntimePrefabTargetProperty(instanceRootUuid, targetLocalIds, propertyPath);
+    },
+    queryAssetInfo: async (uuidOrUrl) => queryPrefabAssetInfo(uuidOrUrl),
+    readAssetMeta: async (assetUrl) => readAssetMeta(assetUrl),
+    readAssetContent: async (assetUrl) => {
+      const filePath = await Editor.Message.request('asset-db', 'query-path', assetUrl);
+      if (typeof filePath !== 'string' || !filePath) {
+        throw new ProbeError('ASSET_PATH_NOT_FOUND', { assetUrl });
+      }
+      return readFile(filePath, 'utf8');
+    }
   };
 }
 
@@ -446,13 +539,21 @@ async function readPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceI
     const targetInfoValue = readObject(readObject(entryValue.targetInfo ?? readObject(entry).targetInfo).value);
     const localIdDump = targetInfoValue.localID;
     const localIds = Array.isArray(readObject(localIdDump).value) ? readObject(localIdDump).value as unknown[] : (Array.isArray(localIdDump) ? localIdDump : []);
-    const firstLocalId = localIds.length > 0 ? (readObject(localIds[0]).value ?? localIds[0]) : null;
-    return { path, targetFileId: typeof firstLocalId === 'string' && firstLocalId ? firstLocalId : null };
+    const targetLocalIds = localIds.map((localId) => readObject(localId).value ?? localId)
+      .filter((localId): localId is string => typeof localId === 'string' && localId.length > 0);
+    const firstLocalId = targetLocalIds[0] ?? null;
+    return {
+      path,
+      targetFileId: firstLocalId,
+      targetLocalIds
+    };
   }).filter((target) => target.path.length > 0);
   const overridePaths = overrideTargets.map((target) => target.path);
+  const runtimeNode = findRuntimeNode(nodeUuid);
   return {
     nodeUuid,
     name: typeof nameDump.value === 'string' ? nameDump.value : '',
+    ...(runtimeNode ? { stablePath: buildRuntimeNodeStablePath(runtimeNode) } : {}),
     prefabAssetUuid: typeof prefab.uuid === 'string' ? prefab.uuid : null,
     sourceObjectFileId: typeof prefab.fileId === 'string' ? prefab.fileId : null,
     instanceFileId: typeof readObject(instance.fileId).value === 'string' ? readObject(instance.fileId).value as string : null,
@@ -522,6 +623,38 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
       }
       return assetUuid;
     },
+    createAsset: async (assetUrl, _assetKind, content) => {
+      const created = await Editor.Message.request('asset-db', 'create-asset', assetUrl, content as never);
+      const record = readObject(created);
+      if (typeof record.uuid !== 'string' || !record.uuid) {
+        throw new ProbeError('ASSET_CREATE_FAILED', { assetUrl });
+      }
+      return {
+        uuid: record.uuid,
+        type: typeof record.type === 'string' ? record.type : null
+      };
+    },
+    moveAsset: async (sourceUrl, targetUrl) => {
+      await Editor.Message.request('asset-db', 'move-asset', sourceUrl, targetUrl);
+    },
+    readAssetMeta: async (assetUrl) => readAssetMeta(assetUrl),
+    writeAssetMeta: async (assetUrl, meta) => {
+      await Editor.Message.request('asset-db', 'save-asset-meta', assetUrl, JSON.stringify(meta));
+    },
+    readAssetContent: async (assetUrl) => {
+      const filePath = await Editor.Message.request('asset-db', 'query-path', assetUrl);
+      if (typeof filePath !== 'string' || !filePath) {
+        throw new ProbeError('ASSET_PATH_NOT_FOUND', { assetUrl });
+      }
+      return readFile(filePath, 'utf8');
+    },
+    saveAssetContent: async (assetUrl, content) => {
+      const saved = await Editor.Message.request('asset-db', 'save-asset', assetUrl, content);
+      const record = readObject(saved);
+      if (typeof record.uuid !== 'string' || !record.uuid) {
+        throw new ProbeError('ASSET_SAVE_FAILED', { assetUrl });
+      }
+    },
     deleteAsset: async (assetUrl) => {
       await Editor.Message.request('asset-db', 'delete-asset', assetUrl as never);
     },
@@ -538,14 +671,49 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
       await callFacadePrefabMethod('linkPrefab', [nodeUuid, prefabAssetUuid], 'CREATOR_LINK_PREFAB_UNAVAILABLE');
     },
     resetNodeProperty: async (nodeUuid, propertyPath) => {
-      // Inspector 单属性还原同款路径：NodeManager.resetProperty → dump.resetProperty（源值重置）。
-      const cce = readObject((globalThis as Record<string, unknown>).cce);
-      const nodeManager = readObject(cce.Node);
-      if (typeof nodeManager.resetProperty !== 'function') {
-        throw new ProbeError('CREATOR_RESET_PROPERTY_UNAVAILABLE', { nodeUuid, propertyPath });
+      await resetCreatorProperty(nodeUuid, propertyPath);
+    },
+    setPrefabInstanceOverride: async (instanceRootUuid, targetObjectUuid, propertyPath, value) => {
+      const instance = requireRuntimePrefabInstance(instanceRootUuid);
+      const target = requireRuntimeObject(targetObjectUuid);
+      const targetLocalIds = requireTargetLocalIds(instanceRootUuid, instance, target);
+      const propertySegments = parsePropertyPath(propertyPath).map(String);
+      const existing = instance.findPropertyOverride?.(targetLocalIds, propertySegments)
+        ?? findRuntimePropertyOverride(instance, targetLocalIds, propertySegments);
+      const previous = existing ? { value: existing.value } : null;
+      const resolvedValue = await writeRuntimeObjectProperty(targetObjectUuid, propertyPath, value);
+      if (existing) {
+        existing.value = resolvedValue;
+      } else {
+        const utilities = requirePrefabUtilities();
+        const targetInfo = new utilities.TargetInfo();
+        targetInfo.localID = [...targetLocalIds];
+        const propertyOverride = new utilities.PropertyOverrideInfo();
+        propertyOverride.targetInfo = targetInfo;
+        propertyOverride.propertyPath = propertySegments;
+        propertyOverride.value = resolvedValue;
+        instance.propertyOverrides.push(propertyOverride);
       }
-      await (nodeManager.resetProperty as (uuid: string, path: string) => Promise<unknown>)
-        .call(nodeManager, nodeUuid, propertyPath);
+      focusAndLog(instanceRootUuid, `预制体实例覆盖 ${propertyPath} 写入完成`);
+      return { targetLocalIds, previous };
+    },
+    removePrefabInstanceOverride: async (instanceRootUuid, targetObjectUuid, propertyPath) => {
+      const instance = requireRuntimePrefabInstance(instanceRootUuid);
+      const target = requireRuntimeObject(targetObjectUuid);
+      const targetLocalIds = requireTargetLocalIds(instanceRootUuid, instance, target);
+      const propertySegments = parsePropertyPath(propertyPath).map(String);
+      const existing = instance.findPropertyOverride?.(targetLocalIds, propertySegments)
+        ?? findRuntimePropertyOverride(instance, targetLocalIds, propertySegments);
+      const previous = existing ? { value: existing.value } : null;
+      instance.removePropertyOverride?.(targetLocalIds, propertySegments);
+      const remaining = findRuntimePropertyOverride(instance, targetLocalIds, propertySegments);
+      if (remaining) {
+        const index = instance.propertyOverrides.indexOf(remaining);
+        if (index >= 0) instance.propertyOverrides.splice(index, 1);
+      }
+      // 这里只删除覆盖记录；运行时源值由事务保存后的 softReloadScene 统一恢复。
+      focusAndLog(instanceRootUuid, `预制体实例覆盖 ${propertyPath} 已精确还原`);
+      return { targetLocalIds, previous };
     },
     getCurrentDocumentAssetUuid: async () => {
       const identity = await captureCurrentDocumentIdentity().catch(() => null);
@@ -556,6 +724,172 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
       return findInstanceRootInTree(tree, parentUuid, name, prefabAssetUuid, null);
     }
   };
+}
+
+function requirePrefabUtilities(): PrefabUtilities {
+  const prefab = ccModule.Prefab;
+  const utilities = readObject(
+    prefab && (typeof prefab === 'object' || typeof prefab === 'function')
+      ? (prefab as Record<string, unknown>)._utils
+      : null
+  );
+  if (typeof utilities.TargetInfo !== 'function'
+    || typeof utilities.PropertyOverrideInfo !== 'function'
+    || typeof utilities.generateTargetMap !== 'function') {
+    throw new ProbeError('CREATOR_PREFAB_OVERRIDE_UNAVAILABLE');
+  }
+  return utilities as unknown as PrefabUtilities;
+}
+
+function requireRuntimePrefabInstance(instanceRootUuid: string): RuntimePrefabInstance {
+  const node = requireRuntimeNode(instanceRootUuid);
+  const prefab = readObject(node.prefab ?? node._prefab ?? node.__prefab__);
+  const instance = readObject(prefab.instance);
+  if (!Array.isArray(instance.propertyOverrides)) {
+    throw new ProbeError('PREFAB_INSTANCE_REQUIRED', { instanceRootUuid });
+  }
+  if (!instance.targetMap || typeof instance.targetMap !== 'object') instance.targetMap = {};
+  return instance as unknown as RuntimePrefabInstance;
+}
+
+function requireRuntimeObject(objectUuid: string): RuntimeNode {
+  const node = findRuntimeNode(objectUuid);
+  if (node) return node;
+  const component = findRuntimeComponent(objectUuid)?.component;
+  if (component) return component;
+  throw new ProbeError('PREFAB_OVERRIDE_TARGET_NOT_FOUND', { targetObjectUuid: objectUuid });
+}
+
+function requireTargetLocalIds(
+  instanceRootUuid: string,
+  instance: RuntimePrefabInstance,
+  target: RuntimeNode
+): string[] {
+  let targetLocalIds = findTargetLocalIds(instance.targetMap, target);
+  if (!targetLocalIds) {
+    instance.targetMap = {};
+    requirePrefabUtilities().generateTargetMap(requireRuntimeNode(instanceRootUuid), instance.targetMap, true);
+    targetLocalIds = findTargetLocalIds(instance.targetMap, target);
+  }
+  if (!targetLocalIds || targetLocalIds.length === 0) {
+    throw new ProbeError('PREFAB_OVERRIDE_TARGET_UNADDRESSABLE', {
+      instanceRootUuid,
+      targetObjectUuid: readRuntimeUuid(target)
+    });
+  }
+  return targetLocalIds;
+}
+
+function findTargetLocalIds(
+  targetMap: Record<string, unknown>,
+  target: RuntimeNode,
+  visited = new Set<object>()
+): string[] | null {
+  if (visited.has(targetMap)) return null;
+  visited.add(targetMap);
+  for (const [localId, value] of Object.entries(targetMap)) {
+    if (value === target) return [localId];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const record = value as Record<string, unknown>;
+    if ('uuid' in record || '_uuid' in record) continue;
+    const nested = findTargetLocalIds(record, target, visited);
+    if (nested) return [localId, ...nested];
+  }
+  return null;
+}
+
+function readRuntimePrefabTargetProperty(
+  instanceRootUuid: string,
+  targetLocalIds: string[],
+  propertyPath: string
+): unknown {
+  const instance = requireRuntimePrefabInstance(instanceRootUuid);
+  let target = findTargetByLocalIds(instance.targetMap, targetLocalIds);
+  if (!target) {
+    instance.targetMap = {};
+    requirePrefabUtilities().generateTargetMap(requireRuntimeNode(instanceRootUuid), instance.targetMap, true);
+    target = findTargetByLocalIds(instance.targetMap, targetLocalIds);
+  }
+  if (!target) {
+    throw new ProbeError('PREFAB_OVERRIDE_TARGET_UNADDRESSABLE', {
+      instanceRootUuid,
+      targetLocalIds,
+      propertyPath
+    });
+  }
+  let current: unknown = target;
+  for (const segment of parsePropertyPath(propertyPath)) {
+    if (current === null || current === undefined) {
+      throw new ProbeError('PROPERTY_PATH_NOT_TRAVERSABLE', {
+        instanceRootUuid,
+        targetLocalIds,
+        propertyPath
+      });
+    }
+    current = (current as Record<string | number, unknown>)[segment];
+  }
+  return current;
+}
+
+function findTargetByLocalIds(targetMap: Record<string, unknown>, targetLocalIds: string[]): RuntimeNode | null {
+  let current: unknown = targetMap;
+  for (const localId of targetLocalIds) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return null;
+    current = (current as Record<string, unknown>)[localId];
+  }
+  return current && typeof current === 'object' && !Array.isArray(current)
+    ? current as RuntimeNode
+    : null;
+}
+
+function findRuntimePropertyOverride(
+  instance: RuntimePrefabInstance,
+  targetLocalIds: string[],
+  propertyPath: string[]
+): RuntimePropertyOverride | null {
+  return instance.propertyOverrides.find((entry) => (
+    arraysEqual(entry.targetInfo?.localID ?? [], targetLocalIds)
+    && arraysEqual(entry.propertyPath, propertyPath)
+  )) ?? null;
+}
+
+function arraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+async function writeRuntimeObjectProperty(
+  targetObjectUuid: string,
+  propertyPath: string,
+  value: unknown
+): Promise<unknown> {
+  const target = requireRuntimeObject(targetObjectUuid);
+  const segments = parsePropertyPath(propertyPath);
+  let container: unknown = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    container = (container as Record<string | number, unknown>)?.[segments[index]];
+    if (container === null || container === undefined) {
+      throw new ProbeError('PROPERTY_PATH_NOT_TRAVERSABLE', { targetObjectUuid, propertyPath });
+    }
+  }
+  const leafKey = segments[segments.length - 1];
+  const currentValue = (container as Record<string | number, unknown>)[leafKey];
+  const resolvedValue = await resolveRuntimeWriteValue(value, currentValue, propertyPath, {
+    resolveReference: resolveCreatorReference,
+    createObject: (_value, nestedPath) => createCreatorSerializedObject(target, nestedPath),
+    resolveSpecialValue: resolveCreatorSpecialValue
+  });
+  (container as Record<string | number, unknown>)[leafKey] = resolvedValue;
+  return resolvedValue;
+}
+
+async function resetCreatorProperty(objectUuid: string, propertyPath: string): Promise<void> {
+  const cce = readObject((globalThis as Record<string, unknown>).cce);
+  const nodeManager = readObject(cce.Node);
+  if (typeof nodeManager.resetProperty !== 'function') {
+    throw new ProbeError('CREATOR_RESET_PROPERTY_UNAVAILABLE', { objectUuid, propertyPath });
+  }
+  await (nodeManager.resetProperty as (uuid: string, path: string) => Promise<unknown>)
+    .call(nodeManager, objectUuid, propertyPath);
 }
 
 /** 在节点树中按父节点 + 源资产 UUID 定位重建后的实例根（createPrefab 会重建节点并把根名改为资产名）。
@@ -605,6 +939,24 @@ function findRuntimeNode(uuid: string): RuntimeNode | null {
   return findRuntimeNodeIn(director.getScene() as RuntimeNode, uuid);
 }
 
+function findRuntimeNodeByStablePath(stablePath: string): RuntimeNode | null {
+  const segments = stablePath.split('/').filter(Boolean).map(readStablePathSegment);
+  if (segments.length === 0) return null;
+  let current = director.getScene() as RuntimeNode;
+  let index = 0;
+  if (String(current?.name ?? '') === segments[0].name && segments[0].sameNameIndex === 0) {
+    index = 1;
+  }
+  for (; index < segments.length; index += 1) {
+    const segment = segments[index];
+    const matches = (Array.isArray(current?.children) ? current.children : [])
+      .filter((child: RuntimeNode) => String(child?.name ?? '') === segment.name);
+    if (segment.sameNameIndex >= matches.length) return null;
+    current = matches[segment.sameNameIndex] as RuntimeNode;
+  }
+  return current;
+}
+
 function findRuntimeNodeIn(root: RuntimeNode, uuid: string): RuntimeNode | null {
   if (!root || typeof root !== 'object') return null;
   if (root.uuid === uuid || root._uuid === uuid) return root;
@@ -622,22 +974,6 @@ function requireRuntimeNode(uuid: string): RuntimeNode {
     throw new ProbeError('NODE_NOT_FOUND', { nodeUuid: uuid });
   }
   return node;
-}
-
-/** 从 query-node Dump 读取组件 UUID → 类型映射（条目级 type 为类名，value.uuid.value 为组件 UUID）。 */
-function readNodeComponentUuids(nodeDump: unknown): Map<string, string> {
-  const components = new Map<string, string>();
-  const node = readObject(nodeDump);
-  const list = Array.isArray(node.__comps__) ? node.__comps__ : [];
-  for (const entry of list) {
-    const item = readObject(entry);
-    const type = typeof item.type === 'string' ? item.type : null;
-    const uuid = readObject(readObject(item.value).uuid).value;
-    if (type && typeof uuid === 'string' && uuid) {
-      components.set(uuid, type);
-    }
-  }
-  return components;
 }
 
 function findRuntimeComponent(componentUuid: string): { node: RuntimeNode; component: RuntimeNode } | null {  const visit = (node: RuntimeNode | null): { node: RuntimeNode; component: RuntimeNode } | null => {
@@ -664,6 +1000,7 @@ function runtimeNodeInfo(node: RuntimeNode): NodeInfo {
   return {
     uuid: readRuntimeUuid(node),
     name: String(node.name ?? ''),
+    stablePath: buildRuntimeNodeStablePath(node),
     active: Boolean(node.active),
     layer: Number(node.layer ?? 0),
     parentUuid: node.parent ? readRuntimeUuid(node.parent) : null,
@@ -684,6 +1021,32 @@ function runtimeNodeInfo(node: RuntimeNode): NodeInfo {
       z: Number(node.scale?.z ?? 1)
     }
   };
+}
+
+function buildRuntimeNodeStablePath(node: RuntimeNode): string {
+  const segments: string[] = [];
+  let current: RuntimeNode | null = node;
+  while (current) {
+    const name = String(current.name ?? '');
+    const siblings = current.parent && Array.isArray(current.parent.children)
+      ? current.parent.children.filter((sibling: RuntimeNode) => String(sibling?.name ?? '') === name)
+      : [current];
+    const sameNameIndex = Math.max(0, siblings.indexOf(current));
+    segments.unshift(`${encodeURIComponent(name)}~${sameNameIndex}`);
+    current = current.parent ?? null;
+  }
+  return `/${segments.join('/')}`;
+}
+
+function readStablePathSegment(segment: string): { name: string; sameNameIndex: number } {
+  const matched = /^(.*)~(\d+)$/.exec(segment);
+  const encodedName = matched?.[1] ?? segment;
+  const sameNameIndex = matched ? Number(matched[2]) : 0;
+  try {
+    return { name: decodeURIComponent(encodedName), sameNameIndex };
+  } catch {
+    return { name: encodedName, sameNameIndex };
+  }
 }
 
 function readRuntimeUuid(value: RuntimeNode): string {
@@ -744,50 +1107,88 @@ function readObject(value: unknown): Record<string, unknown> {
  * 把协议写值转换为运行时赋值：引用按 kind 解析为运行时对象（资产引用经 assetManager 加载）；
  * Color/Vec2/Vec3/Size 按当前值构造对应 cc 类实例，其余原样赋值。
  */
-async function resolveRuntimeWriteValue(
-  value: unknown,
-  currentValue: unknown,
+async function resolveCreatorReference(
+  reference: RuntimeWriteReference,
   propertyPath: string
 ): Promise<unknown> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const reference = value as Record<string, unknown>;
-    if (typeof reference.kind === 'string') {
-      if (reference.kind === 'node') {
-        const node = typeof reference.objectUuid === 'string' ? findRuntimeNode(reference.objectUuid) : null;
-        if (!node) throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
-        return node;
-      }
-      if (reference.kind === 'component') {
-        const target = typeof reference.objectUuid === 'string'
-          ? findRuntimeComponent(reference.objectUuid)
-          : null;
-        if (!target) throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
-        return target.component;
-      }
-      if (reference.kind === 'asset') {
-        if (typeof reference.assetUuid !== 'string' || !reference.assetUuid) {
-          throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
-        }
-        // 资产引用经编辑器资产管线加载（支持 uuid@subId 子资产形式）。
-        return loadAssetByUuid(reference.assetUuid, propertyPath);
-      }
-      throw new ProbeError('REFERENCE_ASSET_NOT_SUPPORTED', { propertyPath, kind: reference.kind });
-    }
-    const ctorName = (currentValue as { constructor?: { name?: string } })?.constructor?.name;
-    if (ctorName === 'Color' && typeof ccModule.Color === 'function') {
-      return new ccModule.Color(reference.r, reference.g, reference.b, reference.a);
-    }
-    if (ctorName === 'Vec2' && typeof ccModule.Vec2 === 'function') {
-      return new ccModule.Vec2(reference.x, reference.y);
-    }
-    if (ctorName === 'Vec3' && typeof ccModule.Vec3 === 'function') {
-      return new ccModule.Vec3(reference.x, reference.y, reference.z);
-    }
-    if (ctorName === 'Size' && typeof ccModule.Size === 'function') {
-      return new ccModule.Size(reference.width, reference.height);
-    }
+  if (reference.kind === 'missing' || reference.available === false) {
+    throw new ProbeError('REFERENCE_NOT_AVAILABLE', { propertyPath, reference });
   }
-  return value;
+  if (reference.kind === 'node') {
+    const node = typeof reference.objectUuid === 'string' ? findRuntimeNode(reference.objectUuid) : null;
+    if (!node) throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
+    return node;
+  }
+  if (reference.kind === 'component') {
+    const target = typeof reference.objectUuid === 'string'
+      ? findRuntimeComponent(reference.objectUuid)
+      : null;
+    if (!target) throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
+    return target.component;
+  }
+  if (reference.kind === 'asset') {
+    const assetUuid = typeof reference.subAssetUuid === 'string' && reference.subAssetUuid
+      ? reference.subAssetUuid
+      : reference.assetUuid;
+    if (typeof assetUuid !== 'string' || !assetUuid) {
+      throw new ProbeError('REFERENCE_TARGET_NOT_FOUND', { propertyPath, reference });
+    }
+    return loadAssetByUuid(assetUuid, propertyPath);
+  }
+  throw new ProbeError('REFERENCE_ASSET_NOT_SUPPORTED', { propertyPath, kind: reference.kind });
+}
+
+async function readAssetMeta(assetUrl: string): Promise<Record<string, unknown>> {
+  const meta = await Editor.Message.request('asset-db', 'query-asset-meta', assetUrl);
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    throw new ProbeError('ASSET_META_NOT_FOUND', { assetUrl });
+  }
+  return meta as unknown as Record<string, unknown>;
+}
+
+function resolveCreatorSpecialValue(
+  value: Record<string, unknown>,
+  currentValue: unknown
+): unknown | undefined {
+  const ctorName = (currentValue as { constructor?: { name?: string } })?.constructor?.name;
+  if (ctorName === 'Color' && typeof ccModule.Color === 'function') {
+    return new ccModule.Color(value.r, value.g, value.b, value.a);
+  }
+  if (ctorName === 'Vec2' && typeof ccModule.Vec2 === 'function') {
+    return new ccModule.Vec2(value.x, value.y);
+  }
+  if (ctorName === 'Vec3' && typeof ccModule.Vec3 === 'function') {
+    return new ccModule.Vec3(value.x, value.y, value.z);
+  }
+  if (ctorName === 'Size' && typeof ccModule.Size === 'function') {
+    return new ccModule.Size(value.width, value.height);
+  }
+  return undefined;
+}
+
+function createCreatorSerializedObject(owner: unknown, propertyPath: string): unknown | undefined {
+  const rootProperty = parsePropertyPath(propertyPath)[0];
+  if (typeof rootProperty !== 'string') return undefined;
+  const ownerConstructor = (owner as { constructor?: unknown })?.constructor;
+  if (typeof ownerConstructor !== 'function') return undefined;
+
+  const attributes = readRuntimeWriteClassAttributes(
+    readObject(ccModule.cclegacy).Class,
+    ownerConstructor
+  );
+  if (!attributes) return undefined;
+  const propertyType = readRuntimeWriteObjectConstructor(attributes, rootProperty);
+  if (!propertyType) return undefined;
+
+  try {
+    return new propertyType();
+  } catch (error) {
+    throw new ProbeError('PROPERTY_VALUE_TYPE_INSTANTIATION_FAILED', {
+      propertyPath,
+      typeName: propertyType.name || null,
+      reason: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 /** 经 assetManager.loadAny 加载资产对象（含子资产），供引用写入。 */

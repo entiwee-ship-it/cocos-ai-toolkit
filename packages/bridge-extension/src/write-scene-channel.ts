@@ -44,17 +44,67 @@ export async function executeWriteSceneOperations(
     try {
       const result = operation.type.startsWith('node.')
         ? await dependencies.executeNodeOperation(operation)
-        : operation.type.startsWith('prefab.')
+        : operation.type.startsWith('prefab.') || operation.type.startsWith('asset.')
           ? await dependencies.executePrefabOperation(operation)
           : await dependencies.executeComponentOperation(operation);
       // 回填执行结果产生的目标 UUID，重读验证据此定位新建节点/组件；
       // create_from_node 等操作会重建节点（UUID 变更），必须以结果 UUID 覆盖原操作值。
       const resultNodeUuid = 'nodeUuid' in result ? result.nodeUuid : null;
       const resultComponentUuid = 'componentUuid' in result ? result.componentUuid : null;
+      const resultAssetUuid = 'assetUuid' in result ? result.assetUuid : null;
+      const resultTargetLocalIds = 'targetLocalIds' in result ? result.targetLocalIds : null;
+      const resultAfter = result.after && typeof result.after === 'object' && !Array.isArray(result.after)
+        ? result.after as Record<string, unknown>
+        : null;
+      const resultBefore = result.before && typeof result.before === 'object' && !Array.isArray(result.before)
+        ? result.before as Record<string, unknown>
+        : null;
+      const stableResult = resultAfter ?? resultBefore;
+      const resultNodeStablePath = typeof stableResult?.stablePath === 'string' && stableResult.stablePath
+        ? stableResult.stablePath
+        : null;
+      const resultComponentNodeStablePath = typeof stableResult?.nodeStablePath === 'string'
+        && stableResult.nodeStablePath
+        ? stableResult.nodeStablePath
+        : null;
+      const resultComponentType = typeof stableResult?.type === 'string' && stableResult.type
+        ? stableResult.type
+        : null;
+      const resultComponentSameTypeIndex = typeof stableResult?.sameTypeIndex === 'number'
+        && Number.isInteger(stableResult.sameTypeIndex)
+        && stableResult.sameTypeIndex >= 0
+        ? stableResult.sameTypeIndex
+        : null;
+      const resultTargetSha256 = typeof resultAfter?.sha256 === 'string' && resultAfter.sha256
+        ? resultAfter.sha256
+        : null;
+      const resultPrefabAssetUuid = typeof stableResult?.prefabAssetUuid === 'string' && stableResult.prefabAssetUuid
+        ? stableResult.prefabAssetUuid
+        : null;
+      const resultPrefabInstanceFileId = typeof stableResult?.instanceFileId === 'string' && stableResult.instanceFileId
+        ? stableResult.instanceFileId
+        : null;
+      const resultPreviousOverride = 'previousOverride' in result ? result.previousOverride : undefined;
+      const resultHadPreviousOverride = resultPreviousOverride === undefined
+        ? null
+        : resultPreviousOverride !== null;
       const enrichedOperation = {
         ...operation,
         ...(resultNodeUuid ? { resultNodeUuid } : {}),
-        ...(resultComponentUuid ? { resultComponentUuid } : {})
+        ...(resultNodeStablePath ? { resultNodeStablePath } : {}),
+        ...(resultComponentUuid ? { resultComponentUuid } : {}),
+        ...(resultComponentNodeStablePath ? { resultComponentNodeStablePath } : {}),
+        ...(resultComponentType ? { resultComponentType } : {}),
+        ...(resultComponentSameTypeIndex === null ? {} : { resultComponentSameTypeIndex }),
+        ...(resultAssetUuid ? { resultAssetUuid } : {}),
+        ...(resultTargetSha256 ? { resultTargetSha256 } : {}),
+        ...(resultTargetLocalIds ? { resultTargetLocalIds } : {}),
+        ...(resultPrefabAssetUuid ? { resultPrefabAssetUuid } : {}),
+        ...(resultPrefabInstanceFileId ? { resultPrefabInstanceFileId } : {}),
+        ...(resultHadPreviousOverride === null ? {} : { resultHadPreviousOverride }),
+        ...(resultPreviousOverride && 'value' in resultPreviousOverride
+          ? { resultPreviousOverrideValue: resultPreviousOverride.value }
+          : {})
       };
       executed.push({ operation: enrichedOperation, ...result } as VerifiedOperation);
     } catch (error) {
@@ -75,10 +125,7 @@ export async function executeWriteSceneOperations(
     }
   }
 
-  if (input.save) {
-    await dependencies.saveDocument();
-    await dependencies.reloadDocument();
-  }
+  // 保存、软重载与重读由 verifier 统一执行，避免同一事务重复保存和重复重载。
   const verification = await dependencies.verify(executed);
   return {
     kind: 'success',
@@ -105,7 +152,7 @@ export async function rollbackWriteSceneOperations(
       try {
         if (inverse.type.startsWith('node.')) {
           await dependencies.executeNodeOperation(inverse);
-        } else if (inverse.type.startsWith('prefab.')) {
+        } else if (inverse.type.startsWith('prefab.') || inverse.type.startsWith('asset.')) {
           await dependencies.executePrefabOperation(inverse);
         } else {
           await dependencies.executeComponentOperation(inverse);
@@ -133,7 +180,7 @@ export function readDumpValueAtPath(dump: unknown, segments: Array<string | numb
     if (unwrapped === null || unwrapped === undefined) return unwrapped;
     current = (unwrapped as Record<string | number, unknown>)[segment];
   }
-  return unwrapDumpValue(current);
+  return unwrapDumpValueDeep(current);
 }
 
 /**
@@ -184,4 +231,14 @@ function isWrappedDump(value: unknown): boolean {
 
 function unwrapDumpValue(value: unknown): unknown {
   return isWrappedDump(value) ? (value as Record<string, unknown>).value : value;
+}
+
+function unwrapDumpValueDeep(value: unknown): unknown {
+  const unwrapped = unwrapDumpValue(value);
+  if (Array.isArray(unwrapped)) return unwrapped.map(unwrapDumpValueDeep);
+  if (!unwrapped || typeof unwrapped !== 'object') return unwrapped;
+  return Object.fromEntries(
+    Object.entries(unwrapped as Record<string, unknown>)
+      .map(([key, item]) => [key, unwrapDumpValueDeep(item)])
+  );
 }

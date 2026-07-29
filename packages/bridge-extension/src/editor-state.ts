@@ -18,7 +18,6 @@ export const BRIDGE_CAPABILITIES = [
   'probe.transactionList',
   'probe.transactionRollback',
   'probe.createPrefab',
-  'probe.createAsset',
   'probe.deleteAsset',
   'probe.refreshAsset',
   'probe.previewOpen',

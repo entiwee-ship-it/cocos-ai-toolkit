@@ -1123,11 +1123,274 @@ describe('Cocos readonly MCP tools', () => {
       name: 'cocos_design_preview',
       arguments: { projectId: 'project-a', target }
     });
-    expect(preview.isError).not.toBe(true);
+    expect(preview.isError, JSON.stringify(preview.content)).not.toBe(true);
     expect(preview.structuredContent).toMatchObject({
       preview: { mode: 'preview', operationCount: 1 }
     });
     expect(probeClient.requests.filter((request) => request.method === 'probe.writePrepare')).toHaveLength(0);
+  });
+
+  it('设计快照识别 Creator uuid 引用数组并支持 plan/verify roundtrip', async () => {
+    const snapshot = createDesignDocumentSnapshot();
+    const references = [
+      { kind: 'asset' as const, assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true },
+      { kind: 'asset' as const, assetUuid: 'texture-b', subAssetUuid: 'frame-b', assetType: 'cc.SpriteFrame', path: null, available: true }
+    ];
+    const creatorReferences = [{ uuid: 'frame-a' }, { uuid: 'frame-b' }];
+    snapshot.nodes[1].components![0].properties.push({
+      propertyPath: 'textureFrames', declaredType: 'cc.SpriteFrame[]', valueKind: 'array' as const,
+      effectiveValue: creatorReferences, sourceValue: creatorReferences, overrideValue: null, valueSource: 'local'
+    });
+    const probeClient = createDesignProbeClient(snapshot);
+    const { client } = await createHarness(probeClient, 'reports', { enableWrites: true });
+
+    const inspect = await client.callTool({
+      name: 'cocos_design_inspect',
+      arguments: { projectId: 'project-a' }
+    });
+    expect(inspect.structuredContent).toMatchObject({
+      inspect: {
+        tree: [{ children: [{ components: [{ references: { textureFrames: creatorReferences } }] }] }]
+      }
+    });
+
+    const target = createDesignTarget(24);
+    target.tree[0].children[0].components[0].references = { textureFrames: references };
+    const plan = await client.callTool({
+      name: 'cocos_design_plan',
+      arguments: { projectId: 'project-a', target }
+    });
+    expect(plan.structuredContent).toMatchObject({ plan: { items: [] } });
+
+    const verify = await client.callTool({
+      name: 'cocos_design_verify',
+      arguments: { projectId: 'project-a', target }
+    });
+    expect(verify.structuredContent).toMatchObject({
+      report: {
+        passed: true,
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            description: 'reference:textureFrames',
+            actual: creatorReferences,
+            passed: true
+          })
+        ])
+      }
+    });
+  });
+
+  it('design_inspect 从顶层 componentSchemas 还原节点组件', async () => {
+    const snapshot = createDesignDocumentSnapshot();
+    snapshot.nodes[1].components = [];
+    snapshot.componentSchemas = [createDocumentComponentSchema({
+      nodeUuid: 'node-label',
+      nodePath: 'root/label',
+      componentUuid: 'component-label',
+      componentType: 'cc.Label',
+      properties: [createDocumentComponentProperty('fontSize', 24)]
+    })];
+    const probeClient = createDesignProbeClient(snapshot);
+    const { client } = await createHarness(probeClient);
+
+    const inspect = await client.callTool({
+      name: 'cocos_design_inspect',
+      arguments: { projectId: 'project-a' }
+    });
+
+    expect(inspect.isError, JSON.stringify(inspect.content)).not.toBe(true);
+    expect(inspect.structuredContent).toMatchObject({
+      inspect: {
+        tree: [{ children: [{
+          name: 'label',
+          components: [{
+            uuid: 'component-label',
+            type: 'cc.Label',
+            properties: { fontSize: 24 }
+          }]
+        }] }]
+      }
+    });
+  });
+
+  it('design_inspect 输出嵌套实例内部节点的稳定 override 地址', async () => {
+    const probeClient = createDesignProbeClient(createNestedDesignDocumentSnapshot());
+    const { client } = await createHarness(probeClient);
+
+    const inspect = await client.callTool({
+      name: 'cocos_design_inspect',
+      arguments: { projectId: 'project-a' }
+    });
+
+    expect(inspect.isError).not.toBe(true);
+    expect(inspect.structuredContent).toMatchObject({
+      inspect: {
+        tree: [{ children: [{
+          name: 'panel',
+          children: [{
+            name: 'label',
+            prefabOverrideAddress: {
+              instanceRootUuid: 'node-panel',
+              instanceRootPath: 'root/panel',
+              nodePath: 'root/panel/label',
+              internalNodePath: 'label'
+            }
+          }]
+        }] }]
+      }
+    });
+  });
+
+  it('实例根缺 prefabContext 时用 prefabInstances 回填源资产并生成内部 override', async () => {
+    const snapshot = createNestedDesignDocumentSnapshot();
+    delete (snapshot.nodes[1] as typeof snapshot.nodes[number] & { prefabContext?: unknown }).prefabContext;
+    const probeClient = createDesignProbeClient(snapshot);
+    const { client } = await createHarness(probeClient);
+    const target = {
+      document: { scope: 'current-document' as const, assetUuid: 'scene-1' },
+      tree: [{
+        id: '$root', name: 'root', path: 'root',
+        children: [{
+          id: '$panel', fileId: 'file-panel', name: 'panel', path: 'root/panel',
+          prefabInstance: { assetUuid: 'asset-panel' },
+          children: [{
+            id: '$label', name: 'label', path: 'root/panel/label',
+            components: [{ type: 'cc.Label', properties: { fontSize: 28 } }]
+          }]
+        }]
+      }]
+    };
+
+    const inspect = await client.callTool({
+      name: 'cocos_design_inspect', arguments: { projectId: 'project-a' }
+    });
+    expect(inspect.isError, JSON.stringify(inspect.content)).not.toBe(true);
+    expect(inspect.structuredContent).toMatchObject({
+      inspect: { tree: [{ children: [{ name: 'panel', prefabAssetUuid: 'asset-panel' }] }] }
+    });
+
+    const plan = await client.callTool({
+      name: 'cocos_design_plan', arguments: { projectId: 'project-a', target }
+    });
+    expect(plan.structuredContent).toMatchObject({
+      plan: {
+        items: [expect.objectContaining({
+          kind: 'prefab.instance_override', target: '$label', propertyPath: 'fontSize'
+        })],
+        unresolved: []
+      }
+    });
+    expect(JSON.stringify(plan.structuredContent)).not.toContain('prefab.instantiate');
+  });
+
+  it('source-prefab 目标未打开时自动打开并等待目标文档身份就绪', async () => {
+    let currentDocumentUuid = 'scene-a';
+    const target = {
+      ...createDesignTarget(24),
+      document: { scope: 'source-prefab' as const, assetUuid: 'prefab-a' }
+    };
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      if (method === 'probe.editorState') {
+        return {
+          ...createEditorState(),
+          document: {
+            assetUuid: currentDocumentUuid,
+            dirty: false,
+            mode: currentDocumentUuid === 'prefab-a' ? 'prefab' : 'scene',
+            source: 'cce.SceneFacadeManager'
+          }
+        };
+      }
+      if (method === 'probe.openAsset') {
+        currentDocumentUuid = 'prefab-a';
+        return { opened: true, uuid: 'prefab-a' };
+      }
+      if (method === 'probe.documentSnapshot') {
+        const snapshot = createDesignDocumentSnapshot();
+        snapshot.document = {
+          ...snapshot.document,
+          assetUuid: 'prefab-a',
+          path: 'db://assets/ui/Panel.prefab',
+          filePath: 'E:/project-a/assets/ui/Panel.prefab',
+          documentType: 'prefab' as const
+        };
+        return snapshot;
+      }
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient, 'reports', { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_design_verify',
+      arguments: { projectId: 'project-a', target }
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(probeClient.requests.map((request) => request.method)).toEqual([
+      'server.editors',
+      'probe.editorState',
+      'probe.openAsset',
+      'probe.editorState',
+      'probe.documentSnapshot'
+    ]);
+  });
+
+  it('current-document 目标身份不符时返回可执行的 TARGET_DOCUMENT_NOT_OPEN 错误', async () => {
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [createEditorSession('editor-a')];
+      if (method === 'probe.editorState') return createEditorState();
+      if (method === 'probe.documentSnapshot') return createDesignDocumentSnapshot();
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_design_preview',
+      arguments: { projectId: 'project-a', target: createDesignTarget(28) }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('TARGET_DOCUMENT_NOT_OPEN');
+    expect(JSON.stringify(result.content)).toContain('scene-1');
+    expect(JSON.stringify(result.content)).toContain('cocos_asset_open');
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.documentSnapshot');
+  });
+
+  it('design_preview 返回可直接传给 apply 的完整 revision', async () => {
+    const revision = {
+      document: 'sha256:document',
+      hierarchy: 'sha256:hierarchy',
+      assetDatabase: 'sha256:assets',
+      scriptCompilation: 'sha256:scripts',
+      prefabGraph: 'sha256:prefabs'
+    };
+    const editor = createEditorSession('editor-a');
+    editor.capabilities.push('probe.writeRevision');
+    const probeClient = new RecordingProbeClient((method) => {
+      if (method === 'server.editors') return [editor];
+      if (method === 'probe.editorState') {
+        return {
+          ...createEditorState(),
+          document: {
+            assetUuid: 'scene-1', dirty: false, mode: 'scene', source: 'cce.SceneFacadeManager'
+          }
+        };
+      }
+      if (method === 'probe.documentSnapshot') return createDesignDocumentSnapshot();
+      if (method === 'probe.writeRevision') return { documentId: 'scene-1', revision };
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_design_preview',
+      arguments: { projectId: 'project-a', target: createDesignTarget(28) }
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ preview: { revision } });
+    expect(probeClient.requests.map((request) => request.method)).toContain('probe.writeRevision');
   });
 });
 
@@ -1187,7 +1450,7 @@ describe('Cocos gated design MCP tools', () => {
       result: { status: 'committed', verification: { passed: true } }
     });
     expect(probeClient.requests.map((request) => request.method)).toEqual([
-      'server.editors', 'probe.documentSnapshot',
+      'server.editors', 'probe.editorState', 'probe.documentSnapshot',
       'server.editors', 'probe.writePrepare',
       'server.editors', 'probe.writeConfirm',
       'server.editors', 'probe.documentSnapshot'
@@ -1202,6 +1465,348 @@ describe('Cocos gated design MCP tools', () => {
       join(reportRoot, 'write-journal', 'design-apply-1.jsonl'), 'utf8'
     )).trim());
     expect(designJournal.event).toBe('cocos_design_apply');
+  });
+
+  it('design_apply 独立重读把引用数组的 AssetRef 与 Creator uuid Dump 视为等价', async () => {
+    const references = [
+      { kind: 'asset' as const, assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true },
+      { kind: 'asset' as const, assetUuid: 'texture-b', subAssetUuid: 'frame-b', assetType: 'cc.SpriteFrame', path: null, available: true }
+    ];
+    const target = createDesignTarget(24);
+    target.tree[0].children[0].components[0].references = { textureFrames: references };
+    const probeClient = createReferenceArrayDesignApplyProbeClient();
+    const { client } = await createHarness(
+      probeClient,
+      await createTemporaryRoot(),
+      { enableWrites: true }
+    );
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        target,
+        executionId: 'design-apply-reference-array'
+      }
+    });
+
+    expect(applied.isError, JSON.stringify(applied.content)).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: {
+        status: 'committed',
+        verification: {
+          passed: true,
+          items: [expect.objectContaining({
+            description: 'component.set_reference:$label.textureFrames',
+            expected: references,
+            actual: [{ uuid: 'frame-a' }, { uuid: 'frame-b' }],
+            passed: true
+          })]
+        }
+      }
+    });
+  });
+
+  it('design_apply 独立验证 extract_subtree 的资产身份和实例替换', async () => {
+    const assetUrl = 'db://assets/ui/ExtractedLabel.prefab';
+    const prefabAssetUuid = 'prefab-extracted-label';
+    let committed = false;
+    const probeClient = new RecordingProbeClient((method, payload) => {
+      if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+      if (method === 'probe.editorState') {
+        return {
+          ...createEditorState(),
+          document: {
+            assetUuid: 'scene-1', dirty: false, mode: 'prefab', source: 'cce.SceneFacadeManager'
+          }
+        };
+      }
+      if (method === 'probe.documentSnapshot') {
+        const snapshot = createDesignDocumentSnapshot(24);
+        if (committed) {
+          snapshot.prefabInstances = [{
+            ownerDocumentAssetUuid: 'scene-1',
+            hostNodePath: 'root/label',
+            sourcePrefabAssetUuid: prefabAssetUuid,
+            instanceRootObjectUuid: 'node-label',
+            sourceObjectFileId: 'file-label',
+            instanceFileId: 'instance-label',
+            prefabRootNodeUuid: 'node-label',
+            instanceChain: [],
+            sync: true,
+            state: null,
+            propertyOverrides: [],
+            targetOverrides: [],
+            mountedChildren: [],
+            mountedComponents: [],
+            removedComponents: [],
+            unresolved: [],
+            rawPrefabInfo: {}
+          }];
+          snapshot.coverage.prefabInstances = { total: 1, resolved: 1 };
+        }
+        return snapshot;
+      }
+      const transactionId = (payload as { params?: { transactionId?: string } }).params?.transactionId
+        ?? 'design-extract-subtree-001';
+      if (method === 'probe.writePrepare') return createDesignWriteResult(transactionId, 'validated', 0);
+      if (method === 'probe.writeConfirm') {
+        committed = true;
+        return {
+          ...createDesignWriteResult(transactionId, 'committed', 1),
+          verification: {
+            passed: true,
+            verifiedAt: '2026-07-29T00:00:00.000Z',
+            items: [{
+              operationIndex: 0,
+              description: `从节点生成预制体 ${assetUrl}`,
+              expected: '节点已关联预制体资产',
+              actual: prefabAssetUuid,
+              passed: true
+            }]
+          }
+        };
+      }
+      if (method === 'probe.transactionRollback') {
+        committed = false;
+        return {
+          ...createDesignWriteResult(transactionId, 'rolled-back', 1),
+          rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
+        };
+      }
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const target = {
+      ...createDesignTarget(24),
+      operations: [{ type: 'document.extract_subtree' as const, nodeId: '$label', assetUrl }]
+    };
+    const { client } = await createHarness(
+      probeClient,
+      await createTemporaryRoot(),
+      { enableWrites: true }
+    );
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        executionId: 'design-extract-subtree',
+        target
+      }
+    });
+
+    expect(applied.isError, JSON.stringify(applied.content)).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: {
+        status: 'committed',
+        verification: {
+          passed: true,
+          items: [expect.objectContaining({
+            description: 'document.extract_subtree:$label',
+            actual: {
+              assetUrlVerified: true,
+              instanceRootObjectUuid: 'node-label',
+              sourcePrefabAssetUuid: prefabAssetUuid
+            },
+            passed: true
+          })]
+        }
+      }
+    });
+  });
+
+  it('design_apply 能从顶层 componentSchemas 重读新节点自动创建的组件', async () => {
+    const probeClient = createTopLevelAutoComponentApplyProbeClient();
+    const { client } = await createHarness(
+      probeClient,
+      await createTemporaryRoot(),
+      { enableWrites: true }
+    );
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        executionId: 'design-apply-top-level-component',
+        target: createTopLevelAutoComponentTarget()
+      }
+    });
+
+    expect(applied.isError, JSON.stringify(applied.content)).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: {
+        status: 'committed',
+        resolutions: {
+          nodes: { '$panel': 'node-panel' },
+          components: { '$panel::cc.UITransform': 'component-ui-transform' }
+        },
+        verification: { passed: true }
+      }
+    });
+  });
+
+  it('design_apply 保存重建 UUID 时按节点稳定身份连续解析多个自动组件', async () => {
+    const probeClient = createChurningAutoComponentApplyProbeClient();
+    const { client } = await createHarness(
+      probeClient,
+      await createTemporaryRoot(),
+      { enableWrites: true }
+    );
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        executionId: 'design-apply-churning-auto-components',
+        target: createChurningAutoComponentTarget()
+      }
+    });
+
+    expect(applied.isError, JSON.stringify(applied.content)).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: {
+        status: 'committed',
+        resolutions: {
+          nodes: {
+            '$background': 'node-background-4',
+            '$title': 'node-title-4'
+          },
+          components: {
+            '$background::cc.UITransform': 'component-background-4',
+            '$title::cc.UITransform': 'component-title-4'
+          }
+        },
+        verification: { passed: true }
+      }
+    });
+  });
+
+  it('design_apply 在保存重建 object UUID 且存在同名节点时按稳定身份重绑定逻辑 ID', async () => {
+    const target = createUuidChurningDesignTarget();
+    const probeClient = createUuidChurningNodeApplyProbeClient();
+    const { client } = await createHarness(probeClient, await createTemporaryRoot(), { enableWrites: true });
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        target,
+        executionId: 'design-apply-reparented-node'
+      }
+    });
+
+    expect(applied.isError, JSON.stringify(applied.content)).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: {
+        status: 'committed',
+        resolutions: {
+          nodes: {
+            '$dialog': 'node-dialog-2',
+            '$background': 'node-validation-background-2'
+          }
+        },
+        verification: { passed: true }
+      }
+    });
+  });
+
+  it('design_apply 提交后复用 runtime scenario 并保留失败验证报告', async () => {
+    const reportRoot = await createTemporaryRoot();
+    const scenarioReport = {
+      passed: false,
+      startedAt: '2026-07-28T00:00:00.000Z',
+      finishedAt: '2026-07-28T00:00:01.000Z',
+      steps: [{
+        index: 0,
+        kind: 'assert-property',
+        passed: false,
+        expected: 28,
+        actual: 24,
+        error: 'PROPERTY_MISMATCH'
+      }]
+    };
+    const probeClient = createDesignApplyProbeClient({ scenarioReport });
+    const { client } = await createHarness(probeClient, reportRoot, { enableWrites: true });
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        target: createDesignTarget(28),
+        executionId: 'design-apply-preview-1',
+        verifyPreview: {
+          sessionId: 'preview-1',
+          steps: [{
+            kind: 'assert-property',
+            path: 'root/label',
+            property: 'cc.Label.fontSize',
+            expected: 28
+          }]
+        }
+      }
+    });
+
+    expect(applied.isError).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: { status: 'committed' },
+      previewVerification: {
+        attempted: true,
+        committed: true,
+        report: scenarioReport
+      }
+    });
+    expect(probeClient.requests.at(-1)).toEqual({
+      method: 'server.runtimeRunScenario',
+      payload: {
+        sessionId: 'preview-1',
+        selector: { projectId: 'project-a' },
+        steps: [{
+          kind: 'assert-property',
+          path: 'root/label',
+          property: 'cc.Label.fontSize',
+          expected: 28
+        }]
+      }
+    });
+  });
+
+  it('design_apply 的 preview 验证通道报错时仍返回已提交事实和可行动报告', async () => {
+    const probeClient = createDesignApplyProbeClient({
+      scenarioError: new Error('Preview 页面连接已断开')
+    });
+    const { client } = await createHarness(probeClient, await createTemporaryRoot(), {
+      enableWrites: true
+    });
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        target: createDesignTarget(28),
+        executionId: 'design-apply-preview-error',
+        verifyPreview: {
+          steps: [{ kind: 'wait-node', path: 'root/label' }]
+        }
+      }
+    });
+
+    expect(applied.isError).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: { status: 'committed' },
+      previewVerification: {
+        attempted: true,
+        committed: true,
+        report: {
+          passed: false,
+          steps: [],
+          error: {
+            code: 'PREVIEW_VERIFICATION_FAILED',
+            message: 'Preview 页面连接已断开',
+            nextAction: '写入已经提交；请恢复 Preview 连接后单独重跑 cocos_runtime_run_scenario'
+          }
+        }
+      }
+    });
   });
 
   it('design_apply 的 confirm 结果未知时要求人工恢复，不误报普通失败', async () => {
@@ -1227,14 +1832,106 @@ describe('Cocos gated design MCP tools', () => {
     });
     expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.transactionRollback');
   });
+
+  it('design_apply 的 prepare 拒绝保留原始错误码且不误报确认结果未知', async () => {
+    const prepareError = Object.assign(new Error('DIRTY_DOCUMENT: 当前文档包含未保存修改'), {
+      code: 'DIRTY_DOCUMENT',
+      details: { documentId: 'scene-1' }
+    });
+    const probeClient = createDesignApplyProbeClient({ prepareError });
+    const { client } = await createHarness(
+      probeClient,
+      await createTemporaryRoot(),
+      { enableWrites: true }
+    );
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        target: createDesignTarget(28),
+        executionId: 'design-prepare-rejected'
+      }
+    });
+
+    expect(applied.isError).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({
+      result: {
+        status: 'failed',
+        failedStep: {
+          code: 'DIRTY_DOCUMENT',
+          message: expect.stringContaining('当前文档包含未保存修改')
+        }
+      }
+    });
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.writeConfirm');
+  });
+
+  it('design_apply 将嵌套实例内部属性写入转换为 prefab override', async () => {
+    let committed = false;
+    let preparedOperation: unknown = null;
+    const probeClient = new RecordingProbeClient((method, payload) => {
+      if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+      if (method === 'probe.editorState') {
+        return {
+          ...createEditorState(),
+          document: { assetUuid: 'scene-1', dirty: false, mode: 'prefab', source: 'cce.SceneFacadeManager' }
+        };
+      }
+      if (method === 'probe.documentSnapshot') {
+        return createNestedDesignDocumentSnapshot(committed ? 28 : 24, committed);
+      }
+      const transactionId = (payload as { params?: { transactionId?: string; operations?: unknown[] } }).params?.transactionId
+        ?? 'design-nested-override-001';
+      if (method === 'probe.writePrepare') {
+        preparedOperation = (payload as { params: { operations: unknown[] } }).params.operations[0];
+        return createDesignWriteResult(transactionId, 'validated', 0);
+      }
+      if (method === 'probe.writeConfirm') {
+        committed = true;
+        return createDesignWriteResult(transactionId, 'committed', 1);
+      }
+      if (method === 'probe.transactionRollback') {
+        return {
+          ...createDesignWriteResult(transactionId, 'rolled-back', 1),
+          rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
+        };
+      }
+      throw new Error(`UNEXPECTED_REQUEST:${method}`);
+    });
+    const { client } = await createHarness(probeClient, 'reports', { enableWrites: true });
+
+    const applied = await client.callTool({
+      name: 'cocos_design_apply',
+      arguments: {
+        projectId: 'project-a',
+        executionId: 'design-nested-override',
+        target: createNestedDesignTarget(28)
+      }
+    });
+
+    expect(applied.isError, JSON.stringify(applied.content)).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({ result: { status: 'committed' } });
+    expect(preparedOperation).toMatchObject({
+      type: 'prefab.instance_override',
+      instanceRootUuid: 'node-panel',
+      targetObjectUuid: 'component-label',
+      targetNodePath: 'root/panel/label',
+      propertyPath: 'fontSize',
+      value: 28
+    });
+  });
 });
 
 async function createHarness(
   probeClient: ReadonlyProbeClient,
   reportRoot = 'reports',
-  runtime: { enableWrites?: boolean } = {}
+  runtime: { enableWrites?: boolean; profile?: 'prefab' | 'full' } = {}
 ): Promise<McpHarness> {
-  const server = createCocosMcpServer({ probeClient, reportRoot }, runtime);
+  const server = createCocosMcpServer(
+    { probeClient, reportRoot },
+    { profile: 'full', ...runtime }
+  );
   const client = new Client({ name: 'cocos-ai-mcp-test', version: '0.1.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -1257,7 +1954,8 @@ function createEditorSession(editorInstanceId: string) {
       'probe.assetIndex',
       'probe.component',
       'probe.documentSnapshot',
-      'probe.openAsset'
+      'probe.openAsset',
+      'probe.writeRevision'
     ]
   };
 }
@@ -1375,24 +2073,72 @@ function createDesignTarget(fontSize: number) {
   };
 }
 
-function createDesignProbeClient(): RecordingProbeClient {
+function createDesignProbeClient(snapshot = createDesignDocumentSnapshot()): RecordingProbeClient {
   return new RecordingProbeClient((method) => {
     if (method === 'server.editors') return [createEditorSession('editor-a')];
-    if (method === 'probe.documentSnapshot') return createDesignDocumentSnapshot();
+    if (method === 'probe.editorState') {
+      return {
+        ...createEditorState(),
+        document: {
+          assetUuid: 'scene-1', dirty: false, mode: 'scene', source: 'cce.SceneFacadeManager'
+        }
+      };
+    }
+    if (method === 'probe.documentSnapshot') return snapshot;
+    if (method === 'probe.writeRevision') {
+      return {
+        documentId: 'scene-1',
+        revision: {
+          document: 'sha256:document', hierarchy: 'sha256:hierarchy',
+          assetDatabase: 'sha256:assets', scriptCompilation: 'sha256:scripts', prefabGraph: null
+        }
+      };
+    }
     throw new Error(`UNEXPECTED_REQUEST:${method}`);
   });
 }
 
+function createNestedDesignTarget(fontSize: number) {
+  return {
+    document: { scope: 'current-document' as const, assetUuid: 'scene-1' },
+    tree: [{
+      id: '$root', fileId: 'file-root', name: 'root', path: 'root',
+      children: [{
+        id: '$panel', fileId: 'file-panel', name: 'panel', path: 'root/panel',
+        prefabInstance: { assetUuid: 'asset-panel', name: 'panel' },
+        children: [{
+          id: '$label', fileId: 'file-label', name: 'label', path: 'root/panel/label',
+          components: [{ type: 'cc.Label', properties: { fontSize } }]
+        }]
+      }]
+    }]
+  };
+}
+
 function createDesignApplyProbeClient(
-  options: { confirmOutcomeUnknown?: boolean } = {}
+  options: {
+    confirmOutcomeUnknown?: boolean;
+    prepareError?: Error;
+    scenarioReport?: Record<string, unknown>;
+    scenarioError?: Error;
+  } = {}
 ): RecordingProbeClient {
   let fontSize = 24;
   return new RecordingProbeClient((method, payload) => {
     if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+    if (method === 'probe.editorState') {
+      return {
+        ...createEditorState(),
+        document: {
+          assetUuid: 'scene-1', dirty: false, mode: 'scene', source: 'cce.SceneFacadeManager'
+        }
+      };
+    }
     if (method === 'probe.documentSnapshot') return createDesignDocumentSnapshot(fontSize);
     const transactionId = (payload as { params?: { transactionId?: string } }).params?.transactionId
       ?? 'design-apply-1-001';
     if (method === 'probe.writePrepare') {
+      if (options.prepareError) throw options.prepareError;
       return createDesignWriteResult(transactionId, 'validated', 0);
     }
     if (method === 'probe.writeConfirm') {
@@ -1407,8 +2153,353 @@ function createDesignApplyProbeClient(
         rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
       };
     }
+    if (method === 'server.runtimeRunScenario' && options.scenarioReport) {
+      return options.scenarioReport;
+    }
+    if (method === 'server.runtimeRunScenario' && options.scenarioError) {
+      throw options.scenarioError;
+    }
     throw new Error(`UNEXPECTED_REQUEST:${method}`);
   });
+}
+
+function createReferenceArrayDesignApplyProbeClient(): RecordingProbeClient {
+  let committed = false;
+  return new RecordingProbeClient((method, payload) => {
+    if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+    if (method === 'probe.editorState') {
+      return {
+        ...createEditorState(),
+        document: {
+          assetUuid: 'scene-1', dirty: false, mode: 'scene', source: 'cce.SceneFacadeManager'
+        }
+      };
+    }
+    if (method === 'probe.documentSnapshot') {
+      const snapshot = createDesignDocumentSnapshot(24);
+      snapshot.nodes[1].components![0].properties.push({
+        propertyPath: 'textureFrames',
+        declaredType: 'cc.SpriteFrame[]',
+        valueKind: 'array' as const,
+        effectiveValue: committed ? [{ uuid: 'frame-a' }, { uuid: 'frame-b' }] : [],
+        sourceValue: committed ? [{ uuid: 'frame-a' }, { uuid: 'frame-b' }] : [],
+        overrideValue: null,
+        valueSource: 'local'
+      });
+      return snapshot;
+    }
+    const transactionId = (payload as { params?: { transactionId?: string } }).params?.transactionId
+      ?? 'design-apply-reference-array-001';
+    if (method === 'probe.writePrepare') return createDesignWriteResult(transactionId, 'validated', 0);
+    if (method === 'probe.writeConfirm') {
+      committed = true;
+      return createDesignWriteResult(transactionId, 'committed', 1);
+    }
+    if (method === 'probe.transactionRollback') {
+      committed = false;
+      return {
+        ...createDesignWriteResult(transactionId, 'rolled-back', 1),
+        rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
+      };
+    }
+    throw new Error(`UNEXPECTED_REQUEST:${method}`);
+  });
+}
+
+function createTopLevelAutoComponentApplyProbeClient(): RecordingProbeClient {
+  let committedOperations = 0;
+  return new RecordingProbeClient((method, payload) => {
+    if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+    if (method === 'probe.editorState') {
+      return {
+        ...createEditorState(),
+        document: {
+          assetUuid: 'scene-1', dirty: false, mode: 'scene', source: 'cce.SceneFacadeManager'
+        }
+      };
+    }
+    if (method === 'probe.documentSnapshot') {
+      return createTopLevelAutoComponentSnapshot(committedOperations > 0);
+    }
+    const transactionId = (payload as { params?: { transactionId?: string } }).params?.transactionId
+      ?? 'design-apply-top-level-component-001';
+    if (method === 'probe.writePrepare') {
+      return createDesignWriteResult(transactionId, 'validated', 0);
+    }
+    if (method === 'probe.writeConfirm') {
+      committedOperations += 1;
+      return createDesignWriteResult(transactionId, 'committed', 1);
+    }
+    if (method === 'probe.transactionRollback') {
+      committedOperations = Math.max(0, committedOperations - 1);
+      return {
+        ...createDesignWriteResult(transactionId, 'rolled-back', 1),
+        rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
+      };
+    }
+    throw new Error(`UNEXPECTED_REQUEST:${method}`);
+  });
+}
+
+function createTopLevelAutoComponentTarget() {
+  return {
+    document: { scope: 'current-document' as const, assetUuid: 'scene-1' },
+    tree: [{
+      id: '$root', fileId: 'file-root', name: 'root',
+      children: [{
+        id: '$panel', name: 'Panel',
+        components: [{ type: 'cc.UITransform' }]
+      }]
+    }]
+  };
+}
+
+function createTopLevelAutoComponentSnapshot(withPanel: boolean) {
+  const snapshot = createDocumentSnapshot('scene-1');
+  snapshot.document = {
+    ...snapshot.document,
+    path: 'db://assets/main.scene',
+    filePath: 'E:/project-a/assets/main.scene',
+    documentType: 'scene' as const
+  };
+  snapshot.nodes = [{
+    kind: 'node' as const,
+    identity: {
+      sessionId: null, assetUuid: null, fileId: 'file-root', objectUuid: 'node-root',
+      typeId: 'cc.Node', scriptUuid: null
+    },
+    name: 'root', path: 'root', parentObjectUuid: null,
+    childObjectUuids: withPanel ? ['node-panel'] : [], components: []
+  }];
+  if (withPanel) {
+    snapshot.nodes.push({
+      kind: 'node' as const,
+      identity: {
+        sessionId: null, assetUuid: null, fileId: 'file-panel', objectUuid: 'node-panel',
+        typeId: 'cc.Node', scriptUuid: null
+      },
+      name: 'Panel', path: 'root/Panel', parentObjectUuid: 'node-root',
+      childObjectUuids: [], components: []
+    });
+    snapshot.componentSchemas = [createDocumentComponentSchema({
+      nodeUuid: 'node-panel',
+      nodePath: 'root/Panel',
+      componentUuid: 'component-ui-transform',
+      componentType: 'cc.UITransform'
+    })];
+  }
+  snapshot.page.totalNodes = snapshot.nodes.length;
+  snapshot.coverage = {
+    ...snapshot.coverage,
+    nodes: { total: snapshot.nodes.length, decoded: snapshot.nodes.length },
+    components: { total: withPanel ? 1 : 0, decoded: withPanel ? 1 : 0 }
+  };
+  return snapshot;
+}
+
+function createChurningAutoComponentApplyProbeClient(): RecordingProbeClient {
+  let committedOperations = 0;
+  return new RecordingProbeClient((method, payload) => {
+    if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+    if (method === 'probe.editorState') {
+      return {
+        ...createEditorState(),
+        document: {
+          assetUuid: 'scene-1', dirty: false, mode: 'scene', source: 'cce.SceneFacadeManager'
+        }
+      };
+    }
+    if (method === 'probe.documentSnapshot') {
+      return createChurningAutoComponentSnapshot(committedOperations);
+    }
+    const transactionId = (payload as { params?: { transactionId?: string } }).params?.transactionId
+      ?? 'design-apply-churning-auto-components-001';
+    if (method === 'probe.writePrepare') return createDesignWriteResult(transactionId, 'validated', 0);
+    if (method === 'probe.writeConfirm') {
+      committedOperations += 1;
+      return createDesignWriteResult(transactionId, 'committed', 1);
+    }
+    if (method === 'probe.transactionRollback') {
+      committedOperations = Math.max(0, committedOperations - 1);
+      return {
+        ...createDesignWriteResult(transactionId, 'rolled-back', 1),
+        rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
+      };
+    }
+    throw new Error(`UNEXPECTED_REQUEST:${method}`);
+  });
+}
+
+function createChurningAutoComponentTarget() {
+  return {
+    document: { scope: 'current-document' as const, assetUuid: 'scene-1' },
+    tree: [{
+      id: '$root', fileId: 'file-root', name: 'root',
+      children: [
+        { id: '$background', name: 'Background', components: [{ type: 'cc.UITransform' }] },
+        { id: '$title', name: 'Title', components: [{ type: 'cc.UITransform' }] }
+      ]
+    }]
+  };
+}
+
+function createChurningAutoComponentSnapshot(committedOperations: number) {
+  const snapshot = createDocumentSnapshot('scene-1');
+  snapshot.document = {
+    ...snapshot.document,
+    path: 'db://assets/main.scene',
+    filePath: 'E:/project-a/assets/main.scene',
+    documentType: 'scene' as const
+  };
+  const suffix = String(committedOperations);
+  const rootUuid = `node-root-${suffix}`;
+  snapshot.nodes = [{
+    kind: 'node' as const,
+    identity: {
+      sessionId: null, assetUuid: null, fileId: 'file-root', objectUuid: rootUuid,
+      typeId: 'cc.Node', scriptUuid: null
+    },
+    name: 'root', path: 'root', parentObjectUuid: null,
+    childObjectUuids: [], components: []
+  }];
+  const createdNodes = [
+    { minimumCommit: 1, name: 'Background', logicalId: 'background' },
+    { minimumCommit: 2, name: 'Title', logicalId: 'title' }
+  ];
+  for (const created of createdNodes) {
+    if (committedOperations < created.minimumCommit) continue;
+    const nodeUuid = `node-${created.logicalId}-${suffix}`;
+    snapshot.nodes[0].childObjectUuids.push(nodeUuid);
+    snapshot.nodes.push({
+      kind: 'node' as const,
+      identity: {
+        sessionId: null, assetUuid: null, fileId: null, objectUuid: nodeUuid,
+        typeId: 'cc.Node', scriptUuid: null
+      },
+      name: created.name,
+      path: `root/${created.name}`,
+      parentObjectUuid: rootUuid,
+      childObjectUuids: [],
+      components: []
+    });
+    snapshot.componentSchemas.push(createDocumentComponentSchema({
+      nodeUuid,
+      nodePath: `root/${created.name}`,
+      componentUuid: `component-${created.logicalId}-${suffix}`,
+      componentType: 'cc.UITransform',
+      componentFileId: null,
+      componentIndex: 0
+    }));
+  }
+  snapshot.page.totalNodes = snapshot.nodes.length;
+  snapshot.coverage = {
+    ...snapshot.coverage,
+    nodes: { total: snapshot.nodes.length, decoded: snapshot.nodes.length },
+    components: {
+      total: snapshot.componentSchemas.length,
+      decoded: snapshot.componentSchemas.length
+    }
+  };
+  return snapshot;
+}
+
+function createUuidChurningNodeApplyProbeClient(): RecordingProbeClient {
+  let createdLevel = 0;
+  return new RecordingProbeClient((method, payload) => {
+    if (method === 'server.editors') return [createWriteCapableEditorSession('editor-a')];
+    if (method === 'probe.editorState') {
+      return {
+        ...createEditorState(),
+        document: {
+          assetUuid: 'scene-1', dirty: false, mode: 'scene', source: 'cce.SceneFacadeManager'
+        }
+      };
+    }
+    if (method === 'probe.documentSnapshot') {
+      return createUuidChurningDocumentSnapshot(createdLevel);
+    }
+    const transactionId = (payload as { params?: { transactionId?: string } }).params?.transactionId
+      ?? 'design-apply-reparented-node-001';
+    if (method === 'probe.writePrepare') return createDesignWriteResult(transactionId, 'validated', 0);
+    if (method === 'probe.writeConfirm') {
+      createdLevel += 1;
+      return createDesignWriteResult(transactionId, 'committed', 1);
+    }
+    if (method === 'probe.transactionRollback') {
+      createdLevel = Math.max(0, createdLevel - 1);
+      return {
+        ...createDesignWriteResult(transactionId, 'rolled-back', 1),
+        rollbackEvidence: { attempted: true, succeeded: true, verifiedClean: true }
+      };
+    }
+    throw new Error(`UNEXPECTED_REQUEST:${method}`);
+  });
+}
+
+function createUuidChurningDesignTarget() {
+  return {
+    document: { scope: 'current-document' as const, assetUuid: 'scene-1' },
+    tree: [{
+      id: '$root', fileId: 'file-root', name: 'root',
+      children: [
+        {
+          id: '$label', fileId: 'file-label', name: 'label',
+          components: [{ type: 'cc.Label', properties: { fontSize: 24 } }]
+        },
+        { id: '$existingBackground', fileId: 'file-existing-background', name: 'Background' },
+        {
+          id: '$dialog', name: 'Dialog',
+          children: [{ id: '$background', name: 'Background' }]
+        }
+      ]
+    }]
+  };
+}
+
+function createUuidChurningDocumentSnapshot(createdLevel: number) {
+  const snapshot = createDesignDocumentSnapshot(24);
+  const suffix = String(createdLevel);
+  const root = snapshot.nodes[0];
+  const label = snapshot.nodes[1];
+  root.identity.objectUuid = `node-root-${suffix}`;
+  label.identity.objectUuid = `node-label-${suffix}`;
+  label.parentObjectUuid = root.identity.objectUuid;
+  root.childObjectUuids = [label.identity.objectUuid, `node-existing-background-${suffix}`];
+  snapshot.nodes.push({
+    kind: 'node',
+    identity: {
+      sessionId: null, assetUuid: null, fileId: 'file-existing-background',
+      objectUuid: `node-existing-background-${suffix}`, typeId: 'cc.Node', scriptUuid: null
+    },
+    name: 'Background', path: 'root/Background', parentObjectUuid: root.identity.objectUuid,
+    childObjectUuids: [], components: []
+  });
+  if (createdLevel >= 1) {
+    root.childObjectUuids.push(`node-dialog-${suffix}`);
+    snapshot.nodes.push({
+      kind: 'node',
+      identity: {
+        sessionId: null, assetUuid: null, fileId: 'file-dialog',
+        objectUuid: `node-dialog-${suffix}`, typeId: 'cc.Node', scriptUuid: null
+      },
+      name: 'Dialog', path: 'root/Dialog', parentObjectUuid: 'node-visible-document-root',
+      childObjectUuids: createdLevel >= 2 ? [`node-validation-background-${suffix}`] : [], components: []
+    });
+  }
+  if (createdLevel >= 2) {
+    snapshot.nodes.push({
+      kind: 'node',
+      identity: {
+        sessionId: null, assetUuid: null, fileId: 'file-validation-background',
+        objectUuid: `node-validation-background-${suffix}`, typeId: 'cc.Node', scriptUuid: null
+      },
+      name: 'Background', path: 'root/Dialog/Background', parentObjectUuid: `node-dialog-${suffix}`,
+      childObjectUuids: [], components: []
+    });
+  }
+  snapshot.page.totalNodes = snapshot.nodes.length;
+  snapshot.coverage.nodes = { total: snapshot.nodes.length, decoded: snapshot.nodes.length };
+  return snapshot;
 }
 
 function createDesignDocumentSnapshot(fontSize = 24) {
@@ -1452,6 +2543,80 @@ function createDesignDocumentSnapshot(fontSize = 24) {
     nodes: { total: 2, decoded: 2 },
     components: { total: 1, decoded: 1 },
     properties: { total: 1, decoded: 1 }
+  };
+  return snapshot;
+}
+
+function createNestedDesignDocumentSnapshot(fontSize = 24, withOverride = false) {
+  const snapshot = createDesignDocumentSnapshot(fontSize);
+  snapshot.document = {
+    ...snapshot.document,
+    path: 'db://assets/ui/Host.prefab',
+    filePath: 'E:/project-a/assets/ui/Host.prefab',
+    documentType: 'prefab' as const
+  };
+  const root = snapshot.nodes[0];
+  const label = snapshot.nodes[1];
+  root.childObjectUuids = ['node-panel'];
+  label.path = 'root/panel/label';
+  label.parentObjectUuid = 'node-panel';
+  const panel = {
+    kind: 'node' as const,
+    identity: {
+      ...root.identity,
+      objectUuid: 'node-panel',
+      fileId: 'file-panel'
+    },
+    name: 'panel',
+    path: 'root/panel',
+    parentObjectUuid: 'node-root',
+    childObjectUuids: ['node-label'],
+    components: [],
+    prefabContext: {
+      ownerDocumentAssetUuid: 'scene-1',
+      sourcePrefabAssetUuid: 'asset-panel',
+      instanceRootObjectUuid: 'node-panel',
+      sourceObjectFileId: 'file-panel',
+      instanceChain: []
+    }
+  };
+  snapshot.nodes = [root, panel, label];
+  snapshot.page.totalNodes = 3;
+  snapshot.prefabInstances = [{
+    ownerDocumentAssetUuid: 'scene-1',
+    hostNodePath: 'root/panel',
+    sourcePrefabAssetUuid: 'asset-panel',
+    instanceRootObjectUuid: 'node-panel',
+    sourceObjectFileId: 'file-panel',
+    instanceFileId: 'instance-panel',
+    prefabRootNodeUuid: 'node-panel',
+    instanceChain: [],
+    sync: true,
+    state: null,
+    propertyOverrides: withOverride
+      ? [{
+          index: 0,
+          targetLocalIds: ['component-label-file'],
+          propertyPath: ['fontSize'],
+          declaredType: 'number',
+          sourceValue: 24,
+          overrideValue: fontSize,
+          effectiveValue: fontSize,
+          raw: {}
+        }]
+      : [],
+    targetOverrides: [],
+    mountedChildren: [],
+    mountedComponents: [],
+    removedComponents: [],
+    unresolved: [],
+    rawPrefabInfo: {}
+  }];
+  snapshot.coverage = {
+    ...snapshot.coverage,
+    nodes: { total: 3, decoded: 3 },
+    prefabInstances: { total: 1, resolved: 1 },
+    overrides: { total: withOverride ? 1 : 0, decoded: withOverride ? 1 : 0 }
   };
   return snapshot;
 }
@@ -1504,6 +2669,57 @@ function createDocumentSnapshot(assetUuid: string, pageSize = 25) {
     unresolved: [],
     diagnostics: [],
     raw: { hierarchy: { uuid: 'root' } }
+  };
+}
+
+function createDocumentComponentSchema(input: {
+  nodeUuid: string;
+  nodePath: string;
+  componentUuid: string;
+  componentType: string;
+  componentFileId?: string | null;
+  componentIndex?: number;
+  properties?: ReturnType<typeof createDocumentComponentProperty>[];
+}) {
+  return {
+    componentUuid: input.componentUuid,
+    componentFileId: input.componentFileId === undefined
+      ? `${input.componentUuid}-file`
+      : input.componentFileId,
+    nodeUuid: input.nodeUuid,
+    nodePath: input.nodePath,
+    componentIndex: input.componentIndex ?? 0,
+    className: input.componentType,
+    qualifiedName: input.componentType,
+    typeId: input.componentType,
+    scriptUuid: null,
+    scriptPath: null,
+    inheritance: ['cc.Component', 'cc.Object'],
+    executionOrder: 0,
+    properties: input.properties ?? [],
+    rawClassAttributes: {},
+    unresolved: []
+  };
+}
+
+function createDocumentComponentProperty(propertyPath: string, currentValue: unknown) {
+  return {
+    propertyPath,
+    serializedName: propertyPath,
+    displayName: propertyPath,
+    declaredType: typeof currentValue,
+    actualType: typeof currentValue,
+    valueKind: typeof currentValue === 'number' ? 'number' as const : 'unknown-serialized' as const,
+    nullable: false,
+    serializable: true,
+    visible: true,
+    readonly: false,
+    defaultValue: null,
+    currentValue,
+    references: [],
+    inspectorMetadata: {},
+    rawClassAttributes: {},
+    rawConsumedKeys: []
   };
 }
 
@@ -1618,7 +2834,9 @@ describe('Cocos write MCP tools', () => {
       (COCOS_WRITE_TOOL_NAMES as readonly string[]).includes(tool.name)
     );
     expect(writeTools.every((tool) => tool.annotations?.readOnlyHint === false)).toBe(true);
-    expect(writeTools.every((tool) => tool.annotations?.destructiveHint === true)).toBe(true);
+    expect(writeTools.every((tool) => typeof tool.annotations?.destructiveHint === 'boolean')).toBe(true);
+    expect(writeTools.find((tool) => tool.name === 'cocos_asset_create')?.annotations?.destructiveHint).toBe(false);
+    expect(writeTools.find((tool) => tool.name === 'cocos_asset_delete')?.annotations?.destructiveHint).toBe(true);
     const gatedReadonlyTools = result.tools.filter((tool) =>
       (COCOS_GATED_READONLY_TOOL_NAMES as readonly string[]).includes(tool.name)
     );

@@ -79,6 +79,41 @@ describe('design-export', () => {
     }));
   });
 
+  it('verify 把 Creator uuid 数组与声明式 AssetRef 数组按身份逐项比较', () => {
+    const current = createCurrentTree();
+    const component = current[0]!.children[0]!.components[0]!;
+    component.references = {
+      textureFrames: [{ uuid: 'frame-a' }, { uuid: 'frame-b' }]
+    };
+    const target: DesignTargetDocument = {
+      document: { scope: 'current-document', assetUuid: 'scene-1' },
+      tree: [{
+        id: '$root', fileId: 'file-root', name: 'root',
+        children: [{
+          id: '$label', fileId: 'file-label', name: 'label',
+          components: [{
+            type: 'cc.Label',
+            references: {
+              textureFrames: [
+                { kind: 'asset', assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true },
+                { kind: 'asset', assetUuid: 'texture-b', subAssetUuid: 'frame-b', assetType: 'cc.SpriteFrame', path: null, available: true }
+              ]
+            }
+          }]
+        }]
+      }]
+    };
+
+    const report = verifyDesignTarget(current, target);
+
+    expect(report.passed).toBe(true);
+    expect(report.items).toContainEqual(expect.objectContaining({
+      description: 'reference:textureFrames',
+      actual: [{ uuid: 'frame-a' }, { uuid: 'frame-b' }],
+      passed: true
+    }));
+  });
+
   it('verify 在 prune 开启时报告目标外节点与组件', () => {
     const current = createCurrentTree();
     const target = exportDesignDocument(current);

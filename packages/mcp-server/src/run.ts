@@ -4,12 +4,12 @@ import { ProbeClient } from '@cocos-ai/client';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createCocosMcpServer } from './server.js';
+import { createCocosMcpServer, type CocosMcpToolProfile } from './server.js';
 
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 const DEFAULT_REPORT_ROOT = 'reports';
 /** 与 CLI 默认一致的单次请求等待超时毫秒数。 */
-const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
 
 interface RuntimeProbeClient {
   connect(): Promise<void>;
@@ -29,12 +29,14 @@ export interface McpRuntimeConfig {
   serverUrl: string;
   reportRoot: string;
   enableWrites: boolean;
+  profile: CocosMcpToolProfile;
   requestTimeoutMs: number;
 }
 
 /**
- * 从进程环境和启动参数读取 Probe Server 地址、MCP 服务端授权报告根和写能力开关。
- * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力。
+ * 从进程环境和启动参数读取 Probe Server 地址、MCP 服务端授权报告根、工具档和写能力开关。
+ * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力；
+ * 工具档缺省为 prefab，full 仅通过显式 profile 参数启用。
  * 请求超时经 COCOS_AI_PROBE_TIMEOUT_MS 配置，与 CLI 共用同一环境变量。
  *
  * @param environment 环境变量键值；缺失值使用本机默认配置。
@@ -49,8 +51,20 @@ export function readMcpRuntimeConfig(
     serverUrl: environment.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL,
     reportRoot: resolve(environment.COCOS_AI_MCP_REPORT_ROOT ?? DEFAULT_REPORT_ROOT),
     enableWrites: argv.includes('--enable-writes'),
+    profile: readToolProfile(argv),
     requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_PROBE_TIMEOUT_MS)
   };
+}
+
+/** 读取严格的工具档参数，缺省使用日常 Prefab 场景档。 */
+function readToolProfile(argv: readonly string[]): CocosMcpToolProfile {
+  const inline = argv.find((argument) => argument.startsWith('--profile='));
+  const index = argv.indexOf('--profile');
+  const value = inline?.slice('--profile='.length) ?? (index >= 0 ? argv[index + 1] : undefined);
+  if (index >= 0 && value === undefined) throw new Error('MCP_PROFILE_REQUIRED');
+  if (value === undefined || value === 'prefab') return 'prefab';
+  if (value === 'full') return 'full';
+  throw new Error(`MCP_PROFILE_INVALID:${value}`);
 }
 
 /** 解析有限的正整数毫秒超时，缺省或非法时回退默认值。 */
@@ -91,7 +105,7 @@ export async function startMcpRuntime<TTransport>(options: {
 }
 
 /**
- * 使用真实 Probe Client 和 stdio Transport 启动 Cocos 只读 MCP Server。
+ * 使用真实 Probe Client 和 stdio Transport 启动按 profile 配置的 Cocos MCP Server。
  *
  * @param environment 可选环境变量覆盖，默认使用当前进程环境。
  * @returns 已连接且可关闭的 MCP 运行时。
@@ -104,7 +118,7 @@ export async function runMcpServer(
   const probeClient = new ProbeClient(config.serverUrl, config.requestTimeoutMs);
   const server = createCocosMcpServer(
     { probeClient, reportRoot: config.reportRoot },
-    { enableWrites: config.enableWrites }
+    { enableWrites: config.enableWrites, profile: config.profile }
   );
   const transport = new StdioServerTransport();
   patchTransportSchemaRefs(transport);
