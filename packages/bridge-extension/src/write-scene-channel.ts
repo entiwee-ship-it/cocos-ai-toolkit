@@ -6,7 +6,7 @@ import type {
   WriteExecutionOutcome,
   WriteOperation,
   WriteVerificationReport
-} from './transaction-manager';
+} from './write-types';
 import type { VerifiedOperation } from './write-verifier';
 
 /**
@@ -133,36 +133,6 @@ export async function executeWriteSceneOperations(
     verification,
     evidence: executed
   };
-}
-
-/**
- * 按逆序应用已执行操作的逆操作（step-undo-with-inverse 回滚路径）。
- * 任一逆操作失败即停并报告失败位置，由事务管理器转入 manual-recovery-required。
- *
- * @param executed 已执行操作及其证据。
- * @param dependencies Scene 侧写通道依赖。
- * @returns 是否全部逆操作成功，以及失败位置（成功时为 null）。
- */
-export async function rollbackWriteSceneOperations(
-  executed: VerifiedOperation[],
-  dependencies: WriteSceneChannelDependencies
-): Promise<{ succeeded: boolean; failedAt: number | null }> {
-  for (let index = executed.length - 1; index >= 0; index -= 1) {
-    for (const inverse of executed[index].inverse) {
-      try {
-        if (inverse.type.startsWith('node.')) {
-          await dependencies.executeNodeOperation(inverse);
-        } else if (inverse.type.startsWith('prefab.') || inverse.type.startsWith('asset.')) {
-          await dependencies.executePrefabOperation(inverse);
-        } else {
-          await dependencies.executeComponentOperation(inverse);
-        }
-      } catch {
-        return { succeeded: false, failedAt: index };
-      }
-    }
-  }
-  return { succeeded: true, failedAt: null };
 }
 
 /**

@@ -1,9 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { resolveCreatorDocumentIdentity } from '../src/creator-document-identity.js';
-
-const sceneSourcePath = fileURLToPath(new URL('../src/scene.ts', import.meta.url));
 
 describe('Creator document identity', () => {
   it('从 SceneFacadeManager 独立读取当前文档 UUID 和编辑模式', async () => {
@@ -63,16 +59,5 @@ describe('Creator document identity', () => {
       source: 'cce.SceneFacadeManager'
     });
     expect(calls).toBe(2);
-  });
-
-  it('Scene 快照只使用运行时 Facade 证据确认当前文档', async () => {
-    const source = await readFile(sceneSourcePath, 'utf8');
-    const snapshotFunction = source.slice(
-      source.indexOf('async function probeDocumentSnapshot'),
-      source.indexOf('/**\n * 读取当前节点的 Prefab')
-    );
-
-    expect(snapshotFunction).toContain('resolveCreatorDocumentIdentity(globalThis)');
-    expect(snapshotFunction).toContain('documentIdentity');
   });
 });

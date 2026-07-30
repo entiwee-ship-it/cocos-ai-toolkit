@@ -35,11 +35,6 @@ describe('component schema registration', () => {
       message: 'probe-component',
       sceneMethod: 'probeComponent',
       request: { uuid: 'component-1' }
-    },
-    {
-      message: 'probe-document-snapshot',
-      sceneMethod: 'probeDocumentSnapshot',
-      request: { mode: 'summary', pageSize: 100 }
     }
   ])('AssetDB 脚本索引失败时仍继续执行 $message 主查询', async ({
     message,
@@ -105,10 +100,8 @@ describe('component schema registration', () => {
     vi.resetModules();
     const { methods: freshMethods } = await import('../src/main');
     await freshMethods['probe-asset-index']({});
-    await expect(freshMethods['probe-document-snapshot']({
-      mode: 'summary',
-      pageSize: 100
-    })).resolves.toEqual({ forwarded: true });
+    await expect(freshMethods['probe-component']({ uuid: 'component-1' })).resolves.toEqual({ forwarded: true });
+    await expect(freshMethods['probe-component']({ uuid: 'component-2' })).resolves.toEqual({ forwarded: true });
 
     expect(requestEditorMessage.mock.calls.filter((call) =>
       call[0] === 'asset-db' && call[1] === 'query-assets'
@@ -118,9 +111,9 @@ describe('component schema registration', () => {
       'execute-scene-script',
       {
         name: 'cocos-ai-bridge',
-        method: 'probeDocumentSnapshot',
+        method: 'probeComponent',
         args: [{
-          request: { mode: 'summary', pageSize: 100 },
+          request: { uuid: 'component-2' },
           scriptPathsByUuid: [['script-1', 'db://assets/script/GameController.ts']]
         }]
       }

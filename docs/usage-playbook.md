@@ -1,5 +1,28 @@
 # Cocos AI Toolkit 使用手册
 
+> **0.3.0 归档说明**：本文其余章节描述的是 0.2.x 事务/声明式（prefab/full profile）调用方式，已随直写架构移除，保留供查阅。当前版本（0.3.0+）请按下节"直写档最小用法"操作；工具总表见仓库 README 和 `skills/cocos-ai-toolkit/SKILL.md`。
+
+## 0. 直写档最小用法（0.3.0+）
+
+1. `cocos_editor_list` → 记录 `projectId`（多实例同时记 `editorInstanceId`）。
+2. `cocos_asset_search`（pattern 传名称/路径）→ 拿到 Prefab 或脚本 UUID。
+3. `cocos_prefab_open`（uuid）→ 打开并等就绪。
+4. `cocos_hierarchy` → 拿节点 uuid/path 和组件清单；`cocos_node_read`（可加 componentType）→ 看组件属性现值。
+5. 写入（每次调用自动保存 + 逐项重读回显）：
+   - 改属性：`cocos_component_set_property`（path 或 nodeUuid 寻址节点，componentType 兼容 cc. 前缀，propertyPath 支持 `items[2]`）
+   - 建节点：`cocos_node_create`（parentUuid/parentPath + name）
+   - 挂组件：`cocos_component_add`（内置组件给 componentType；自定义脚本组件另给 scriptUuid）
+   - 删节点：`cocos_node_delete`
+   - 节点转 Prefab：`cocos_prefab_create`（assetUrl 必须 `db://assets/*.prefab`）
+   - 删 Prefab：`cocos_prefab_delete`（uuid；不可回滚、不查引用）
+   - 导入文件：`cocos_asset_import`（sourceFilePath + assetUrl）
+   - 重导入/编译：`cocos_asset_refresh`（assetUrl）
+6. 视觉验证：`cocos_preview_launch` → `cocos_runtime_capture` → `cocos_preview_stop`。
+
+错误处理：`NODE_NOT_FOUND` 重取 hierarchy；`COMPONENT_NOT_FOUND` 附可用清单；`DIRECT_WRITE_VERIFY_FAILED` 表示 Creator 静默未生效（典型为预制体编辑模式下嵌套实例内部），换路径再写；`ASSET_ALREADY_EXISTS` 换 URL。直写无回滚，误操作用 git 还原。
+
+---
+
 本文面向 Cocos Creator 3.8.8 项目，给出 Prefab 新建、子树抽取、嵌套实例 Override、引用数组、Enum/嵌套对象，以及写后 Preview 验证的标准调用顺序。
 
 ## 1. 开始前

@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { BridgeClient, type BridgeLifecycleEvent } from './bridge-client';
 import { buildBridgeHello, probeEditorState } from './editor-state';
 import type { CreatorDocumentIdentity } from './creator-document-identity';
@@ -7,24 +6,9 @@ import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, re
 import { ProbeError } from './probe-errors';
 import { probeAssets } from './asset-probe';
 import { probeAssetIndex } from './asset-index';
-import {
-  executeMainAssetWrite,
-  rollbackMainAssetWrite,
-  type MainAssetWriteDependencies
-} from './main-asset-write';
-import { executeBridgeWrite } from './main-write-router';
-import type { VerifiedOperation } from './write-verifier';
-import {
-  InMemoryWriteTransactionStore,
-  WriteTransactionManager,
-  captureWriteRevisionFromDocument,
-  type RevisionFingerprint,
-  type WriteRevisionCapture,
-  type WriteRollbackEvidence,
-  type WriteTransactionRecord
-} from './transaction-manager';
+import { importAsset } from './import-asset';
 
-const BRIDGE_VERSION = '0.2.5';
+const BRIDGE_VERSION = '0.3.0';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 const BRIDGE_LIFECYCLE_LOG_NAMES: Record<BridgeLifecycleEvent['type'], string> = {
@@ -48,32 +32,6 @@ const sceneMethods = {
   'probe.prefab': 'probePrefab'
 } as const;
 
-// 阶段二通用写事务管理器：Revision 采集经 Scene 文档身份 + 资产文件哈希；
-// 执行和回滚经 Scene 写通道（node-writer / component-writer / write-verifier）。
-const writeTransactionManager = new WriteTransactionManager({
-  store: new InMemoryWriteTransactionStore(),
-  logger: (message) => {
-    try {
-      const editorGlobal = Editor as unknown as Record<string, unknown>;
-      if (typeof editorGlobal.log === 'function') {
-        (editorGlobal.log as (text: string) => void)(`[CocosAI] ${message}`);
-      }
-    } catch {
-      // 日志失败不影响事务
-    }
-  },
-  captureRevision: async () => captureWriteRevision(),
-  execute: async (transaction) => executeBridgeWrite({
-    operations: transaction.request.operations,
-    save: transaction.request.save,
-    undoGroup: transaction.request.undoGroup
-  }, {
-    executeMainAssetWrite: (input) => executeMainAssetWrite(input, buildMainAssetWriteDependencies()),
-    executeSceneWrite: (input) => forwardToScene('writeExecute', input) as never
-  }),
-  rollback: async (transaction) => rollbackWriteTransaction(transaction)
-});
-
 export function load(): void {
   cachedScriptPathsByUuid = null;
   const project = Editor.Project as typeof Editor.Project & { uuid?: string };
@@ -88,22 +46,16 @@ export function load(): void {
       'probe.assets': (payload) => probeAssets(payload),
       'probe.assetIndex': () => probeAssetIndexWithScriptCache(),
       'probe.component': (payload) => probeComponent(payload),
-      'probe.documentSnapshot': (payload) => probeDocumentSnapshot(payload),
       'probe.openAsset': async (payload) => {
         const request = payload as { uuid?: unknown };
         if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');
         await Editor.Message.request('asset-db', 'open-asset', request.uuid);
         return { opened: true, uuid: request.uuid };
       },
-      'probe.writeRevision': async () => {
-        const capture = await captureWriteRevision();
-        return { documentId: capture.documentId, revision: capture.fingerprint };
-      },
-      'probe.writePrepare': (payload) => writeTransactionManager.prepare(payload),
-      'probe.writeConfirm': (payload) => writeTransactionManager.confirm(payload),
-      'probe.transactionStatus': async (payload) => writeTransactionManager.status(payload),
-      'probe.transactionList': async () => writeTransactionManager.list(),
-      'probe.transactionRollback': (payload) => writeTransactionManager.rollback(payload),
+      // 直写入口：绕过已移除的事务层，直接驱动 Scene 写执行器（原子写 + 保存 + 逐项重读）。
+      'probe.directWrite': (payload) => forwardToScene('writeExecute', payload),
+      'probe.saveDocument': () => forwardToScene('saveDocument', {}),
+      'probe.importAsset': (payload) => importAsset(payload),
       'probe.createPrefab': (payload) => forwardToScene('createPrefabFromNode', payload),
       'probe.deleteAsset': (payload) => forwardToScene('deleteAsset', payload),
       'probe.refreshAsset': (payload) => forwardToScene('refreshAsset', payload),
@@ -160,16 +112,12 @@ function logBridgeClientLifecycle(event: BridgeLifecycleEvent): void {
 function localizeBridgeLifecycleDetails(event: BridgeLifecycleEvent): Record<string, unknown> {
   switch (event.type) {
     case 'connecting':
-    case 'socket-open':
-      return { 地址: event.url };
-    case 'disconnected':
-      return { 关闭码: event.code, 原因: event.reason };
-    case 'retry-scheduled':
-      return { 重试次数: event.attempt, 等待毫秒: event.delayMs };
+    case 'socket-open': return { 地址: event.url };
+    case 'disconnected': return { 关闭码: event.code, 原因: event.reason };
+    case 'retry-scheduled': return { 重试次数: event.attempt, 等待毫秒: event.delayMs };
     case 'hello-sent':
     case 'ready':
-    case 'disposed':
-      return {};
+    case 'disposed': return {};
   }
 }
 
@@ -207,141 +155,8 @@ async function probeEditorStateWithDocumentIdentity(): Promise<unknown> {
   return probeEditorState(identity);
 }
 
-async function readDocumentAsset(documentAssetUuid: string): Promise<Buffer> {
-  const value = await Editor.Message.request('asset-db', 'query-asset-info', documentAssetUuid);
-  const assetInfo = value && typeof value === 'object' ? value as { file?: unknown } : {};
-  if (typeof assetInfo.file !== 'string' || !assetInfo.file) {
-    throw new ProbeError('ASSET_FILE_PATH_UNAVAILABLE');
-  }
-  return readFile(assetInfo.file);
-}
-
 /**
- * 采集写事务 Revision 前置：Scene 侧文档身份 + 层级指纹，主进程补文档磁盘哈希。
- *
- * @returns 当前文档标识和五维指纹（assetDatabase/scriptCompilation 暂不采集）。
- */
-async function captureWriteRevision(): Promise<WriteRevisionCapture> {
-  const identity = await forwardToScene('writeDocumentIdentity', {}) as {
-    documentId: string;
-    hierarchySha256: string;
-    prefabGraphSha256: string | null;
-    dirty: boolean | null;
-  };
-  return captureWriteRevisionFromDocument(identity, readDocumentAsset);
-}
-
-/**
- * 回滚事务：经 Scene 写通道逆序应用逆操作，保存后重采指纹验证还原干净。
- *
- * @param transaction 待回滚的事务记录（携带执行证据）。
- * @returns 回滚证据。
- */
-async function rollbackWriteTransaction(
-  transaction: WriteTransactionRecord
-): Promise<WriteRollbackEvidence> {
-  const executed = Array.isArray(transaction.executionEvidence)
-    ? transaction.executionEvidence as VerifiedOperation[]
-    : [];
-  const assetOnly = executed.length > 0
-    && executed.every((entry) => entry.operation.type.startsWith('asset.'));
-  const result = assetOnly
-    ? await rollbackMainAssetWrite(executed, buildMainAssetWriteDependencies())
-    : await forwardToScene('writeRollback', {
-        executed,
-        save: transaction.request.save
-      }) as { succeeded: boolean; failedAt: number | null };
-  if (!result.succeeded) {
-    return { attempted: true, succeeded: false, undoGroupId: null, verifiedClean: false };
-  }
-  try {
-    const capture = await captureWriteRevision();
-    return {
-      attempted: true,
-      succeeded: true,
-      undoGroupId: null,
-      verifiedClean: fingerprintMatchesPrecondition(transaction.request.revision, capture.fingerprint)
-    };
-  } catch {
-    return { attempted: true, succeeded: true, undoGroupId: null, verifiedClean: null };
-  }
-}
-
-function buildMainAssetWriteDependencies(): MainAssetWriteDependencies {
-  return {
-    queryAssetInfo: async (uuidOrUrl) => {
-      const value = await Editor.Message.request('asset-db', 'query-asset-info', uuidOrUrl).catch(() => null);
-      const record = readObject(value);
-      return typeof record.uuid === 'string' && record.uuid
-        ? { uuid: record.uuid, type: typeof record.type === 'string' ? record.type : null }
-        : null;
-    },
-    createAsset: async (assetUrl, _assetKind, content) => {
-      const value = await Editor.Message.request('asset-db', 'create-asset', assetUrl, content as never);
-      const record = readObject(value);
-      if (typeof record.uuid !== 'string' || !record.uuid) {
-        throw new ProbeError('ASSET_CREATE_FAILED', { assetUrl });
-      }
-      return { uuid: record.uuid, type: typeof record.type === 'string' ? record.type : null };
-    },
-    moveAsset: async (sourceUrl, targetUrl) => {
-      await Editor.Message.request('asset-db', 'move-asset', sourceUrl, targetUrl);
-    },
-    readAssetMeta: async (assetUrl) => {
-      const value = await Editor.Message.request('asset-db', 'query-asset-meta', assetUrl);
-      if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        throw new ProbeError('ASSET_META_NOT_FOUND', { assetUrl });
-      }
-      return value as unknown as Record<string, unknown>;
-    },
-    writeAssetMeta: async (assetUrl, meta) => {
-      await Editor.Message.request('asset-db', 'save-asset-meta', assetUrl, JSON.stringify(meta));
-    },
-    readAssetContent: async (assetUrl) => {
-      const filePath = await Editor.Message.request('asset-db', 'query-path', assetUrl);
-      if (typeof filePath !== 'string' || !filePath) {
-        throw new ProbeError('ASSET_PATH_NOT_FOUND', { assetUrl });
-      }
-      return readFile(filePath, 'utf8');
-    },
-    saveAssetContent: async (assetUrl, content) => {
-      const value = await Editor.Message.request('asset-db', 'save-asset', assetUrl, content);
-      const record = readObject(value);
-      if (typeof record.uuid !== 'string' || !record.uuid) {
-        throw new ProbeError('ASSET_SAVE_FAILED', { assetUrl });
-      }
-    },
-    deleteAsset: async (assetUrl) => {
-      await Editor.Message.request('asset-db', 'delete-asset', assetUrl as never);
-    }
-  };
-}
-
-/** 指纹逐维比对：前置为 null 的维度不参与判定。 */
-function fingerprintMatchesPrecondition(
-  expected: RevisionFingerprint,
-  actual: RevisionFingerprint
-): boolean {
-  return (['document', 'hierarchy', 'assetDatabase', 'scriptCompilation', 'prefabGraph'] as const)
-    .every((scope) => expected[scope] === null || expected[scope] === undefined || expected[scope] === actual[scope]);
-}
-
-/**
- * 尽力读取资产索引中的脚本 UUID 路径，并转发当前文档快照请求到 Scene 进程。
- *
- * @param request 文档扫描模式、分页、原始数据和并发配置。
- * @returns Scene 进程生成的只读文档快照。
- */
-async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
-  const scriptPathsByUuid = await readScriptPathsBestEffort();
-  return forwardToScene('probeDocumentSnapshot', {
-    request: readObject(request),
-    scriptPathsByUuid
-  });
-}
-
-/**
- * 尽力读取脚本资产索引，并转发单个组件的完整 Schema 请求到 Scene 进程。
+ * 尽力读取脚本 UUID 路径，并转发单个组件的完整 Schema 请求到 Scene 进程。
  *
  * @param request 包含当前文档组件实例 UUID 的请求。
  * @returns 组件身份、属性、Inspector 元数据、脚本路径和原始 Dump。
@@ -355,7 +170,7 @@ async function probeComponent(request: unknown): Promise<unknown> {
 }
 
 /**
- * 尽力读取脚本 UUID 路径，AssetDB 索引异常时保留组件和文档主查询能力。
+ * 尽力读取脚本资产索引，AssetDB 索引异常时保留组件和文档主查询能力。
  *
  * @returns 可跨 Creator 进程传输的 UUID、路径元组；索引不可用时返回空数组。
  */
@@ -381,7 +196,7 @@ async function probeAssetIndexWithScriptCache(): Promise<unknown> {
  * 从可序列化资产索引中提取脚本 UUID 和稳定路径。
  *
  * @param value probeAssetIndex 返回的资产索引。
- * @returns 可跨 Creator 进程消息传输的 UUID、路径元组。
+ * @returns 可跨 Creator 进程传输的 UUID、路径元组。
  */
 function readScriptPathsByUuid(value: unknown): Array<[string, string]> {
   const index = readObject(value);
@@ -427,14 +242,11 @@ export const methods: Record<string, (request: JsonObject) => Promise<unknown>> 
   'probe-editor-state': () => probeEditorStateWithDocumentIdentity(),
   'probe-assets': (request) => probeAssets(request),
   'probe-asset-index': () => probeAssetIndexWithScriptCache(),
-  'probe-document-snapshot': (request) => probeDocumentSnapshot(request),
   'probe-hierarchy': (request) => forwardToScene('probeHierarchy', request),
   'probe-node': (request) => forwardToScene('probeNode', request),
   'probe-component': (request) => probeComponent(request),
   'probe-prefab': (request) => forwardToScene('probePrefab', request),
-  'probe-write-prepare': (request) => writeTransactionManager.prepare(request),
-  'probe-write-confirm': (request) => writeTransactionManager.confirm(request),
-  'probe-transaction-status': async (request) => writeTransactionManager.status(request),
-  'probe-transaction-list': async () => writeTransactionManager.list(),
-  'probe-transaction-rollback': (request) => writeTransactionManager.rollback(request)
+  'probe-direct-write': (request) => forwardToScene('writeExecute', request),
+  'probe-save-document': () => forwardToScene('saveDocument', {}),
+  'probe-import-asset': (request) => importAsset(request)
 };

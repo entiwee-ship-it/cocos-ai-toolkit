@@ -1,19 +1,12 @@
 import {
-  DesignTargetDocumentSchema,
-  RevisionPreconditionSchema,
   ScenarioStepSchema,
-  WriteTransactionRequestSchema,
-  type DesignTargetDocument,
-  type RevisionPrecondition,
-  type ScenarioStep,
-  type WriteTransactionRequest
+  type ScenarioStep
 } from '@cocos-ai/protocol';
 import { z } from 'zod';
 
 export type CliCommand =
   | { command: 'editors' }
   | { command: 'state'; projectId: string; editorInstanceId?: string }
-  | { command: 'write-revision'; projectId: string; editorInstanceId?: string }
   | { command: 'assets'; projectId: string; editorInstanceId?: string; pattern: string; uuid?: string }
   | { command: 'open-asset'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'hierarchy'; projectId: string; editorInstanceId?: string; depth: number }
@@ -22,45 +15,7 @@ export type CliCommand =
   | { command: 'prefab'; projectId: string; editorInstanceId?: string; nodeUuid: string }
   | { command: 'asset-index'; projectId: string; editorInstanceId?: string }
   | { command: 'component-schema'; projectId: string; editorInstanceId?: string; uuid: string }
-  | { command: 'document-snapshot'; projectId: string; editorInstanceId?: string; mode: 'summary' | 'full'; pageSize: number; cursor?: string }
-  | { command: 'prefab-graph'; projectId: string; editorInstanceId?: string }
-  | { command: 'design-inspect'; projectId: string; editorInstanceId?: string; rootUuid?: string }
-  | { command: 'design-plan'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
-  | { command: 'design-preview'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
-  | { command: 'design-verify'; projectId: string; editorInstanceId?: string; target: DesignTargetDocument }
-  | {
-      command: 'design-export';
-      projectId: string;
-      editorInstanceId?: string;
-      rootUuid?: string;
-      scope: DesignTargetDocument['document']['scope'];
-      assetUuid?: string;
-    }
-  | {
-      command: 'design-apply';
-      projectId: string;
-      editorInstanceId?: string;
-      target: DesignTargetDocument;
-      executionId?: string;
-      revision?: RevisionPrecondition;
-    }
-  | {
-      command: 'scan-project';
-      projectId: string;
-      editorInstanceId?: string;
-      reportRoot: string;
-      report: string;
-      resume?: string;
-      pageSize?: number;
-      includeRaw?: boolean;
-      concurrency?: number;
-    }
   | { command: 'save-report'; projectId: string; editorInstanceId?: string; sample: string }
-  | { command: 'write-prepare'; projectId: string; editorInstanceId?: string; request: WriteTransactionRequest }
-  | { command: 'write-confirm'; projectId: string; editorInstanceId?: string; transactionId: string }
-  | { command: 'transaction-status'; projectId: string; editorInstanceId?: string; transactionId: string }
-  | { command: 'transaction-list'; projectId: string; editorInstanceId?: string }
-  | { command: 'transaction-rollback'; projectId: string; editorInstanceId?: string; transactionId: string }
   | { command: 'preview-launch'; projectId: string; editorInstanceId?: string; resolution?: { width: number; height: number }; channel?: string }
   | { command: 'preview-stop'; sessionId: string }
   | { command: 'preview-sessions'; projectId?: string }
@@ -100,7 +55,6 @@ const PROJECT_SELECTOR_FLAGS = ['project-id', 'editor-instance-id'] as const;
 const COMMAND_FLAGS: Record<string, readonly string[]> = {
   editors: [],
   state: PROJECT_SELECTOR_FLAGS,
-  'write-revision': PROJECT_SELECTOR_FLAGS,
   assets: [...PROJECT_SELECTOR_FLAGS, 'pattern', 'uuid'],
   'open-asset': [...PROJECT_SELECTOR_FLAGS, 'uuid'],
   hierarchy: [...PROJECT_SELECTOR_FLAGS, 'depth'],
@@ -109,29 +63,7 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   prefab: [...PROJECT_SELECTOR_FLAGS, 'node-uuid'],
   'asset-index': PROJECT_SELECTOR_FLAGS,
   'component-schema': [...PROJECT_SELECTOR_FLAGS, 'uuid'],
-  'document-snapshot': [...PROJECT_SELECTOR_FLAGS, 'mode', 'page-size', 'cursor'],
-  'prefab-graph': PROJECT_SELECTOR_FLAGS,
-  'design-inspect': [...PROJECT_SELECTOR_FLAGS, 'root-uuid'],
-  'design-plan': [...PROJECT_SELECTOR_FLAGS, 'target'],
-  'design-preview': [...PROJECT_SELECTOR_FLAGS, 'target'],
-  'design-verify': [...PROJECT_SELECTOR_FLAGS, 'target'],
-  'design-export': [...PROJECT_SELECTOR_FLAGS, 'root-uuid', 'scope', 'asset-uuid'],
-  'design-apply': [...PROJECT_SELECTOR_FLAGS, 'target', 'execution-id', 'revision'],
-  'scan-project': [
-    ...PROJECT_SELECTOR_FLAGS,
-    'report-root',
-    'report',
-    'resume',
-    'page-size',
-    'include-raw',
-    'concurrency'
-  ],
   'save-report': [...PROJECT_SELECTOR_FLAGS, 'sample'],
-  'write-prepare': [...PROJECT_SELECTOR_FLAGS, 'request'],
-  'write-confirm': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
-  'transaction-status': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
-  'transaction-list': PROJECT_SELECTOR_FLAGS,
-  'transaction-rollback': [...PROJECT_SELECTOR_FLAGS, 'transaction-id'],
   'preview-launch': [...PROJECT_SELECTOR_FLAGS, 'resolution', 'channel'],
   'preview-stop': ['session-id'],
   'preview-sessions': ['project-id'],
@@ -294,54 +226,9 @@ export function parseCommand(argv: string[]): CliCommand {
       };
     }
     case 'state':
-    case 'write-revision':
       return { command, ...selector };
     case 'asset-index':
-    case 'prefab-graph':
       return { command, ...selector };
-    case 'design-inspect':
-      return {
-        command,
-        ...selector,
-        ...(flags.has('root-uuid') ? { rootUuid: flags.get('root-uuid') } : {})
-      };
-    case 'design-plan':
-    case 'design-preview':
-    case 'design-verify':
-      return {
-        command,
-        ...selector,
-        target: readDesignTarget(requireFlag(flags, 'target', 'DESIGN_TARGET_REQUIRED'))
-      };
-    case 'design-export': {
-      const scope = flags.get('scope') ?? 'current-document';
-      if (scope !== 'current-document' && scope !== 'source-prefab' && scope !== 'apply-to-source') {
-        throw new Error('INVALID_DESIGN_SCOPE');
-      }
-      return {
-        command,
-        ...selector,
-        scope,
-        ...(flags.has('root-uuid') ? { rootUuid: flags.get('root-uuid') } : {}),
-        ...(flags.has('asset-uuid') ? { assetUuid: flags.get('asset-uuid') } : {})
-      };
-    }
-    case 'design-apply': {
-      const target = readDesignTarget(requireFlag(flags, 'target', 'DESIGN_TARGET_REQUIRED'));
-      const revision = flags.has('revision')
-        ? readDesignRevision(flags.get('revision') ?? '')
-        : undefined;
-      if (target.document.scope !== 'current-document' && !revision) {
-        throw new Error('DESIGN_REVISION_REQUIRED');
-      }
-      return {
-        command,
-        ...selector,
-        target,
-        ...(flags.has('execution-id') ? { executionId: flags.get('execution-id') } : {}),
-        ...(revision ? { revision } : {})
-      };
-    }
     case 'assets':
       return {
         command,
@@ -365,51 +252,6 @@ export function parseCommand(argv: string[]): CliCommand {
         ...selector,
         uuid: requireFlag(flags, 'uuid', 'UUID_REQUIRED')
       };
-    case 'document-snapshot': {
-      const mode = requireFlag(flags, 'mode', 'SNAPSHOT_MODE_REQUIRED');
-      if (mode !== 'summary' && mode !== 'full') {
-        throw new Error('INVALID_SNAPSHOT_MODE');
-      }
-      const pageSize = Number(requireFlag(flags, 'page-size', 'PAGE_SIZE_REQUIRED'));
-      if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 500) {
-        throw new Error('INVALID_PAGE_SIZE');
-      }
-      return {
-        command,
-        ...selector,
-        mode,
-        pageSize,
-        ...(flags.has('cursor') ? { cursor: flags.get('cursor') } : {})
-      };
-    }
-    case 'scan-project': {
-      const report = requireRelativeJsonPath(
-        requireFlag(flags, 'report', 'REPORT_REQUIRED'),
-        'INVALID_REPORT_PATH'
-      );
-      const resume = flags.has('resume')
-        ? requireRelativeJsonPath(flags.get('resume') ?? '', 'INVALID_RESUME_PATH')
-        : undefined;
-      const pageSize = readOptionalInteger(flags, 'page-size', 1, 500, 'INVALID_SCAN_PAGE_SIZE');
-      const concurrency = readOptionalInteger(
-        flags,
-        'concurrency',
-        1,
-        4,
-        'INVALID_SCAN_CONCURRENCY'
-      );
-      const includeRaw = readOptionalBoolean(flags, 'include-raw', 'INVALID_INCLUDE_RAW');
-      return {
-        command,
-        ...selector,
-        reportRoot: requireFlag(flags, 'report-root', 'REPORT_ROOT_REQUIRED'),
-        report,
-        ...(resume ? { resume } : {}),
-        ...(pageSize !== undefined ? { pageSize } : {}),
-        ...(includeRaw !== undefined ? { includeRaw } : {}),
-        ...(concurrency !== undefined ? { concurrency } : {})
-      };
-    }
     case 'prefab':
       return {
         command,
@@ -422,74 +264,8 @@ export function parseCommand(argv: string[]): CliCommand {
         ...selector,
         sample: requireFlag(flags, 'sample', 'SAMPLE_REQUIRED')
       };
-    case 'write-prepare':
-      return {
-        command,
-        ...selector,
-        request: readWriteTransactionRequest(requireFlag(flags, 'request', 'WRITE_REQUEST_REQUIRED'))
-      };
-    case 'write-confirm':
-    case 'transaction-status':
-    case 'transaction-rollback':
-      return {
-        command,
-        ...selector,
-        transactionId: requireFlag(flags, 'transaction-id', 'TRANSACTION_ID_REQUIRED')
-      };
-    case 'transaction-list':
-      return { command, ...selector };
     default:
       throw new Error('UNKNOWN_COMMAND');
-  }
-}
-
-/**
- * 解析并按协议 Schema 校验写事务请求 JSON。
- *
- * @param value CLI --request 传入的 JSON 字符串。
- * @returns 通过协议校验的写事务请求。
- */
-function readWriteTransactionRequest(value: string): WriteTransactionRequest {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error('INVALID_WRITE_REQUEST_JSON');
-  }
-  try {
-    return WriteTransactionRequestSchema.parse(parsed);
-  } catch {
-    throw new Error('INVALID_WRITE_REQUEST');
-  }
-}
-
-/** 解析并按阶段四协议校验声明式目标文档 JSON。 */
-function readDesignTarget(value: string): DesignTargetDocument {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error('INVALID_DESIGN_TARGET_JSON');
-  }
-  try {
-    return DesignTargetDocumentSchema.parse(parsed);
-  } catch {
-    throw new Error('INVALID_DESIGN_TARGET');
-  }
-}
-
-/** 解析并校验跨文档声明式写入使用的五维 revision。 */
-function readDesignRevision(value: string): RevisionPrecondition {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error('INVALID_DESIGN_REVISION_JSON');
-  }
-  try {
-    return RevisionPreconditionSchema.parse(parsed);
-  } catch {
-    throw new Error('INVALID_DESIGN_REVISION');
   }
 }
 

@@ -280,9 +280,8 @@ describe('Phase 1 只读统一验证脚本', () => {
 
     expect(serverScript).toMatch(/\[switch\]\$SkipBuild\b/);
     expect(serverScript).toContain('probe-server.ready');
+    // 脚本已归档：README 只在历史归档区保留脚本名，不再描述验证细节。
     expect(readme).toContain('run-phase-1-readonly-validation.ps1');
     expect(readme).toContain('Creator 3.8.8');
-    expect(readme).toContain('server-interrupt-recovery');
-    expect(readme).toContain('不保留原 PID 或自定义环境变量');
   });
 });

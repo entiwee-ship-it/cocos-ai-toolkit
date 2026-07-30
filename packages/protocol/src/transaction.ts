@@ -1,29 +1,6 @@
 import { z } from 'zod';
 import { ReferenceSchema } from './reference.js';
 
-/**
- * 事务状态机的全部状态。
- * connection-lost 及之后的状态用于断连恢复链路，正常执行路径不会进入。
- */
-export const TransactionStateSchema = z.enum([
-  'draft', 'planned', 'validated', 'locked', 'executing', 'saving', 'verifying', 'committed',
-  'failed', 'rolling-back', 'rolled-back',
-  'connection-lost', 'outcome-unknown', 'recovering', 'manual-recovery-required'
-]);
-
-/**
- * 写事务执行前的修订前置。
- * 五个维度分别对应文档内容、层级结构、资产数据库、脚本编译状态和预制体图状态的指纹；
- * 为 null 或省略表示该维度不参与前置校验；prefabGraph 由含应用到源操作的事务强制要求。
- */
-export const RevisionPreconditionSchema = z.object({
-  document: z.string().nullable(),
-  hierarchy: z.string().nullable(),
-  assetDatabase: z.string().nullable(),
-  scriptCompilation: z.string().nullable(),
-  prefabGraph: z.string().nullable().optional()
-});
-
 export const Vec3Schema = z.object({
   x: z.number(),
   y: z.number(),
@@ -54,8 +31,8 @@ export const LocalTransformSchema = z.object({
 });
 
 /**
- * 阶段二支持的全部原子写操作。
- * 节点八类、组件七类；每个操作都是事务内可单独回滚的最小单元。
+ * 直写架构支持的全部原子写操作。
+ * 节点八类、组件七类；每个操作都是一次直写调用内可独立重读验证的最小单元。
  */
 export const WriteOperationSchema = z.discriminatedUnion('type', [
   z.object({
@@ -240,15 +217,13 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
     nodeUuid: z.string().min(1),
     prefabAssetUuid: z.string().min(1)
   }),
-  // 预制体资产删除：主要用于 create_from_node 的逆操作回滚，也可独立清理。
+  // 预制体资产删除：独立清理入口。
   z.object({
     type: z.literal('prefab.delete_asset'),
     assetUrl: z.string().min(1)
   })
 ]);
 
-export type TransactionState = z.infer<typeof TransactionStateSchema>;
-export type RevisionPrecondition = z.infer<typeof RevisionPreconditionSchema>;
 export type Vec3 = z.infer<typeof Vec3Schema>;
 export type Quat = z.infer<typeof QuatSchema>;
 export type LocalTransform = z.infer<typeof LocalTransformSchema>;

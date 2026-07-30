@@ -5,10 +5,9 @@ import type { NodeWriteOpResult } from './node-writer';
 import type { PrefabWriteOpResult } from './prefab-writer';
 import type {
   WriteOperation,
-  WriteTransactionRequest,
   WriteVerificationItem,
   WriteVerificationReport
-} from './transaction-manager';
+} from './write-types';
 
 import type { PrefabAssetInfo, PrefabInstanceInfo } from './prefab-writer';
 
@@ -48,15 +47,15 @@ export interface WriteVerifierDependencies {
 
 /**
  * 保存并按计划期望值逐项重读验证。save=true 时先保存文档、关闭重开（或等价刷新）再重读；
- * 任一项不符 passed 即为 false，由事务管理器转入失败回滚流程。
+ * 任一项不符 passed 即为 false，由调用方按写失败处理。
  *
- * @param request 原始写事务请求。
+ * @param request 写请求（只取 save 开关）。
  * @param executed 已执行的写操作及其证据。
  * @param dependencies 保存与重读依赖。
- * @returns 重读验证报告，进入事务审计。
+ * @returns 重读验证报告，随写响应带回。
  */
 export async function saveAndVerifyWriteTransaction(
-  request: WriteTransactionRequest,
+  request: { save: boolean },
   executed: VerifiedOperation[],
   dependencies: WriteVerifierDependencies
 ): Promise<WriteVerificationReport> {

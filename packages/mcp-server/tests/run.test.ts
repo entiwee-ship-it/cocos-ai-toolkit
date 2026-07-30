@@ -81,14 +81,12 @@ describe('Cocos MCP stdio runtime', () => {
       serverUrl: 'ws://127.0.0.1:40000',
       reportRoot: resolve('E:/reports/cocos'),
       enableWrites: false,
-      profile: 'prefab',
       requestTimeoutMs: 180000
     });
     expect(readMcpRuntimeConfig({})).toEqual({
       serverUrl: 'ws://127.0.0.1:32188',
       reportRoot: resolve('reports'),
       enableWrites: false,
-      profile: 'prefab',
       requestTimeoutMs: 180000
     });
   });
@@ -106,11 +104,8 @@ describe('Cocos MCP stdio runtime', () => {
     expect(readMcpRuntimeConfig({ COCOS_AI_MCP_ENABLE_WRITES: 'true' }, []).enableWrites).toBe(false);
   });
 
-  it('工具档默认 prefab，并接受两种 full 参数写法', () => {
-    expect(readMcpRuntimeConfig({}, []).profile).toBe('prefab');
-    expect(readMcpRuntimeConfig({}, ['--profile=full']).profile).toBe('full');
-    expect(readMcpRuntimeConfig({}, ['--profile', 'full']).profile).toBe('full');
-    expect(() => readMcpRuntimeConfig({}, ['--profile=unknown'])).toThrow('MCP_PROFILE_INVALID:unknown');
-    expect(() => readMcpRuntimeConfig({}, ['--profile'])).toThrow('MCP_PROFILE_REQUIRED');
+  it('旧的 --profile 参数一律拒绝并提示已移除', () => {
+    expect(() => readMcpRuntimeConfig({}, ['--profile=prefab'])).toThrow('MCP_PROFILE_REMOVED');
+    expect(() => readMcpRuntimeConfig({}, ['--profile', 'full'])).toThrow('MCP_PROFILE_REMOVED');
   });
 });

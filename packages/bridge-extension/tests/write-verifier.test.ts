@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import type { ComponentWriteOpResult } from '../src/component-writer.js';
 import type { NodeWriteOpResult } from '../src/node-writer.js';
-import type { WriteTransactionRequest } from '../src/transaction-manager.js';
 import {
   saveAndVerifyWriteTransaction,
   type WriteVerifierDependencies
@@ -615,17 +614,8 @@ describe('saveAndVerifyWriteTransaction', () => {
   });
 });
 
-function writeRequest(overrides: Partial<WriteTransactionRequest> = {}): WriteTransactionRequest {
-  return {
-    transactionId: 'tx-1',
-    idempotencyKey: 'key-1',
-    scope: 'current-document',
-    revision: { document: null, hierarchy: null, assetDatabase: null, scriptCompilation: null },
-    operations: [{ type: 'node.rename', nodeUuid: 'node-1', name: 'Renamed' }],
-    save: true,
-    undoGroup: 'verify-test',
-    ...overrides
-  };
+function writeRequest(overrides: { save?: boolean } = {}): { save: boolean } {
+  return { save: true, ...overrides };
 }
 
 function nodeResult(

@@ -1,18 +1,12 @@
-import {
-  clearDefaultDocumentScanSessions,
-  scanCurrentDocument,
-  type DocumentScanRequest
-} from './document-scan';
 import { ProbeError } from './probe-errors';
 import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from './scene-probe';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
 import { executeNodeWriteOperation } from './node-writer';
 import { executeComponentWriteOperation } from './component-writer';
 import { executePrefabWriteOperation } from './prefab-writer';
-import { saveAndVerifyWriteTransaction, type VerifiedOperation } from './write-verifier';
+import { saveAndVerifyWriteTransaction } from './write-verifier';
 import {
   executeWriteSceneOperations,
-  rollbackWriteSceneOperations,
   type WriteSceneChannelDependencies
 } from './write-scene-channel';
 import {
@@ -22,7 +16,7 @@ import {
   buildWriteVerifierDependencies,
   captureCurrentDocumentIdentity
 } from './write-creator-deps';
-import type { WriteOperation } from './transaction-manager';
+import type { WriteOperation } from './write-types';
 
 const { director } = require('cc') as { director: { getScene(): unknown } };
 
@@ -55,28 +49,6 @@ async function probeComponent(request: unknown): Promise<unknown> {
     raw,
     source: 'message-api'
   };
-}
-
-/**
- * 读取当前 Creator 文档的摘要或完整分页快照。
- *
- * @param request 主进程传入的扫描请求和脚本 UUID 路径元组。
- * @returns 当前文档只读快照。
- */
-async function probeDocumentSnapshot(request: unknown): Promise<unknown> {
-  const input = readObject(unwrapRequest(request));
-  const scanRequest = readObject(input.request) as unknown as DocumentScanRequest;
-  const scriptPathsByUuid = readScriptPathsByUuid(input.scriptPathsByUuid);
-  const documentIdentity = await resolveCreatorDocumentIdentity(globalThis);
-  return scanCurrentDocument(scanRequest, {
-    queryNodeTree: () => Editor.Message.request('scene', 'query-node-tree'),
-    queryNode: (nodeUuid) => Editor.Message.request('scene', 'query-node', nodeUuid),
-    queryComponent: (componentUuid) => Editor.Message.request(
-      'scene',
-      'query-component',
-      componentUuid
-    )
-  }, scriptPathsByUuid, documentIdentity);
 }
 
 /**
@@ -201,19 +173,19 @@ function buildWriteChannelDependencies(save: boolean): WriteSceneChannelDependen
     saveDocument: verifierDependencies.saveDocument,
     reloadDocument: verifierDependencies.reloadDocument,
     verify: (executed) => saveAndVerifyWriteTransaction(
-      { save } as never,
+      { save },
       executed,
       verifierDependencies
     )
   };
 }
 
-/** 当前文档身份与层级指纹，供主进程 Revision 前置采集。 */
+/** 当前文档身份与层级指纹。 */
 async function writeDocumentIdentity(): Promise<unknown> {
   return captureCurrentDocumentIdentity();
 }
 
-/** 在事务上下文内执行混合写操作，返回执行器契约结果和逐操作证据。 */
+/** 直写入口：按序执行混合写操作，保存后逐项重读验证，返回执行结果和逐操作证据。 */
 async function writeExecute(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const operations = Array.isArray(input.operations) ? input.operations as WriteOperation[] : [];
@@ -227,15 +199,10 @@ async function writeExecute(request: unknown): Promise<unknown> {
   );
 }
 
-/** 按逆序应用已执行操作的逆操作（step-undo-with-inverse 回滚路径）；save=true 时回滚后再保存。 */
-async function writeRollback(request: unknown): Promise<unknown> {
-  const input = readObject(unwrapRequest(request));
-  const executed = Array.isArray(input.executed) ? input.executed as VerifiedOperation[] : [];
-  const result = await rollbackWriteSceneOperations(executed, buildWriteChannelDependencies(false));
-  if (result.succeeded && input.save === true) {
-    await buildWriteVerifierDependencies().saveDocument();
-  }
-  return result;
+/** 保存当前文档（显式保存入口，与直写操作的自动保存共用 Creator 保存能力）。 */
+async function saveDocument(): Promise<unknown> {
+  await buildWriteVerifierDependencies().saveDocument();
+  return { saved: true };
 }
 
 /**
@@ -876,23 +843,20 @@ function unwrapRequest(value: unknown): unknown {
 export function load(): void {}
 
 /**
- * 卸载 Creator 场景脚本时释放文档快照和清理计时器。
+ * 卸载 Creator 场景脚本（当前无需要释放的会话状态）。
  */
-export function unload(): void {
-  clearDefaultDocumentScanSessions();
-}
+export function unload(): void {}
 
 export const methods = {
   probeAssets: notImplemented,
   probeHierarchy,
   probeNode,
   probeComponent,
-  probeDocumentSnapshot,
   editorStateDocumentIdentity,
   probePrefab,
   writeDocumentIdentity,
   writeExecute,
-  writeRollback,
+  saveDocument,
   debugPrefabLifecycle,
   debugPrefabFacade,
   createPrefabFromNode,

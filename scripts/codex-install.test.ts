@@ -22,20 +22,19 @@ describe('Codex MCP 安装入口', () => {
     expect(checker).toContain('COCOS_AI_MCP_ENABLE_WRITES');
   });
 
-  it('安装和健康检查默认使用 prefab 工具档，并允许显式 full 调试档', async () => {
+  it('安装和健康检查使用直写单一工具档，旧 profile 机制已移除', async () => {
     const installer = await readFile(installerPath, 'utf8');
     const checker = await readFile(checkerPath, 'utf8');
     const checkerRuntime = await readFile(checkerRuntimePath, 'utf8');
 
-    expect(installer).toContain("[ValidateSet('prefab', 'full')]");
-    expect(installer).toMatch(/\[string\]\$Profile\s*=\s*'prefab'/);
-    expect(installer).toContain('"--profile=$Profile"');
-    expect(checker).toContain("[ValidateSet('prefab', 'full')]");
-    expect(checker).toContain('COCOS_AI_MCP_PROFILE');
-    expect(checkerRuntime).toContain("const profile = process.env.COCOS_AI_MCP_PROFILE ?? 'prefab'");
-    expect(checkerRuntime).toContain("asset-tools.js");
-    expect(checkerRuntime).toContain('PREFAB_WRITE_TOOL_NAMES');
-    expect(checkerRuntime).toContain('ASSET_WRITE_TOOL_NAMES');
-    expect(checkerRuntime).toContain('FULL_WRITE_TOOL_NAMES');
+    expect(installer).not.toContain('$Profile');
+    expect(installer).not.toContain('--profile');
+    expect(checker).not.toContain('$Profile');
+    expect(checker).toContain('仍携带已移除的 --profile 参数');
+    expect(checkerRuntime).not.toContain('COCOS_AI_MCP_PROFILE');
+    expect(checkerRuntime).toContain('direct-tools.js');
+    expect(checkerRuntime).toContain('COCOS_DIRECT_READONLY_TOOL_NAMES');
+    expect(checkerRuntime).toContain('COCOS_DIRECT_WRITE_TOOL_NAMES');
+    expect(checkerRuntime).toContain('COCOS_RUNTIME_GATED_TOOL_NAMES');
   });
 });

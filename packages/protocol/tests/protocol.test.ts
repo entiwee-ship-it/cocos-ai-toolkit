@@ -5,10 +5,7 @@ import {
   DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES,
   ProbeResponseSchema,
   PrefabProbeSchema,
-  PrefabGraphSchema,
-  ProjectScanReportFileSchema,
-  ProjectScanReportManifestSchema,
-  ProjectScanReportSchema,
+  ProjectCoverageSchema,
   ReferenceSchema,
   createEmptyProjectCoverage,
   resolveWebSocketMaxPayload
@@ -121,52 +118,6 @@ describe('ProbeResponseSchema', () => {
 
     expect(result.instanceChain[0]).toMatchObject({ state: 2, isNested: true });
   });
-
-  it('接受包含 Override 摘要、嵌套 TargetMap 和阻断诊断的 Prefab 图', () => {
-    const result = PrefabGraphSchema.parse({
-      nodes: [
-        { assetUuid: 'page-prefab', path: 'db://assets/page.prefab', documentType: 'prefab' },
-        { assetUuid: 'goods-prefab', path: 'db://assets/goods.prefab', documentType: 'prefab' }
-      ],
-      edges: [{
-        fromAssetUuid: 'page-prefab',
-        toAssetUuid: 'goods-prefab',
-        kind: 'prefab-instance',
-        hostNodePath: 'Page/Goods',
-        instanceFileId: 'goods-instance',
-        sourceObjectFileId: 'goods-root',
-        depth: 1,
-        overrideCount: 1,
-        overrideSummary: {
-          propertyOverrideCount: 1,
-          targetOverrideCount: 0,
-          mountedChildrenCount: 0,
-          mountedComponentsCount: 0,
-          removedComponentsCount: 0
-        }
-      }],
-      targetMaps: {
-        targets: {
-          'goods-root': { assetUuid: 'goods-prefab', fileId: 'goods-root', nodePath: 'Page/Goods' }
-        },
-        children: {
-          'goods-root': { targets: {}, children: {} }
-        }
-      },
-      targetMapsByAsset: {},
-      blocked: true,
-      diagnostics: [{
-        code: 'PREFAB_GRAPH_CYCLE',
-        message: '检测到循环引用',
-        severity: 'error',
-        details: { cycle: ['page-prefab', 'goods-prefab', 'page-prefab'] }
-      }]
-    });
-
-    expect(result.edges[0].overrideSummary?.propertyOverrideCount).toBe(1);
-    expect(result.targetMaps?.children['goods-root']).toBeTruthy();
-    expect(result.blocked).toBe(true);
-  });
 });
 
 describe('阶段 1 只读协议', () => {
@@ -277,169 +228,9 @@ describe('阶段 1 只读协议', () => {
     }).kind).toBe('missing');
   });
 
-  it('接受包含资产、脚本、文档和 Prefab 图的项目扫描报告', () => {
-    const result = ProjectScanReportSchema.parse({
-      scanId: 'scan-1',
-      status: 'completed-with-gaps',
-      project: {
-        projectId: 'project-1',
-        projectPath: 'E:/project',
-        creatorVersion: '3.8.8'
-      },
-      startedAt: '2026-07-13T12:00:00.000Z',
-      finishedAt: '2026-07-13T12:01:00.000Z',
-      assets: [{
-        assetUuid: 'prefab-uuid',
-        url: 'db://assets/ui/Page.prefab',
-        filePath: 'E:/project/assets/ui/Page.prefab',
-        type: 'cc.Prefab',
-        importer: 'prefab',
-        name: 'Page',
-        isSubAsset: false,
-        isBundle: true,
-        imported: true,
-        invalid: false,
-        isDirectory: false,
-        visible: true,
-        readonly: false,
-        displayName: 'Page',
-        source: 'assets/ui/Page.prefab',
-        path: 'assets/ui/Page.prefab',
-        available: true,
-        raw: {}
-      }],
-      scripts: [{
-        assetUuid: 'script-uuid',
-        scriptPath: 'db://assets/script/Page.ts',
-        filePath: 'E:/project/assets/script/Page.ts',
-        classNames: ['Page'],
-        available: true,
-        raw: {}
-      }],
-      documents: [],
-      prefabGraph: {
-        nodes: [{
-          assetUuid: 'prefab-uuid',
-          path: 'db://assets/ui/Page.prefab',
-          documentType: 'prefab'
-        }],
-        edges: []
-      },
-      coverage: createEmptyProjectCoverage({
-        assets: { total: 1, decoded: 1 },
-        scripts: { total: 1, decoded: 1 }
-      }),
-      unresolved: [{
-        path: 'documents',
-        reason: 'DOCUMENT_SCAN_NOT_STARTED'
-      }],
-      diagnostics: []
-    });
-
-    expect(result.coverage.assets).toEqual({ total: 1, decoded: 1 });
-    expect(result.prefabGraph.nodes).toHaveLength(1);
-    expect(result.assets[0]).toMatchObject({
-      isBundle: true,
-      readonly: false,
-      displayName: 'Page'
-    });
-  });
-
-  it('接受有界项目扫描 manifest，并继续兼容旧完整报告', () => {
-    const manifest = {
-      formatVersion: 2,
-      scanId: 'scan-1',
-      status: 'completed-with-gaps',
-      project: {
-        projectId: 'project-1',
-        projectPath: 'E:/project',
-        creatorVersion: '3.8.8'
-      },
-      startedAt: '2026-07-13T12:00:00.000Z',
-      finishedAt: '2026-07-13T12:01:00.000Z',
-      scanParameters: {
-        pageSize: 500,
-        includeRaw: true,
-        concurrency: 1
-      },
-      summary: {
-        assets: 6711,
-        scripts: 906,
-        documents: 375,
-        completedDocuments: 375,
-        failedDocuments: 0,
-        prefabGraphNodes: 375,
-        prefabGraphEdges: 1200,
-        prefabGraphBlocked: false,
-        unresolved: 68349,
-        diagnostics: 2048
-      },
-      coverage: createEmptyProjectCoverage(),
-      artifacts: {
-        checkpoint: {
-          path: 'project-scan.checkpoint.json',
-          sha256: 'a'.repeat(64),
-          bytes: 69528704,
-          encoding: 'json'
-        },
-        assetIndex: {
-          path: 'project-scan.assets.json.gz',
-          sha256: 'b'.repeat(64),
-          bytes: 1234567,
-          encoding: 'json-gzip'
-        },
-        documentSnapshots: {
-          count: 375,
-          gzipCount: 375,
-          jsonCount: 0
-        }
-      }
-    };
-
-    expect(ProjectScanReportManifestSchema.parse(manifest).formatVersion).toBe(2);
-    expect(ProjectScanReportFileSchema.parse(manifest)).not.toHaveProperty('documents');
-    expect(ProjectScanReportFileSchema.parse({
-      scanId: 'legacy-scan',
-      status: 'completed',
-      project: {
-        projectId: 'project-1',
-        projectPath: 'E:/project',
-        creatorVersion: '3.8.8'
-      },
-      startedAt: '2026-07-13T12:00:00.000Z',
-      finishedAt: '2026-07-13T12:01:00.000Z',
-      assets: [],
-      scripts: [],
-      documents: [],
-      prefabGraph: { nodes: [], edges: [] },
-      coverage: createEmptyProjectCoverage(),
-      unresolved: [],
-      diagnostics: []
-    })).toHaveProperty('documents');
-  });
-
   it('拒绝项目覆盖率中 resolved 大于 total', () => {
-    const report = {
-      scanId: 'scan-1',
-      status: 'completed',
-      project: {
-        projectId: 'project-1',
-        projectPath: 'E:/project',
-        creatorVersion: '3.8.8'
-      },
-      startedAt: '2026-07-13T12:00:00.000Z',
-      finishedAt: '2026-07-13T12:01:00.000Z',
-      assets: [],
-      scripts: [],
-      documents: [],
-      prefabGraph: { nodes: [], edges: [] },
-      coverage: createEmptyProjectCoverage({
-        references: { total: 0, resolved: 1 }
-      }),
-      unresolved: [],
-      diagnostics: []
-    };
-
-    expect(() => ProjectScanReportSchema.parse(report)).toThrow('resolved 不能大于 total');
+    expect(() => ProjectCoverageSchema.parse(createEmptyProjectCoverage({
+      references: { total: 0, resolved: 1 }
+    }))).toThrow('resolved 不能大于 total');
   });
 });

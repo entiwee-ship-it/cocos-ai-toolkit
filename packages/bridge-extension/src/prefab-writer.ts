@@ -1,6 +1,6 @@
 import { ProbeError } from './probe-errors';
 import { createHash } from 'node:crypto';
-import type { WriteOperation } from './transaction-manager';
+import type { WriteOperation } from './write-types';
 
 /** 预制体实例节点的可序列化证据快照（对齐 Phase 1 只读模型的 __prefab__ 结构）。 */
 export interface PrefabInstanceInfo {

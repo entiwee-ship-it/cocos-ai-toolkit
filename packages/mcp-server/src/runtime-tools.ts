@@ -1,7 +1,4 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { appendWriteJournalEntry } from '@cocos-ai/core';
 import {
   PreviewSessionSchema,
   RuntimeNodeSnapshotSchema,
@@ -14,7 +11,7 @@ import { z as zod } from 'zod';
 import type { CocosReadonlyToolService, CocosReadonlyToolServiceOptions } from './tools.js';
 
 /**
- * 阶段五运行态与视觉验证 MCP 工具。
+ * 运行态与视觉验证 MCP 工具。
  * 只读组默认开放；launch/stop/invoke/dispatch/scenario 属动作类，仅在显式
  * --enable-writes 时注册。运行态数据不应用回编辑态，视觉结果仅作辅助证据。
  */
@@ -98,7 +95,6 @@ export class CocosRuntimeToolService {
       ...(input.projectId ? { projectId: input.projectId } : {})
     });
     const output = SessionsOutputSchema.parse({ sessions });
-    await this.audit('cocos_preview_sessions', input, output);
     return output;
   }
 
@@ -119,7 +115,6 @@ export class CocosRuntimeToolService {
       }
     });
     const output = PreviewSessionSchema.parse(session);
-    await this.audit('cocos_preview_launch', input, output);
     return output;
   }
 
@@ -127,7 +122,6 @@ export class CocosRuntimeToolService {
   async stopPreview(input: { sessionId: string }) {
     const result = await this.options.probeClient.request('server.previewStop', { sessionId: input.sessionId });
     const output = zod.object({ closed: zod.literal(true) }).parse(result);
-    await this.audit('cocos_preview_stop', input, output);
     return output;
   }
 
@@ -152,7 +146,6 @@ export class CocosRuntimeToolService {
       ...(input.includeInactive !== undefined ? { includeInactive: input.includeInactive } : {})
     });
     const output = zod.record(zod.string(), zod.unknown()).parse(result);
-    await this.audit('cocos_runtime_get_hierarchy', input, output);
     return output;
   }
 
@@ -164,7 +157,6 @@ export class CocosRuntimeToolService {
       componentType: input.componentType
     });
     const output = zod.record(zod.string(), zod.unknown()).parse(result);
-    await this.audit('cocos_runtime_inspect_component', input, output);
     return output;
   }
 
@@ -179,7 +171,6 @@ export class CocosRuntimeToolService {
       entries: zod.array(zod.record(zod.string(), zod.unknown())),
       nextSeq: zod.number().int().nonnegative()
     }).parse(result);
-    await this.audit('cocos_runtime_get_console', input, output);
     return output;
   }
 
@@ -207,7 +198,6 @@ export class CocosRuntimeToolService {
       initialValue: zod.unknown().optional(),
       changes: zod.array(zod.record(zod.string(), zod.unknown()))
     }).parse(result);
-    await this.audit('cocos_runtime_watch_property', input, output);
     return output;
   }
 
@@ -227,7 +217,6 @@ export class CocosRuntimeToolService {
       ...(input.args ? { args: input.args } : {})
     });
     const output = zod.record(zod.string(), zod.unknown()).parse(result);
-    await this.audit('cocos_runtime_invoke_method', input, output);
     return output;
   }
 
@@ -248,7 +237,6 @@ export class CocosRuntimeToolService {
       ...(input.trigger ? { trigger: input.trigger } : {})
     });
     const output = RuntimeSampleWindowSnapshotSchema.parse(result);
-    await this.audit('cocos_runtime_sample_window', input, output);
     return output;
   }
 
@@ -268,7 +256,6 @@ export class CocosRuntimeToolService {
       ...(input.key !== undefined ? { key: input.key } : {})
     });
     const output = zod.record(zod.string(), zod.unknown()).parse(result);
-    await this.audit('cocos_runtime_dispatch_input', input, output);
     return output;
   }
 
@@ -294,7 +281,6 @@ export class CocosRuntimeToolService {
       reason: zod.string().optional(),
       error: zod.string().optional()
     }).parse(result);
-    await this.audit('cocos_runtime_instantiate_prefab', input, output);
     return output;
   }
 
@@ -325,7 +311,6 @@ export class CocosRuntimeToolService {
       files: zod.array(zod.record(zod.string(), zod.unknown())),
       capturedAt: zod.string()
     }).parse(result);
-    await this.audit('cocos_runtime_capture', input, output);
     return output;
   }
 
@@ -350,24 +335,28 @@ export class CocosRuntimeToolService {
       steps
     });
     const output = zod.record(zod.string(), zod.unknown()).parse(result);
-    await this.audit('cocos_runtime_run_scenario', input, output);
     return output;
   }
-
-  /** 审计落盘（与 design 工具同形态）。 */
-  private async audit(event: string, request: unknown, result: unknown): Promise<void> {
-    await mkdir(this.options.reportRoot, { recursive: true });
-    await appendWriteJournalEntry(this.options.reportRoot, {
-      transactionId: `mcp-runtime-${randomUUID()}`,
-      idempotencyKey: '',
-      at: new Date().toISOString(),
-      event,
-      source: 'mcp',
-      request,
-      details: { status: 'ok' }
-    });
-  }
 }
+
+export const COCOS_RUNTIME_READONLY_TOOL_NAMES = [
+  'cocos_preview_sessions',
+  'cocos_runtime_get_hierarchy',
+  'cocos_runtime_inspect_component',
+  'cocos_runtime_get_console',
+  'cocos_runtime_watch_property',
+  'cocos_runtime_capture'
+] as const;
+
+export const COCOS_RUNTIME_GATED_TOOL_NAMES = [
+  'cocos_preview_launch',
+  'cocos_preview_stop',
+  'cocos_runtime_invoke_method',
+  'cocos_runtime_sample_window',
+  'cocos_runtime_dispatch_input',
+  'cocos_runtime_instantiate_prefab',
+  'cocos_runtime_run_scenario'
+] as const;
 
 /** 登记默认开放的运行态只读工具。 */
 export function registerCocosRuntimeReadonlyTools(

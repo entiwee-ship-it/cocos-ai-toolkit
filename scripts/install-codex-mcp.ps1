@@ -4,8 +4,6 @@ param(
     [string]$ProbeUrl = 'ws://127.0.0.1:32188',
     [string]$ReportRoot = '',
     [string]$NodePath = '',
-    [ValidateSet('prefab', 'full')]
-    [string]$Profile = 'prefab',
     [switch]$SkipBuild,
     [switch]$Readonly
 )
@@ -54,7 +52,7 @@ if (Test-Path -LiteralPath $configPath -PathType Leaf) {
 if (-not $PSCmdlet.ShouldProcess('Codex MCP 配置', '移除旧 cocos_ai 并添加 MCP 配置')) { return }
 & $codexCommand mcp remove cocos_ai 2>$null
 # remove 在条目不存在时会返回非零；这是幂等安装的正常情况。
-$serverArgs = @($entry, "--profile=$Profile")
+$serverArgs = @($entry)
 if (-not $Readonly) { $serverArgs += '--enable-writes' }
 & $codexCommand mcp add cocos_ai `
     --env "COCOS_AI_PROBE_SERVER_URL=$ProbeUrl" `
@@ -66,7 +64,6 @@ Write-Output $(if ($Readonly) { '已安装 cocos_ai（只读模式）' } else { 
 Write-Output "Probe: $ProbeUrl"
 Write-Output "报告根: $ReportRoot"
 Write-Output "入口: $NodePath $entry"
-Write-Output "工具档: $Profile"
 if (-not $Readonly) { Write-Output '写工具: 已开启（--enable-writes）' }
 if ($Readonly) { Write-Output '写工具: 已关闭（只读模式）' }
 if ($backupPath) { Write-Output "配置备份: $backupPath" }

@@ -1,139 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DirectWriteOutcomeSchema,
+  DirectWriteRequestSchema,
   LocalTransformSchema,
-  RevisionPreconditionSchema,
-  TransactionStateSchema,
   WriteOperationSchema,
-  WriteRevisionSnapshotSchema,
-  WriteTransactionRequestSchema,
-  WriteTransactionResultSchema,
   WriteVerificationReportSchema
 } from '../src/index.js';
-
-it('写失败协议保留阶段、输入摘要、原始错误和下一步动作', () => {
-  const result = WriteTransactionResultSchema.parse({
-    transactionId: 'tx-structured-failure',
-    status: 'outcome-unknown',
-    executedOps: 0,
-    verification: null,
-    failure: {
-      code: 'WRITE_EXECUTION_TIMEOUT',
-      message: '写执行超时',
-      operationIndex: null,
-      stage: 'apply',
-      inputSummary: { scope: 'current-document', operationCount: 1, save: true },
-      originalError: {
-        code: 'WRITE_EXECUTION_TIMEOUT',
-        message: '写执行超时',
-        details: { timeoutMs: 180000 }
-      },
-      nextAction: '查询 transactionStatus；确认结局前禁止重试写入'
-    },
-    rollbackEvidence: null
-  });
-
-  expect(result.failure).toMatchObject({
-    stage: 'apply',
-    inputSummary: { operationCount: 1 },
-    originalError: { details: { timeoutMs: 180000 } },
-    nextAction: '查询 transactionStatus；确认结局前禁止重试写入'
-  });
-});
-
-it('写 revision 快照保留文档身份与五维指纹', () => {
-  expect(WriteRevisionSnapshotSchema.parse({
-    documentId: 'scene-1',
-    revision: {
-      document: 'sha256:doc', hierarchy: 'sha256:hier',
-      assetDatabase: null, scriptCompilation: null, prefabGraph: 'sha256:prefab'
-    }
-  })).toMatchObject({ documentId: 'scene-1', revision: { prefabGraph: 'sha256:prefab' } });
-});
-
-/**
- * 构造一份合法的事务修订前置，便于各用例按需覆盖单字段。
- *
- * @returns 四个维度均为 null 的修订前置对象。
- */
-function createRevisionPrecondition() {
-  return {
-    document: null,
-    hierarchy: null,
-    assetDatabase: null,
-    scriptCompilation: null
-  };
-}
-
-/**
- * 构造一份合法的写事务请求，便于各用例按需覆盖单字段。
- *
- * @returns 仅包含一个 node.rename 操作的合法写事务请求。
- */
-function createValidRequest() {
-  return {
-    transactionId: 'tx-1',
-    idempotencyKey: 'key-1',
-    scope: 'current-document',
-    revision: createRevisionPrecondition(),
-    operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
-    save: true,
-    undoGroup: 'rename-node'
-  };
-}
-
-/**
- * 构造一份全部通过的重读验证报告。
- *
- * @returns passed 为 true、包含一条通过项的验证报告。
- */
-function createPassedVerification() {
-  return {
-    passed: true,
-    verifiedAt: '2026-07-17T00:00:00.000Z',
-    items: [
-      {
-        operationIndex: 0,
-        description: '节点重命名生效',
-        expected: 'NewName',
-        actual: 'NewName',
-        passed: true
-      }
-    ]
-  };
-}
-
-describe('TransactionStateSchema', () => {
-  it('接受事务状态机的全部十五个状态', () => {
-    const states = [
-      'draft', 'planned', 'validated', 'locked', 'executing', 'saving', 'verifying', 'committed',
-      'failed', 'rolling-back', 'rolled-back',
-      'connection-lost', 'outcome-unknown', 'recovering', 'manual-recovery-required'
-    ];
-
-    for (const state of states) {
-      expect(TransactionStateSchema.parse(state)).toBe(state);
-    }
-  });
-
-  it('拒绝状态机之外的未知状态', () => {
-    expect(() => TransactionStateSchema.parse('half-committed')).toThrow();
-  });
-});
-
-describe('RevisionPreconditionSchema', () => {
-  it('接受四个维度均带指纹的修订前置', () => {
-    expect(RevisionPreconditionSchema.parse({
-      document: 'sha256:a',
-      hierarchy: 'sha256:b',
-      assetDatabase: 'sha256:c',
-      scriptCompilation: 'sha256:d'
-    })).toBeTruthy();
-  });
-
-  it('拒绝缺少维度字段的修订前置', () => {
-    expect(() => RevisionPreconditionSchema.parse({ document: 'sha256:a' })).toThrow();
-  });
-});
 
 describe('LocalTransformSchema', () => {
   it('接受只带位置的局部变换', () => {
@@ -312,58 +184,6 @@ describe('WriteOperationSchema', () => {
   });
 });
 
-describe('WriteTransactionRequestSchema', () => {
-  it('拒绝缺少幂等键的写事务请求', () => {
-    const request = createValidRequest();
-    delete (request as { idempotencyKey?: string }).idempotencyKey;
-
-    expect(() => WriteTransactionRequestSchema.parse(request)).toThrow();
-  });
-
-  it('接受合法的阶段二写事务请求', () => {
-    expect(WriteTransactionRequestSchema.parse(createValidRequest())).toBeTruthy();
-  });
-
-  it('仅允许带层级 revision 的不保存事务继续写脏文档', () => {
-    const request = createValidRequest();
-    request.save = false;
-    request.revision.hierarchy = 'sha256:hier';
-
-    expect(WriteTransactionRequestSchema.parse({ ...request, allowDirty: true })).toMatchObject({
-      allowDirty: true,
-      save: false,
-      revision: { hierarchy: 'sha256:hier' }
-    });
-    expect(() => WriteTransactionRequestSchema.parse({ ...request, save: true, allowDirty: true })).toThrow();
-    expect(() => WriteTransactionRequestSchema.parse({
-      ...request,
-      revision: createRevisionPrecondition(),
-      allowDirty: true
-    })).toThrow();
-  });
-
-  it('拒绝空操作列表', () => {
-    const request = createValidRequest();
-    request.operations = [];
-
-    expect(() => WriteTransactionRequestSchema.parse(request)).toThrow();
-  });
-
-  it('source-prefab 缺少影响分析时按门禁拒绝', () => {
-    const request = createValidRequest();
-    (request as { scope: string }).scope = 'source-prefab';
-
-    expect(() => WriteTransactionRequestSchema.parse(request)).toThrow();
-  });
-
-  it('apply-to-source 缺少影响分析时按门禁拒绝', () => {
-    const request = createValidRequest();
-    (request as { scope: string }).scope = 'apply-to-source';
-
-    expect(() => WriteTransactionRequestSchema.parse(request)).toThrow();
-  });
-});
-
 describe('WriteVerificationReportSchema', () => {
   it('接受逐项列出期望值和实际值的验证报告', () => {
     expect(WriteVerificationReportSchema.parse(createPassedVerification())).toBeTruthy();
@@ -377,237 +197,67 @@ describe('WriteVerificationReportSchema', () => {
   });
 });
 
-describe('WriteTransactionResultSchema', () => {
-  it('写事务结果不允许 committed 且 verification 缺失', () => {
-    expect(() => WriteTransactionResultSchema.parse({
-      transactionId: 'tx-1',
-      status: 'committed',
-      executedOps: 1,
-      verification: null,
-      failure: null,
-      rollbackEvidence: null
+describe('DirectWriteRequestSchema', () => {
+  it('接受一批原子写操作加保存开关', () => {
+    expect(DirectWriteRequestSchema.parse({
+      operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+      save: true,
+      undoGroup: 'direct-rename'
+    })).toBeTruthy();
+  });
+
+  it('拒绝空操作列表和空 Undo 组名', () => {
+    expect(() => DirectWriteRequestSchema.parse({
+      operations: [],
+      save: true,
+      undoGroup: 'direct'
     })).toThrow();
-  });
-
-  it('写事务结果不允许 committed 且 verification 未通过', () => {
-    const verification = createPassedVerification();
-    verification.passed = false;
-
-    expect(() => WriteTransactionResultSchema.parse({
-      transactionId: 'tx-1',
-      status: 'committed',
-      executedOps: 1,
-      verification,
-      failure: null,
-      rollbackEvidence: null
+    expect(() => DirectWriteRequestSchema.parse({
+      operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+      save: true,
+      undoGroup: ''
     })).toThrow();
-  });
-
-  it('接受验证通过的 committed 结果', () => {
-    expect(WriteTransactionResultSchema.parse({
-      transactionId: 'tx-1',
-      status: 'committed',
-      executedOps: 1,
-      verification: createPassedVerification(),
-      failure: null,
-      rollbackEvidence: null
-    })).toBeTruthy();
-  });
-
-  it('接受带冲突详情的 failed 结果', () => {
-    expect(WriteTransactionResultSchema.parse({
-      transactionId: 'tx-1',
-      status: 'failed',
-      executedOps: 0,
-      verification: null,
-      failure: {
-        code: 'REVISION_CONFLICT',
-        message: '文档修订前置不一致',
-        operationIndex: null,
-        conflicts: [
-          { scope: 'document', expected: 'sha256:a', actual: 'sha256:b' }
-        ]
-      },
-      rollbackEvidence: null
-    })).toBeTruthy();
-  });
-
-  it('接受标记 duplicateOf 的幂等重试结果', () => {
-    expect(WriteTransactionResultSchema.parse({
-      transactionId: 'tx-1',
-      status: 'committed',
-      duplicateOf: 'tx-0',
-      executedOps: 1,
-      verification: createPassedVerification(),
-      failure: null,
-      rollbackEvidence: null
-    })).toBeTruthy();
-  });
-
-  it('接受 outcome-unknown 结果且不要求验证报告', () => {
-    expect(WriteTransactionResultSchema.parse({
-      transactionId: 'tx-1',
-      status: 'outcome-unknown',
-      executedOps: 0,
-      verification: null,
-      failure: {
-        code: 'EXECUTION_TIMEOUT',
-        message: '执行超时，结果未知',
-        operationIndex: null
-      },
-      rollbackEvidence: null
-    })).toBeTruthy();
-  });
-
-  it('接受缺失 actual 的验证项（重读失败形态，Zod 4 下 explicit optional）', () => {
-    expect(WriteTransactionResultSchema.parse({
-      transactionId: 'tx-1',
-      status: 'manual-recovery-required',
-      executedOps: 2,
-      verification: {
-        passed: false,
-        verifiedAt: '2026-07-22T02:27:10.544Z',
-        items: [
-          { operationIndex: 0, description: '设置属性 fontSize', expected: 24, passed: false },
-          { operationIndex: 1, description: '设置引用 clickEvents[0].target', expected: 'uuid-x', actual: null, passed: false }
-        ]
-      },
-      failure: { code: 'WRITE_VERIFICATION_FAILED', message: '缺少通过的重读验证报告，禁止提交', operationIndex: null },
-      rollbackEvidence: { attempted: true, succeeded: false, verifiedClean: false }
-    })).toBeTruthy();
   });
 });
 
-/**
- * 构造一份合法的影响分析报告，便于 scope 门禁用例按需覆盖单字段。
- *
- * @returns 通过 PrefabImpactAnalysisSchema 校验的影响分析对象。
- */
-function createImpactAnalysis() {
+describe('DirectWriteOutcomeSchema', () => {
+  it('接受带验证报告的成功结果', () => {
+    expect(DirectWriteOutcomeSchema.parse({
+      kind: 'success',
+      executedOps: 1,
+      verification: createPassedVerification()
+    })).toBeTruthy();
+  });
+
+  it('接受带失败明细的操作失败结果', () => {
+    expect(DirectWriteOutcomeSchema.parse({
+      kind: 'operation-failed',
+      executedOps: 0,
+      failure: {
+        code: 'WRITE_OPERATION_FAILED',
+        message: 'WRITE_OPERATION_FAILED',
+        operationIndex: 0
+      }
+    })).toBeTruthy();
+  });
+
+  it('拒绝未知结果类型', () => {
+    expect(() => DirectWriteOutcomeSchema.parse({ kind: 'half-done', executedOps: 0 })).toThrow();
+  });
+});
+
+function createPassedVerification() {
   return {
-    sourceAssetUuid: 'asset-1',
-    sourceAssetPath: 'db://assets/gui/dialog.prefab',
-    affectedDocuments: [
-      { assetUuid: 'doc-1', path: 'db://assets/scenes/main.scene', documentType: 'scene', instanceCount: 3 }
-    ],
-    totalInstanceCount: 3,
-    overrideLayers: ['scene'],
-    risks: []
+    passed: true,
+    verifiedAt: '2026-07-17T00:00:00.000Z',
+    items: [
+      {
+        operationIndex: 0,
+        description: '节点重命名生效',
+        expected: 'NewName',
+        actual: 'NewName',
+        passed: true
+      }
+    ]
   };
 }
-
-describe('阶段三写事务协议', () => {
-  it('scope 接受 current-document / source-prefab / apply-to-source 三值', () => {
-    for (const scope of ['current-document', 'source-prefab', 'apply-to-source'] as const) {
-      const request = {
-        ...createValidRequest(),
-        scope,
-        ...(scope === 'current-document' ? {} : { impactAnalysis: createImpactAnalysis() })
-      };
-      expect(WriteTransactionRequestSchema.parse(request).scope).toBe(scope);
-    }
-  });
-
-  it('scope 拒绝三值之外的取值', () => {
-    expect(() => WriteTransactionRequestSchema.parse({
-      ...createValidRequest(),
-      scope: 'whole-project'
-    })).toThrow();
-  });
-
-  it('source-prefab 缺少影响分析时拒绝', () => {
-    expect(() => WriteTransactionRequestSchema.parse({
-      ...createValidRequest(),
-      scope: 'source-prefab'
-    })).toThrow();
-  });
-
-  it('apply-to-source 缺少影响分析时拒绝', () => {
-    expect(() => WriteTransactionRequestSchema.parse({
-      ...createValidRequest(),
-      scope: 'apply-to-source'
-    })).toThrow();
-  });
-
-  it('current-document 不强制影响分析', () => {
-    expect(WriteTransactionRequestSchema.parse(createValidRequest())).toBeTruthy();
-  });
-
-  it('prefab.apply_to_source 操作缺少 revision.prefabGraph 时拒绝', () => {
-    expect(() => WriteTransactionRequestSchema.parse({
-      ...createValidRequest(),
-      scope: 'apply-to-source',
-      impactAnalysis: createImpactAnalysis(),
-      operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
-    })).toThrow();
-  });
-
-  it('prefab.apply_to_source 操作携带 revision.prefabGraph 时接受', () => {
-    expect(WriteTransactionRequestSchema.parse({
-      ...createValidRequest(),
-      scope: 'apply-to-source',
-      impactAnalysis: createImpactAnalysis(),
-      revision: { ...createRevisionPrecondition(), prefabGraph: 'sha256:p' },
-      operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
-    })).toBeTruthy();
-  });
-
-  it('prefab.apply_to_source 操作禁止使用 current-document 作用域', () => {
-    expect(() => WriteTransactionRequestSchema.parse({
-      ...createValidRequest(),
-      revision: { ...createRevisionPrecondition(), prefabGraph: 'sha256:p' },
-      operations: [{ type: 'prefab.apply_to_source', instanceRootUuid: 'n1' }]
-    })).toThrow();
-  });
-
-  it('接受八类 prefab 写操作', () => {
-    const operations = [
-      { type: 'prefab.instantiate', prefabAssetUuid: 'a1', parentNodeUuid: 'n0', name: 'Card' },
-      { type: 'prefab.create_from_node', nodeUuid: 'n1', assetUrl: 'db://assets/a.prefab' },
-      {
-        type: 'prefab.instance_override', instanceRootUuid: 'n2', targetObjectUuid: 'c1',
-        propertyPath: 'string', value: '新标题', targetNodePath: 'Root/Card/Label'
-      },
-      { type: 'prefab.revert_override', instanceRootUuid: 'n2' },
-      { type: 'prefab.apply_to_source', instanceRootUuid: 'n3' },
-      { type: 'prefab.replace_source', instanceRootUuid: 'n4', newPrefabAssetUuid: 'a2' },
-      { type: 'prefab.unlink_instance', instanceRootUuid: 'n5' },
-      { type: 'prefab.link_instance', nodeUuid: 'n6', prefabAssetUuid: 'a3' }
-    ];
-    for (const operation of operations) {
-      expect(WriteOperationSchema.parse(operation)).toBeTruthy();
-    }
-  });
-
-  it('接受 prefab.delete_asset 资产清理操作（create_from_node 逆操作用）', () => {
-    expect(WriteOperationSchema.parse({
-      type: 'prefab.delete_asset',
-      assetUrl: 'db://assets/a.prefab'
-    })).toBeTruthy();
-  });
-
-  it('prefab.revert_override 支持按属性路径的细粒度还原', () => {
-    expect(WriteOperationSchema.parse({
-      type: 'prefab.revert_override',
-      instanceRootUuid: 'n1',
-      targetObjectUuid: 'c1',
-      targetNodePath: 'Root/Card/Label',
-      propertyPath: 'position'
-    })).toBeTruthy();
-  });
-
-  it('拒绝缺少 prefabAssetUuid 的实例化操作', () => {
-    expect(() => WriteOperationSchema.parse({
-      type: 'prefab.instantiate',
-      parentNodeUuid: 'n0'
-    })).toThrow();
-  });
-
-  it('Revision 接受 prefabGraph 维度且可省略', () => {
-    expect(RevisionPreconditionSchema.parse(createRevisionPrecondition())).toBeTruthy();
-    expect(RevisionPreconditionSchema.parse({
-      ...createRevisionPrecondition(),
-      prefabGraph: 'sha256:p'
-    }).prefabGraph).toBe('sha256:p');
-  });
-});

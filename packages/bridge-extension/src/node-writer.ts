@@ -1,5 +1,5 @@
 import { ProbeError } from './probe-errors';
-import type { WriteOperation } from './transaction-manager';
+import type { WriteOperation } from './write-types';
 
 /** 节点写操作的可序列化证据快照。 */
 export interface NodeInfo {

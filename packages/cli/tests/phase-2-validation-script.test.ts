@@ -152,8 +152,8 @@ describe('Phase 2 统一写入验证脚本', () => {
   it('README 提供阶段二统一写入验证入口', async () => {
     const readme = await readFile(readmePath, 'utf8');
 
+    // 脚本已归档：README 只在历史归档区保留脚本名，不再描述事务命令。
     expect(readme).toContain('run-phase-2-write-validation.ps1');
-    expect(readme).toContain('write-prepare');
     expect(readme).toContain('--enable-writes');
   });
 });

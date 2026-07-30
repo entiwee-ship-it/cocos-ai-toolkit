@@ -6,7 +6,7 @@ import {
   type PrefabInstanceInfo,
   type PrefabWriterDependencies
 } from '../src/prefab-writer';
-import type { WriteOperation } from '../src/transaction-manager';
+import type { WriteOperation } from '../src/write-types';
 
 /** 构造一个最小合法实例信息，便于各用例按字段覆盖。 */
 function createInstanceInfo(overrides: Partial<PrefabInstanceInfo> = {}): PrefabInstanceInfo {

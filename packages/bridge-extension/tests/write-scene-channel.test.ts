@@ -4,7 +4,6 @@ import type { NodeWriteOpResult } from '../src/node-writer.js';
 import {
   executeWriteSceneOperations,
   readDumpValueAtPath,
-  rollbackWriteSceneOperations,
   writeDumpValueAtPath,
   type WriteSceneChannelDependencies
 } from '../src/write-scene-channel.js';
@@ -177,58 +176,6 @@ describe('executeWriteSceneOperations', () => {
       'component:component.add'
     ]);
   });
-
-  it('asset.* 操作与逆操作都路由到 Creator AssetDB 写执行器', async () => {
-    const dependencies = createDependencies();
-    await executeWriteSceneOperations({
-      operations: [{
-        type: 'asset.move', sourceUrl: 'db://assets/a.ts', targetUrl: 'db://assets/b.ts',
-        expectedAssetUuid: 'asset-a'
-      }],
-      save: false,
-      undoGroup: 'asset-move'
-    }, dependencies);
-    const result = await rollbackWriteSceneOperations([
-      executedOp('asset.move', {
-        inverse: [{
-          type: 'asset.move', sourceUrl: 'db://assets/b.ts', targetUrl: 'db://assets/a.ts',
-          expectedAssetUuid: 'asset-a'
-        }]
-      })
-    ], dependencies);
-
-    expect(result.succeeded).toBe(true);
-    expect(dependencies.calls).toEqual(['prefab:asset.move', 'prefab:asset.move']);
-  });
-});
-
-describe('rollbackWriteSceneOperations', () => {
-  it('按逆序应用逆操作并全部成功', async () => {
-    const dependencies = createDependencies();
-    const executed = [
-      executedOp('node.rename', { nodeUuid: 'n1', inverse: [{ type: 'node.rename', nodeUuid: 'n1', name: 'Old' }] }),
-      executedOp('node.set_active', { nodeUuid: 'n1', inverse: [{ type: 'node.set_active', nodeUuid: 'n1', active: true }] })
-    ];
-
-    const result = await rollbackWriteSceneOperations(executed, dependencies);
-
-    expect(result).toEqual({ succeeded: true, failedAt: null });
-    expect(dependencies.calls).toEqual(['node:node.set_active', 'node:node.rename']);
-  });
-
-  it('逆操作失败时停止并报告失败位置', async () => {
-    const dependencies = createDependencies({ failAtType: 'node.set_active' });
-    const executed = [
-      executedOp('node.rename', { nodeUuid: 'n1', inverse: [{ type: 'node.rename', nodeUuid: 'n1', name: 'Old' }] }),
-      executedOp('node.set_active', { nodeUuid: 'n1', inverse: [{ type: 'node.set_active', nodeUuid: 'n1', active: true }] })
-    ];
-
-    const result = await rollbackWriteSceneOperations(executed, dependencies);
-
-    expect(result.succeeded).toBe(false);
-    expect(result.failedAt).toBe(1);
-    expect(dependencies.calls).toEqual(['node:node.set_active']);
-  });
 });
 
 describe('Dump 路径读写', () => {
@@ -351,15 +298,4 @@ function createDependencies(options: { failAtType?: string } = {}): WriteSceneCh
       items: []
     })
   };
-}
-
-function executedOp(
-  type: string,
-  overrides: Record<string, unknown>
-): { operation: { type: string } & Record<string, unknown>; inverse: never[] } & Record<string, unknown> {
-  return {
-    operation: { type, ...overrides },
-    inverse: [],
-    ...overrides
-  } as never;
 }

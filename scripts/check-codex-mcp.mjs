@@ -3,30 +3,28 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const TOOLKIT_VERSION = '0.2.5';
+const TOOLKIT_VERSION = '0.3.0';
 const entry = process.env.COCOS_AI_MCP_ENTRY;
 if (!entry) throw new Error('COCOS_AI_MCP_ENTRY_REQUIRED');
 const sourceCommit = process.env.COCOS_AI_SOURCE_COMMIT;
 if (!sourceCommit) throw new Error('COCOS_AI_SOURCE_COMMIT_REQUIRED');
 const enableWrites = process.env.COCOS_AI_MCP_ENABLE_WRITES !== 'false';
-const profile = process.env.COCOS_AI_MCP_PROFILE ?? 'prefab';
-if (!['prefab', 'full'].includes(profile)) throw new Error(`MCP_PROFILE_INVALID:${profile}`);
-const serverModule = await import(pathToFileURL(join(dirname(entry), 'server.js')).href);
-const prefabModule = await import(pathToFileURL(join(dirname(entry), 'prefab-tools.js')).href);
-const assetModule = await import(pathToFileURL(join(dirname(entry), 'asset-tools.js')).href);
-const PREFAB_READONLY_TOOL_NAMES = [...prefabModule.COCOS_PREFAB_READONLY_TOOL_NAMES];
-const PREFAB_WRITE_TOOL_NAMES = [...prefabModule.COCOS_PREFAB_WRITE_TOOL_NAMES];
-const ASSET_WRITE_TOOL_NAMES = [...assetModule.COCOS_ASSET_WRITE_TOOL_NAMES];
-const FULL_READONLY_TOOL_NAMES = [...serverModule.COCOS_READONLY_TOOL_NAMES];
-const FULL_WRITE_TOOL_NAMES = [
-  ...serverModule.COCOS_WRITE_TOOL_NAMES,
-  ...serverModule.COCOS_GATED_READONLY_TOOL_NAMES
+const distDir = dirname(entry);
+const directModule = await import(pathToFileURL(join(distDir, 'direct-tools.js')).href);
+const runtimeModule = await import(pathToFileURL(join(distDir, 'runtime-tools.js')).href);
+const EXPECTED_READONLY = [
+  ...directModule.COCOS_DIRECT_READONLY_TOOL_NAMES,
+  ...runtimeModule.COCOS_RUNTIME_READONLY_TOOL_NAMES
+];
+const EXPECTED_WRITE = [
+  ...directModule.COCOS_DIRECT_WRITE_TOOL_NAMES,
+  ...runtimeModule.COCOS_RUNTIME_GATED_TOOL_NAMES
 ];
 
 const timeoutMs = Number(process.env.COCOS_AI_CHECK_TIMEOUT_MS ?? 15_000);
 const transport = new StdioClientTransport({
   command: process.execPath,
-  args: [entry, `--profile=${profile}`, ...(enableWrites ? ['--enable-writes'] : [])],
+  args: [entry, ...(enableWrites ? ['--enable-writes'] : [])],
   env: {
     ...process.env,
     COCOS_AI_PROBE_SERVER_URL: process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:32188',
@@ -60,14 +58,9 @@ try {
   }
   const listed = await withTimeout(client.listTools(), 'TOOLS_LIST');
   const names = listed.tools.map((tool) => tool.name);
-  const expectedNames = profile === 'prefab'
-    ? [
-        ...PREFAB_READONLY_TOOL_NAMES,
-        ...(enableWrites ? [...PREFAB_WRITE_TOOL_NAMES, ...ASSET_WRITE_TOOL_NAMES] : [])
-      ]
-    : [...FULL_READONLY_TOOL_NAMES, ...(enableWrites ? FULL_WRITE_TOOL_NAMES : [])];
+  const expectedNames = [...EXPECTED_READONLY, ...(enableWrites ? EXPECTED_WRITE : [])];
   if (JSON.stringify(names) !== JSON.stringify(expectedNames)) {
-    throw new Error(`MCP_TOOL_PROFILE_MISMATCH:${JSON.stringify({ profile, expectedNames, names })}`);
+    throw new Error(`MCP_TOOL_SET_MISMATCH:${JSON.stringify({ expectedNames, names })}`);
   }
   const editorResult = await withTimeout(
     client.callTool({ name: 'cocos_editor_list', arguments: {} }),
@@ -90,7 +83,6 @@ try {
     sourceCommit,
     serverVersion: client.getServerVersion(),
     bridgeVersions,
-    profile,
     writeEnabled: enableWrites,
     toolCount: names.length,
     editors: editorResult.structuredContent ?? null

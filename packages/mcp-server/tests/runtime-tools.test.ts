@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ReadonlyProbeClient } from '@cocos-ai/core';
+import type { ReadonlyProbeClient } from '../src/tools.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -102,13 +102,13 @@ afterEach(async () => {
 
 async function createHarness(
   probeClient: ReadonlyProbeClient,
-  options: { enableWrites?: boolean; profile?: 'prefab' | 'full' } = {}
+  options: { enableWrites?: boolean } = {}
 ) {
   const reportRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-mcp-runtime-'));
   temporaryRoots.push(reportRoot);
   const server = createCocosMcpServer(
     { probeClient, reportRoot },
-    { profile: 'full', ...options }
+    { enableWrites: options.enableWrites }
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'runtime-test-client', version: '0.1.0' });

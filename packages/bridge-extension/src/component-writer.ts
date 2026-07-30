@@ -1,6 +1,6 @@
 import { ProbeError } from './probe-errors';
 import { isBuiltInComponentClass } from './component-schema';
-import type { WriteOperation } from './transaction-manager';
+import type { WriteOperation } from './write-types';
 
 /** 组件属性写入校验所需的最小 Schema（来自 Phase 1 组件 Schema）。 */
 export interface ComponentPropertyWriteSchema {

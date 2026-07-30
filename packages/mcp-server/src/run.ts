@@ -4,7 +4,7 @@ import { ProbeClient } from '@cocos-ai/client';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createCocosMcpServer, type CocosMcpToolProfile } from './server.js';
+import { createCocosMcpServer } from './server.js';
 
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 const DEFAULT_REPORT_ROOT = 'reports';
@@ -29,14 +29,13 @@ export interface McpRuntimeConfig {
   serverUrl: string;
   reportRoot: string;
   enableWrites: boolean;
-  profile: CocosMcpToolProfile;
   requestTimeoutMs: number;
 }
 
 /**
- * 从进程环境和启动参数读取 Probe Server 地址、MCP 服务端授权报告根、工具档和写能力开关。
+ * 从进程环境和启动参数读取 Probe Server 地址、MCP 服务端授权报告根和写能力开关。
  * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力；
- * 工具档缺省为 prefab，full 仅通过显式 profile 参数启用。
+ * 直写架构已移除工具档机制，旧的 --profile 参数一律拒绝并提示。
  * 请求超时经 COCOS_AI_PROBE_TIMEOUT_MS 配置，与 CLI 共用同一环境变量。
  *
  * @param environment 环境变量键值；缺失值使用本机默认配置。
@@ -50,21 +49,17 @@ export function readMcpRuntimeConfig(
   return {
     serverUrl: environment.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL,
     reportRoot: resolve(environment.COCOS_AI_MCP_REPORT_ROOT ?? DEFAULT_REPORT_ROOT),
-    enableWrites: argv.includes('--enable-writes'),
-    profile: readToolProfile(argv),
+    enableWrites: readEnableWrites(argv),
     requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_PROBE_TIMEOUT_MS)
   };
 }
 
-/** 读取严格的工具档参数，缺省使用日常 Prefab 场景档。 */
-function readToolProfile(argv: readonly string[]): CocosMcpToolProfile {
-  const inline = argv.find((argument) => argument.startsWith('--profile='));
-  const index = argv.indexOf('--profile');
-  const value = inline?.slice('--profile='.length) ?? (index >= 0 ? argv[index + 1] : undefined);
-  if (index >= 0 && value === undefined) throw new Error('MCP_PROFILE_REQUIRED');
-  if (value === undefined || value === 'prefab') return 'prefab';
-  if (value === 'full') return 'full';
-  throw new Error(`MCP_PROFILE_INVALID:${value}`);
+/** 读取写能力开关；直写架构下 --profile 已移除，传入即报错提示。 */
+function readEnableWrites(argv: readonly string[]): boolean {
+  if (argv.includes('--profile') || argv.some((argument) => argument.startsWith('--profile='))) {
+    throw new Error('MCP_PROFILE_REMOVED：工具档机制已移除，启动参数只保留 --enable-writes');
+  }
+  return argv.includes('--enable-writes');
 }
 
 /** 解析有限的正整数毫秒超时，缺省或非法时回退默认值。 */
@@ -105,7 +100,7 @@ export async function startMcpRuntime<TTransport>(options: {
 }
 
 /**
- * 使用真实 Probe Client 和 stdio Transport 启动按 profile 配置的 Cocos MCP Server。
+ * 使用真实 Probe Client 和 stdio Transport 启动直写工具档 Cocos MCP Server。
  *
  * @param environment 可选环境变量覆盖，默认使用当前进程环境。
  * @returns 已连接且可关闭的 MCP 运行时。
@@ -118,7 +113,7 @@ export async function runMcpServer(
   const probeClient = new ProbeClient(config.serverUrl, config.requestTimeoutMs);
   const server = createCocosMcpServer(
     { probeClient, reportRoot: config.reportRoot },
-    { enableWrites: config.enableWrites, profile: config.profile }
+    { enableWrites: config.enableWrites }
   );
   const transport = new StdioServerTransport();
   patchTransportSchemaRefs(transport);
