@@ -2,7 +2,7 @@
   "package_version": 2,
   "name": "cocos-ai-bridge",
   "title": "Cocos AI Bridge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Cocos Creator 3.8.x editor bridge for the Cocos AI probe server",
   "author": "李威-Enti",
   "date": "2026-07-17",
@@ -21,19 +21,71 @@
       "script": "./dist/scene.js"
     },
     "messages": {
-      "probe-editor-state": { "methods": ["probe-editor-state"] },
-      "probe-assets": { "methods": ["probe-assets"] },
-      "probe-asset-index": { "methods": ["probe-asset-index"] },
-      "probe-document-snapshot": { "methods": ["probe-document-snapshot"] },
-      "probe-hierarchy": { "methods": ["probe-hierarchy"] },
-      "probe-node": { "methods": ["probe-node"] },
-      "probe-component": { "methods": ["probe-component"] },
-      "probe-prefab": { "methods": ["probe-prefab"] },
-      "probe-write-prepare": { "methods": ["probe-write-prepare"] },
-      "probe-write-confirm": { "methods": ["probe-write-confirm"] },
-      "probe-transaction-status": { "methods": ["probe-transaction-status"] },
-      "probe-transaction-list": { "methods": ["probe-transaction-list"] },
-      "probe-transaction-rollback": { "methods": ["probe-transaction-rollback"] }
+      "probe-editor-state": {
+        "methods": [
+          "probe-editor-state"
+        ]
+      },
+      "probe-assets": {
+        "methods": [
+          "probe-assets"
+        ]
+      },
+      "probe-asset-index": {
+        "methods": [
+          "probe-asset-index"
+        ]
+      },
+      "probe-document-snapshot": {
+        "methods": [
+          "probe-document-snapshot"
+        ]
+      },
+      "probe-hierarchy": {
+        "methods": [
+          "probe-hierarchy"
+        ]
+      },
+      "probe-node": {
+        "methods": [
+          "probe-node"
+        ]
+      },
+      "probe-component": {
+        "methods": [
+          "probe-component"
+        ]
+      },
+      "probe-prefab": {
+        "methods": [
+          "probe-prefab"
+        ]
+      },
+      "probe-write-prepare": {
+        "methods": [
+          "probe-write-prepare"
+        ]
+      },
+      "probe-write-confirm": {
+        "methods": [
+          "probe-write-confirm"
+        ]
+      },
+      "probe-transaction-status": {
+        "methods": [
+          "probe-transaction-status"
+        ]
+      },
+      "probe-transaction-list": {
+        "methods": [
+          "probe-transaction-list"
+        ]
+      },
+      "probe-transaction-rollback": {
+        "methods": [
+          "probe-transaction-rollback"
+        ]
+      }
     }
   },
   "dependencies": {

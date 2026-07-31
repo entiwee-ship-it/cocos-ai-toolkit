@@ -261,6 +261,7 @@ describe('直写档工具注册', () => {
     for (const gated of [
       'cocos_node_create',
       'cocos_node_delete',
+      'cocos_node_reparent',
       'cocos_component_add',
       'cocos_component_set_property',
       'cocos_prefab_create',
@@ -292,6 +293,7 @@ describe('直写档工具注册', () => {
     for (const gated of [
       'cocos_node_create',
       'cocos_node_delete',
+      'cocos_node_reparent',
       'cocos_component_add',
       'cocos_component_set_property',
       'cocos_prefab_create',
@@ -443,6 +445,53 @@ describe('直写档写工具', () => {
     const payload = write?.payload as { params: { operations: Array<Record<string, unknown>> } };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.operations).toEqual([{ type: 'node.delete', nodeUuid: 'panel-uuid' }]);
+  });
+
+  it('cocos_node_reparent 按 UUID 和 parentPath 直写 node.reparent', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_node_reparent',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuid: 'panel-uuid',
+        newParentPath: 'Root',
+        siblingIndex: 2
+      }
+    });
+    expect(result.structuredContent).toMatchObject({
+      outcome: { kind: 'success', executedOps: 1 }
+    });
+    const write = probeClient.requests.at(-1);
+    const payload = write?.payload as { params: { operations: Array<Record<string, unknown>>; save: boolean; undoGroup: string } };
+    expect(write?.method).toBe('probe.directWrite');
+    expect(payload.params.save).toBe(true);
+    expect(payload.params.undoGroup).toContain('node-reparent');
+    expect(payload.params.operations).toEqual([{
+      type: 'node.reparent',
+      nodeUuid: 'panel-uuid',
+      newParentUuid: 'root-uuid',
+      siblingIndex: 2
+    }]);
+  });
+
+  it('cocos_node_reparent 拒绝同一组中同时提供 UUID 和路径', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_node_reparent',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuid: 'panel-uuid',
+        path: 'Root/Panel',
+        newParentUuid: 'root-uuid'
+      }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('cocos_component_add 携带脚本 UUID 直写 component.add', async () => {

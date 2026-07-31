@@ -87,7 +87,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目。健康检查会核对安装模式、精确工具集合、Toolkit/MCP/Bridge 版本和源码提交，再调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（27 个）
+## MCP 工具面（28 个）
 
 ### 只读 5 个（裸启动可用）
 
@@ -105,6 +105,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | --- | --- |
 | `cocos_node_create` | 在父节点（parentUuid 或 parentPath）下创建节点 |
 | `cocos_node_delete` | 按 nodeUuid 或 path 删除节点及子树，不可回滚 |
+| `cocos_node_reparent` | 把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex |
 | `cocos_component_add` | 在节点上挂载组件；自定义脚本组件必须提供 scriptUuid |
 | `cocos_component_set_property` | 修改组件属性值；propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致时拒绝写入 |
 | `cocos_prefab_create` | 把当前文档中的节点生成为 Prefab 资产 |

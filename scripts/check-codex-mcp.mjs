@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const TOOLKIT_VERSION = '0.3.0';
+const TOOLKIT_VERSION = '0.3.1';
 const entry = process.env.COCOS_AI_MCP_ENTRY;
 if (!entry) throw new Error('COCOS_AI_MCP_ENTRY_REQUIRED');
 const sourceCommit = process.env.COCOS_AI_SOURCE_COMMIT;

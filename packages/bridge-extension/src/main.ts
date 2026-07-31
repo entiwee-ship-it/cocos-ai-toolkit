@@ -8,7 +8,7 @@ import { probeAssets } from './asset-probe';
 import { probeAssetIndex } from './asset-index';
 import { importAsset } from './import-asset';
 
-const BRIDGE_VERSION = '0.3.0';
+const BRIDGE_VERSION = '0.3.1';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 const BRIDGE_LIFECYCLE_LOG_NAMES: Record<BridgeLifecycleEvent['type'], string> = {

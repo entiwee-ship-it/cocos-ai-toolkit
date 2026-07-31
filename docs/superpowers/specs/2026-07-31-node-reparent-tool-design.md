@@ -5,7 +5,7 @@
 
 ## 目标
 
-为 0.3.0 直写工具面增加 `cocos_node_reparent`，让 AI 能在 Creator 3.8.8 中把现有节点安全迁移到另一个父节点，并可选指定兄弟顺序。该工具用于 Prefab/Scene 结构整理，不直接编辑序列化 JSON。
+在 0.3.x 直写工具面增加 `cocos_node_reparent`，并作为 0.3.1 发布，让 AI 能在 Creator 3.8.8 中把现有节点安全迁移到另一个父节点，并可选指定兄弟顺序。该工具用于 Prefab/Scene 结构整理，不直接编辑序列化 JSON。
 
 ## API
 

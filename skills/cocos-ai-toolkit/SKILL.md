@@ -29,6 +29,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | --- | --- |
 | 创建节点 | `cocos_node_create`（parentUuid 或 parentPath，二选一） |
 | 删除节点及子树 | `cocos_node_delete` |
+| 迁移节点 | `cocos_node_reparent`（源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex） |
 | 挂载组件 | `cocos_component_add`（自定义脚本组件必须给 scriptUuid，用 asset_search 查） |
 | 改组件属性值 | `cocos_component_set_property`（propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致会拒绝写入） |
 | 节点生成 Prefab | `cocos_prefab_create`（assetUrl 必须 `db://assets/` 且 `.prefab` 后缀） |

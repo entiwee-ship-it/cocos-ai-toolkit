@@ -19,6 +19,14 @@ const NodeAddressInput = {
   path: z.string().min(1).optional()
 };
 
+function assertExclusiveNodeAddress(address: NodeAddress, fieldName = 'NODE_ADDRESS'): void {
+  const hasUuid = Boolean(address.nodeUuid);
+  const hasPath = Boolean(address.path);
+  if (hasUuid === hasPath) {
+    throw new Error(`NODE_ADDRESS_EXCLUSIVE:${fieldName}`);
+  }
+}
+
 const ToolOutputSchema = z.looseObject({});
 
 const READONLY_ANNOTATIONS = {
@@ -189,6 +197,32 @@ export class CocosDirectToolService {
       ...(input.expectedOldValue !== undefined ? { expectedOldValue: input.expectedOldValue } : {})
     };
     return this.directWrite(editor, [operation], 'component-set-property');
+  }
+
+  /** 将现有节点迁移到新父节点，保留节点 UUID，可选指定兄弟顺序。 */
+  async reparentNode(input: ProjectSelector & NodeAddress & {
+    newParentUuid?: string;
+    newParentPath?: string;
+    siblingIndex?: number;
+  }) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    assertExclusiveNodeAddress(input);
+    const nodeUuid = await this.resolveNodeUuid(editor, input);
+    assertExclusiveNodeAddress({ nodeUuid: input.newParentUuid, path: input.newParentPath }, 'newParent');
+    const newParentUuid = await this.resolveNodeUuid(editor, {
+      nodeUuid: input.newParentUuid,
+      path: input.newParentPath
+    });
+    if (nodeUuid === newParentUuid) {
+      throw new Error('REPARENT_CYCLE:self');
+    }
+    const operation = {
+      type: 'node.reparent' as const,
+      nodeUuid,
+      newParentUuid,
+      ...(input.siblingIndex === undefined ? {} : { siblingIndex: input.siblingIndex })
+    };
+    return this.directWrite(editor, [operation], 'node-reparent');
   }
 
   /** 从当前文档节点生成 Prefab 资产。 */
@@ -470,6 +504,19 @@ export function registerCocosDirectWriteTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.createNode(input)));
+
+  server.registerTool('cocos_node_reparent', {
+    description: '把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      ...NodeAddressInput,
+      newParentUuid: z.string().min(1).optional(),
+      newParentPath: z.string().min(1).optional(),
+      siblingIndex: z.number().int().nonnegative().optional()
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.reparentNode(input)));
 
   server.registerTool('cocos_node_delete', {
     description: '按 nodeUuid 或 path 删除节点及其子树并保存；不可回滚。',
