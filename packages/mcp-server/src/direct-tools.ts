@@ -54,6 +54,7 @@ export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
 
 export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_node_create',
+  'cocos_node_reparent',
   'cocos_node_delete',
   'cocos_component_add',
   'cocos_component_set_property',

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCocosMcpServer } from '../src/server.js';
+import { COCOS_DIRECT_WRITE_TOOL_NAMES } from '../src/direct-tools.js';
 import type { ReadonlyProbeClient } from '../src/tools.js';
 
 interface ProbeRequest {
@@ -304,6 +305,9 @@ describe('直写档工具注册', () => {
     ]) {
       expect(writeNames).toContain(gated);
     }
+    expect(writeNames.filter((name) => COCOS_DIRECT_WRITE_TOOL_NAMES.includes(
+      name as (typeof COCOS_DIRECT_WRITE_TOOL_NAMES)[number]
+    ))).toEqual([...COCOS_DIRECT_WRITE_TOOL_NAMES]);
   });
 });
 
