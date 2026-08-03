@@ -3,7 +3,7 @@ import { BRIDGE_CAPABILITIES, buildBridgeHello } from '../src/editor-state.js';
 import { normalizeAssetInfo } from '../src/asset-probe.js';
 
 describe('buildBridgeHello', () => {
-  it('保留项目路径和 Creator 精确版本', () => {
+  it('保留项目身份并只声明当前 Bridge 真实提供的写能力', () => {
     const hello = buildBridgeHello({
       processId: 123,
       projectPath: 'E:/project',
@@ -16,7 +16,16 @@ describe('buildBridgeHello', () => {
     expect(hello.payload.editorInstanceId).toBe('project-uuid:123');
     expect(hello.payload.projectPath).toBe('E:/project');
     expect(hello.payload.creatorVersion).toBe('3.8.8');
-    expect(BRIDGE_CAPABILITIES).toContain('probe.writeRevision');
+    expect(hello.payload.capabilities).toEqual([...BRIDGE_CAPABILITIES]);
+    expect(BRIDGE_CAPABILITIES).toContain('probe.directWrite');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.saveDocument');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.importAsset');
+    expect(BRIDGE_CAPABILITIES).not.toContain('probe.writePrepare');
+    expect(BRIDGE_CAPABILITIES).not.toContain('probe.writeRevision');
+    expect(BRIDGE_CAPABILITIES).not.toContain('probe.writeConfirm');
+    expect(BRIDGE_CAPABILITIES).not.toContain('probe.transactionStatus');
+    expect(BRIDGE_CAPABILITIES).not.toContain('probe.transactionList');
+    expect(BRIDGE_CAPABILITIES).not.toContain('probe.transactionRollback');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.createAsset');
   });
 });
