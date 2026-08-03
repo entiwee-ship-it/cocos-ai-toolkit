@@ -117,6 +117,9 @@ function createFakePage() {
       if (script.includes('return invokeRuntimeComponentMethod')) {
         return { found: true, invoked: true, nodeUuid: 'u2', componentType: 'GameLogic', returnValue: 6 } as never;
       }
+      if (script.includes('return instantiateRuntimePrefab')) {
+        return { done: true, nodePath: 'Canvas/LayerUI/Dialog', parentName: 'LayerUI' } as never;
+      }
       if (script.includes('return readRuntimeProperty')) {
         // scenario 断言用例：string 属性返回固定文本
         if (script.includes('"property":"string"')) {
@@ -316,6 +319,31 @@ describe('ProbeServer 运行态方法', () => {
     expect(JSON.stringify(reply.payload)).toContain('RUNTIME_DRIVER_UNAVAILABLE');
 
     await server.stop();
+  });
+
+  it('stop 在 runtime dispose 失败后仍关闭 Server，并传播明确错误', async () => {
+    let disposeCalls = 0;
+    const runtimeDriver = {
+      async dispose() {
+        disposeCalls += 1;
+        if (disposeCalls === 1) throw new Error('browser close failed');
+      }
+    } as unknown as RuntimeDriver;
+    const server = new ProbeServer({
+      host: '127.0.0.1',
+      port: 0,
+      requestTimeoutMs: 1_000,
+      runtimeDriver
+    });
+    await server.start();
+
+    await expect(server.stop()).rejects.toThrow(/PROBE_RUNTIME_DISPOSE_FAILED:.*browser close failed/);
+    expect(disposeCalls).toBe(1);
+
+    const restarted = await server.start();
+    expect(restarted.port).toBeGreaterThan(0);
+    await server.stop();
+    expect(disposeCalls).toBe(2);
   });
 
   it('runtimeHierarchy 返回协议化快照（source/dynamic 标注齐全）', async () => {
@@ -569,6 +597,39 @@ describe('ProbeServer 运行态方法', () => {
     const escapeReport = escape.payload as { passed: boolean; steps: Array<{ passed: boolean; error?: string }> };
     expect(escapeReport.passed).toBe(false);
     expect(escapeReport.steps[0].error).toContain('BASELINE_PATH_OUT_OF_ROOT');
+
+    bridge.close();
+    await server.stop();
+  });
+
+  it('runtimeRunScenario 可实例化 Prefab，并在失败后通过 stop(always=true) 清理会话', async () => {
+    const captureRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-scenario-cleanup-'));
+    const { driver, pages } = createFakeDriver();
+    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver, captureRoot });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+    const bridge = await connectFakeBridge({ url });
+
+    const launched = await callServer(url, 'server.previewLaunch', { selector: { projectId: 'project-1' }, params: {} });
+    const sessionId = (launched.payload as { sessionId: string }).sessionId;
+    const reply = await callServer(url, 'server.runtimeRunScenario', {
+      sessionId,
+      steps: [
+        { kind: 'instantiate-prefab', assetUuid: 'asset-1', parentPath: 'Canvas/LayerUI', x: 0, y: -10 },
+        { kind: 'assert-property', path: 'Canvas/btn', property: 'cc.Label.string', expected: '故意不匹配' },
+        { kind: 'dispatch-input', inputType: 'tap', x: 10, y: 10 },
+        { kind: 'stop', always: true }
+      ]
+    });
+
+    expect(reply.ok).toBe(true);
+    const report = reply.payload as { passed: boolean; steps: Array<{ kind: string; passed: boolean; actual?: unknown }> };
+    expect(report.passed).toBe(false);
+    expect(report.steps.map((step) => step.kind)).toEqual(['instantiate-prefab', 'assert-property', 'stop']);
+    expect(report.steps[0]).toMatchObject({ passed: true, actual: { done: true, nodePath: 'Canvas/LayerUI/Dialog' } });
+    expect(pages[0].state.clicks).toHaveLength(0);
+    expect(pages[0].state.closed).toBe(true);
+    expect(pages[0].state.evaluateScripts.some((script) => script.includes('return instantiateRuntimePrefab'))).toBe(true);
 
     bridge.close();
     await server.stop();

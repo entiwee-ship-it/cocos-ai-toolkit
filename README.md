@@ -87,25 +87,26 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目。健康检查会核对安装模式、精确工具集合、Toolkit/MCP/Bridge 版本和源码提交，再调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（28 个）
+## MCP 工具面（完整写模式 30 个）
 
-### 只读 5 个（裸启动可用）
+### 编辑态只读 5 个（默认开放）
 
 | 工具 | 用途 |
 | --- | --- |
 | `cocos_editor_list` | 列出当前连接 Probe Server 的 Creator；唯一不要求 `projectId` 的全局入口 |
 | `cocos_asset_search` | 在 AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），cursor 分页 |
-| `cocos_hierarchy` | 读取当前文档节点树（uuid、名称、路径、组件清单），供寻址 |
-| `cocos_node_read` | 按 nodeUuid 或 path 读取节点详情；提供 componentType 时返回该组件完整属性（改属性前看现值） |
+| `cocos_hierarchy` | 读取当前文档节点树；`rootPath/query/fields/summary` 可返回无重复 raw 的紧凑结果 |
+| `cocos_node_read` | 按 nodeUuid 或 path 读取节点详情；`fields/propertyPaths/summary` 可精确读取组件现值并缩小输出 |
 | `cocos_prefab_open` | 通过 Creator 打开 Prefab 并等待文档身份就绪 |
 
-### 直写 9 个（`--enable-writes` 才注册；每次写入自动保存并逐项重读回显）
+### 编辑态直写 12 个（`--enable-writes` 才注册；每次写入自动保存并逐项重读回显）
 
 | 工具 | 用途 |
 | --- | --- |
 | `cocos_node_create` | 在父节点（parentUuid 或 parentPath）下创建节点 |
-| `cocos_node_delete` | 按 nodeUuid 或 path 删除节点及子树，不可回滚 |
+| `cocos_node_set_transform` | 按 nodeUuid 或 path 修改局部 position/rotation/scale，未提供的分量保持不变 |
 | `cocos_node_reparent` | 把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex |
+| `cocos_node_delete` | 按 nodeUuid 或 path 删除节点及子树，不可回滚 |
 | `cocos_component_add` | 在节点上挂载组件；自定义脚本组件必须提供 scriptUuid |
 | `cocos_component_set_property` | 修改组件属性值；propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致时拒绝写入 |
 | `cocos_prefab_create` | 把当前文档中的节点生成为 Prefab 资产 |
@@ -113,12 +114,13 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_prefab_delete` | 按 UUID 删除 Prefab 资产；不可回滚且不检查引用 |
 | `cocos_asset_import` | 把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入 |
 | `cocos_asset_refresh` | 重新导入资产并尝试触发 TypeScript 编译 |
+| `cocos_batch_write` | 一次直发多项 `node.*` / `component.*` 操作；不接受 `asset.*` / `prefab.*`，只减少 MCP 往返，不是事务且无回滚，失败时 `executedOps` 之前的修改可能已生效 |
 
 节点寻址同时接受 `nodeUuid` 或 `path`（如 `Root/Panel/Button`）；组件按类型解析，兼容 `cc.` 前缀（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。
 
 ### 运行态 13 个（只读组默认开放，动作组需 `--enable-writes`）
 
-`cocos_preview_launch/stop/sessions`、`cocos_runtime_get_hierarchy/inspect_component/get_console/watch_property/capture/invoke_method/sample_window/dispatch_input/instantiate_prefab/run_scenario`：启动 Preview 页面、读取运行时节点树/组件/Console、监听属性变化、Game 视图截图（多分辨率/裁剪/节点边界叠加）、调用组件方法、派发输入、运行时实例化 Prefab、执行 launch/wait/assert/input/capture 场景。视觉结果仅作辅助证据。
+`cocos_preview_launch/stop/sessions`、`cocos_runtime_get_hierarchy/inspect_component/get_console/watch_property/capture/invoke_method/sample_window/dispatch_input/instantiate_prefab/run_scenario`：启动 Preview 页面、读取运行时节点树/组件/Console、监听属性变化、Game 视图截图（多分辨率/裁剪/节点边界叠加）、调用组件方法、派发输入和运行时实例化 Prefab。Scenario 支持 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；`stop(always:true)` 会在前序步骤默认中止后仍执行清理。视觉结果仅作辅助证据。
 
 典型编辑流程：`cocos_asset_search` 找 UUID → `cocos_prefab_open` 打开 → `cocos_hierarchy` 寻址 → `cocos_node_read` 看现值 → `cocos_component_set_property` / `cocos_node_create` / `cocos_component_add` 修改（自动保存+回显）→ 需要视觉确认时 `cocos_preview_launch` + `cocos_runtime_capture`。
 

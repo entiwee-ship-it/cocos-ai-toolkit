@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DocumentWriteOperationSchema,
   DirectWriteOutcomeSchema,
   DirectWriteRequestSchema,
   LocalTransformSchema,
@@ -181,6 +182,39 @@ describe('WriteOperationSchema', () => {
       propertyPath: 'items',
       length: -1
     })).toThrow();
+  });
+});
+
+describe('DocumentWriteOperationSchema', () => {
+  it('只接受公开 batch 可用的 node.* 与 component.* 操作', () => {
+    expect(DocumentWriteOperationSchema.parse({
+      type: 'node.set_transform',
+      nodeUuid: 'n1',
+      localTransform: { position: { x: 1, y: 2, z: 3 } }
+    })).toBeTruthy();
+    expect(DocumentWriteOperationSchema.parse({
+      type: 'component.set_property',
+      componentUuid: 'c1',
+      propertyPath: 'items[0]',
+      value: 'ok'
+    })).toBeTruthy();
+  });
+
+  it('拒绝 asset.* 与 prefab.* 操作，但完整协议联合仍保留这些内部操作', () => {
+    const assetOperation = {
+      type: 'asset.delete',
+      assetUrl: 'db://assets/ui/icon.png',
+      expectedAssetUuid: 'image-uuid-1'
+    };
+    const prefabOperation = {
+      type: 'prefab.delete_asset',
+      assetUrl: 'db://assets/ui/Test.prefab'
+    };
+
+    expect(() => DocumentWriteOperationSchema.parse(assetOperation)).toThrow();
+    expect(() => DocumentWriteOperationSchema.parse(prefabOperation)).toThrow();
+    expect(WriteOperationSchema.parse(assetOperation)).toBeTruthy();
+    expect(WriteOperationSchema.parse(prefabOperation)).toBeTruthy();
   });
 });
 

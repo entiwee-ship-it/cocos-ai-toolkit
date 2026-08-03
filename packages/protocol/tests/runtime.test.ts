@@ -190,9 +190,11 @@ describe('运行态协议（阶段五）', () => {
       { kind: 'wait-node', path: 'Canvas/btn', timeoutMs: 5000 },
       { kind: 'assert-property', path: 'Canvas/btn', property: 'active', expected: true },
       { kind: 'dispatch-input', inputType: 'tap', x: 100, y: 200 },
+      { kind: 'instantiate-prefab', assetUuid: 'asset-1', parentPath: 'Canvas/LayerUI', x: 0, y: -10 },
       { kind: 'assert-console', pattern: '登录成功', level: 'log', timeoutMs: 3000 },
       { kind: 'capture', overlay: { nodeBounds: true } },
-      { kind: 'assert-image-diff', baselinePath: 'baselines/home.png', threshold: 0.01 }
+      { kind: 'assert-image-diff', baselinePath: 'baselines/home.png', threshold: 0.01 },
+      { kind: 'stop', always: true }
     ];
     for (const step of steps) {
       expect(ScenarioStepSchema.parse(step), `步骤 ${step.kind} 应通过校验`).toBeTruthy();
@@ -202,6 +204,8 @@ describe('运行态协议（阶段五）', () => {
   it('场景步骤拒绝未知种类与越界阈值', () => {
     expect(() => ScenarioStepSchema.parse({ kind: 'teleport' })).toThrow();
     expect(() => ScenarioStepSchema.parse({ kind: 'assert-image-diff', baselinePath: 'a.png', threshold: 1.5 })).toThrow();
+    expect(() => ScenarioStepSchema.parse({ kind: 'instantiate-prefab', assetUuid: '', parentPath: 'Canvas' })).toThrow();
+    expect(ScenarioStepSchema.parse({ kind: 'stop', always: true })).toEqual({ kind: 'stop', always: true });
   });
 
   it('场景报告步骤的 expected/actual 可省略（Zod 4 显式 optional 语义）', () => {

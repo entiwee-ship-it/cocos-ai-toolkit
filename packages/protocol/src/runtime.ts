@@ -236,6 +236,14 @@ export const ScenarioStepSchema = z.discriminatedUnion('kind', [
     onFail: ScenarioOnFailSchema.optional()
   }),
   z.object({
+    kind: z.literal('instantiate-prefab'),
+    assetUuid: z.string().min(1),
+    parentPath: z.string().min(1),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    onFail: ScenarioOnFailSchema.optional()
+  }),
+  z.object({
     kind: z.literal('assert-console'),
     /** 匹配文本（正则）。 */
     pattern: z.string().min(1),
@@ -255,6 +263,12 @@ export const ScenarioStepSchema = z.discriminatedUnion('kind', [
     baselinePath: z.string().min(1),
     /** 允许的差异像素比例阈值，0..1。 */
     threshold: z.number().min(0).max(1),
+    onFail: ScenarioOnFailSchema.optional()
+  }),
+  z.object({
+    kind: z.literal('stop'),
+    /** 前序步骤默认中止后仍执行，用于 finally 式 Preview 清理。 */
+    always: z.boolean().optional(),
     onFail: ScenarioOnFailSchema.optional()
   })
 ]);

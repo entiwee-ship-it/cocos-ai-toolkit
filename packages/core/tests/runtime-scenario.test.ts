@@ -22,6 +22,14 @@ function createFakeRuntime(overrides: Partial<ScenarioRuntime> = {}) {
       calls.push({ op: 'dispatchInput', args: { sessionId, input } });
       return { dispatched: true };
     },
+    async instantiatePrefab(sessionId, input) {
+      calls.push({ op: 'instantiatePrefab', args: { sessionId, input } });
+      return { done: true, nodePath: `${input.parentPath}/Dialog` };
+    },
+    async stop(sessionId) {
+      calls.push({ op: 'stop', args: { sessionId } });
+      return { closed: true };
+    },
     async readConsole() {
       calls.push({ op: 'readConsole', args: {} });
       return { entries: [{ level: 'log', text: '登录成功' }], nextSeq: 1 };
@@ -49,22 +57,24 @@ describe('runRuntimeScenario（自动场景验证编排）', () => {
       { kind: 'wait-node', path: 'Canvas/btn', timeoutMs: 1000 },
       { kind: 'assert-property', path: 'Canvas/btn', property: 'cc.Button.interactable', expected: true },
       { kind: 'dispatch-input', inputType: 'tap', x: 100, y: 200 },
+      { kind: 'instantiate-prefab', assetUuid: 'asset-1', parentPath: 'Canvas/LayerUI', x: 0, y: -10 },
       { kind: 'assert-console', pattern: '登录成功', level: 'log', timeoutMs: 500 },
       { kind: 'capture', overlay: { nodeBounds: ['Canvas/btn'] } },
-      { kind: 'assert-image-diff', baselinePath: 'captures/baseline.png', threshold: 0.01 }
+      { kind: 'assert-image-diff', baselinePath: 'captures/baseline.png', threshold: 0.01 },
+      { kind: 'stop' }
     ];
     const report = await runRuntimeScenario(steps, runtime, { projectId: 'proj1', now: NOW });
     expect(() => ScenarioReportSchema.parse(report)).not.toThrow();
     expect(report.passed).toBe(true);
     expect(report.steps.map((step) => step.kind)).toEqual([
-      'launch', 'wait-node', 'assert-property', 'dispatch-input', 'assert-console', 'capture', 'assert-image-diff'
+      'launch', 'wait-node', 'assert-property', 'dispatch-input', 'instantiate-prefab', 'assert-console', 'capture', 'assert-image-diff', 'stop'
     ]);
     expect(calls.map((call) => call.op)).toEqual([
-      'launch', 'waitNode', 'readProperty', 'dispatchInput', 'readConsole', 'capture', 'imageDiff'
+      'launch', 'waitNode', 'readProperty', 'dispatchInput', 'instantiatePrefab', 'readConsole', 'capture', 'imageDiff', 'stop'
     ]);
     // assert-property 的 property 拆为组件类型 + 属性路径
     expect(calls[2].args).toMatchObject({ componentType: 'cc.Button', property: 'interactable' });
-    expect(report.steps[6]).toMatchObject({ passed: true, evidence: 'captures/sess-1/diff.png' });
+    expect(report.steps[7]).toMatchObject({ passed: true, evidence: 'captures/sess-1/diff.png' });
   });
 
   it('已有会话时 launch 复用而非新建', async () => {
@@ -111,6 +121,102 @@ describe('runRuntimeScenario（自动场景验证编排）', () => {
     expect(report.passed).toBe(false);
     expect(report.steps).toHaveLength(2);
     expect(calls.filter((call) => call.op === 'dispatchInput')).toHaveLength(1);
+  });
+
+  it('instantiate-prefab 以 done=false 判定失败并保留实际原因', async () => {
+    const { runtime } = createFakeRuntime({
+      instantiatePrefab: async () => ({ done: false, reason: 'parent-not-found' })
+    });
+    const report = await runRuntimeScenario([
+      { kind: 'instantiate-prefab', assetUuid: 'asset-1', parentPath: 'Canvas/Missing' }
+    ], runtime, { sessionId: 's1', now: NOW });
+    expect(report.passed).toBe(false);
+    expect(report.steps[0]).toMatchObject({
+      kind: 'instantiate-prefab',
+      passed: false,
+      actual: { done: false, reason: 'parent-not-found' }
+    });
+    expect(report.steps[0].error).toContain('INSTANTIATE_PREFAB_FAILED:parent-not-found');
+  });
+
+  it('默认 abort 后跳过普通步骤但仍执行 stop(always=true)，且清理不覆盖原失败', async () => {
+    const { runtime, calls } = createFakeRuntime({
+      readProperty: async () => ({ found: true, value: false })
+    });
+    const report = await runRuntimeScenario([
+      { kind: 'assert-property', path: 'Canvas/btn', property: 'cc.Button.interactable', expected: true },
+      { kind: 'dispatch-input', inputType: 'tap', x: 1, y: 1 },
+      { kind: 'stop', always: true }
+    ], runtime, { sessionId: 's1', now: NOW });
+    expect(report.passed).toBe(false);
+    expect(report.steps.map((step) => step.kind)).toEqual(['assert-property', 'stop']);
+    expect(calls.filter((call) => call.op === 'dispatchInput')).toHaveLength(0);
+    expect(calls.filter((call) => call.op === 'stop')).toHaveLength(1);
+    expect(report.steps[1]).toMatchObject({ passed: true, actual: { closed: true } });
+  });
+
+  it('既有会话的 Console baseline 读取失败时仍执行所有 stop(always=true)，并保留原始错误', async () => {
+    const { runtime, calls } = createFakeRuntime({
+      readConsole: async () => {
+        throw new Error('console baseline failed');
+      }
+    });
+    await expect(runRuntimeScenario([
+      { kind: 'dispatch-input', inputType: 'tap', x: 1, y: 1 },
+      { kind: 'stop', always: true },
+      { kind: 'stop', always: true }
+    ], runtime, { sessionId: 's1', now: NOW })).rejects.toThrow('console baseline failed');
+    expect(calls.filter((call) => call.op === 'stop')).toHaveLength(2);
+    expect(calls.filter((call) => call.op === 'dispatchInput')).toHaveLength(0);
+  });
+
+  it('Console baseline 与 always-stop 都失败时组合错误但不丢失 baseline 原因', async () => {
+    const { runtime, calls } = createFakeRuntime({
+      readConsole: async () => {
+        throw new Error('console baseline failed');
+      },
+      stop: async (sessionId) => {
+        calls.push({ op: 'stop', args: { sessionId } });
+        throw new Error('close failed');
+      }
+    });
+    await expect(runRuntimeScenario([
+      { kind: 'stop', always: true }
+    ], runtime, { sessionId: 's1', now: NOW })).rejects.toThrow(/console baseline failed;SCENARIO_ALWAYS_STOP_FAILED:.*close failed/);
+    expect(calls.filter((call) => call.op === 'stop')).toHaveLength(1);
+  });
+
+  it('stop 成功后清空内部 sessionId', async () => {
+    const { runtime } = createFakeRuntime();
+    const report = await runRuntimeScenario([
+      { kind: 'stop' },
+      { kind: 'wait-node', path: 'Canvas/btn' }
+    ], runtime, { sessionId: 's1', now: NOW });
+    expect(report.passed).toBe(false);
+    expect(report.steps[0]).toMatchObject({ kind: 'stop', passed: true });
+    expect(report.steps[1]).toMatchObject({ kind: 'wait-node', passed: false, error: 'SCENARIO_SESSION_REQUIRED' });
+  });
+
+  it('stop 返回 closed=false 时失败且保留内部 sessionId', async () => {
+    const { runtime, calls } = createFakeRuntime({
+      stop: async (sessionId) => {
+        calls.push({ op: 'stop', args: { sessionId } });
+        return { closed: false };
+      }
+    });
+    const report = await runRuntimeScenario([
+      { kind: 'stop', onFail: 'continue' },
+      { kind: 'wait-node', path: 'Canvas/btn' }
+    ], runtime, { sessionId: 's1', now: NOW });
+
+    expect(report.passed).toBe(false);
+    expect(report.steps[0]).toMatchObject({
+      kind: 'stop',
+      passed: false,
+      error: 'PREVIEW_CLOSE_NOT_CONFIRMED'
+    });
+    expect(report.steps[1]).toMatchObject({ kind: 'wait-node', passed: true });
+    expect(calls.find((call) => call.op === 'waitNode')?.args).toMatchObject({ sessionId: 's1' });
   });
 
   it('assert-console 有界轮询直至匹配，超时失败', async () => {

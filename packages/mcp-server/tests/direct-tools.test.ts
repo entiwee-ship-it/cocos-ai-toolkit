@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCocosMcpServer } from '../src/server.js';
-import { COCOS_DIRECT_WRITE_TOOL_NAMES } from '../src/direct-tools.js';
-import type { ReadonlyProbeClient } from '../src/tools.js';
+import { COCOS_DIRECT_WRITE_TOOL_NAMES, CocosDirectToolService } from '../src/direct-tools.js';
+import { CocosReadonlyToolService, type ReadonlyProbeClient } from '../src/tools.js';
 
 interface ProbeRequest {
   method: string;
@@ -146,6 +146,28 @@ const COMPONENT_SCHEMA = {
   unresolved: []
 };
 
+const COMPONENT_SCHEMA_WITH_PROPERTIES = {
+  ...COMPONENT_SCHEMA,
+  properties: [{
+    propertyPath: 'string',
+    serializedName: '_string',
+    displayName: 'String',
+    declaredType: 'string',
+    actualType: 'string',
+    valueKind: 'string',
+    nullable: false,
+    serializable: true,
+    visible: true,
+    readonly: false,
+    defaultValue: '',
+    currentValue: '当前标题',
+    references: [],
+    inspectorMetadata: {},
+    rawClassAttributes: {},
+    rawConsumedKeys: []
+  }]
+};
+
 const INSPECT_ASSET_RESPONSE = {
   assets: [],
   details: {
@@ -249,7 +271,8 @@ describe('直写档工具注册', () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const { client } = await createHarness(probeClient);
 
-    const names = (await client.listTools()).tools.map((tool) => tool.name);
+    const readonlyTools = (await client.listTools()).tools;
+    const names = readonlyTools.map((tool) => tool.name);
     for (const expected of [
       'cocos_editor_list',
       'cocos_asset_search',
@@ -261,6 +284,7 @@ describe('直写档工具注册', () => {
     }
     for (const gated of [
       'cocos_node_create',
+      'cocos_node_set_transform',
       'cocos_node_delete',
       'cocos_node_reparent',
       'cocos_component_add',
@@ -269,7 +293,8 @@ describe('直写档工具注册', () => {
       'cocos_prefab_save',
       'cocos_prefab_delete',
       'cocos_asset_import',
-      'cocos_asset_refresh'
+      'cocos_asset_refresh',
+      'cocos_batch_write'
     ]) {
       expect(names).not.toContain(gated);
     }
@@ -288,11 +313,19 @@ describe('直写档工具注册', () => {
     ]) {
       expect(names).not.toContain(removed);
     }
+    const hierarchyTool = readonlyTools.find((tool) => tool.name === 'cocos_hierarchy');
+    const nodeReadTool = readonlyTools.find((tool) => tool.name === 'cocos_node_read');
+    expect(hierarchyTool?.description).toContain('结构/信封层重复 raw');
+    expect(hierarchyTool?.description).toContain('Inspector 业务值内部的 raw');
+    expect(nodeReadTool?.description).toContain('结构/信封层重复 raw');
+    expect(nodeReadTool?.description).toContain('Inspector 业务值内部的 raw');
 
     const { client: writeClient } = await createHarness(probeClient, { enableWrites: true });
-    const writeNames = (await writeClient.listTools()).tools.map((tool) => tool.name);
+    const writeTools = (await writeClient.listTools()).tools;
+    const writeNames = writeTools.map((tool) => tool.name);
     for (const gated of [
       'cocos_node_create',
+      'cocos_node_set_transform',
       'cocos_node_delete',
       'cocos_node_reparent',
       'cocos_component_add',
@@ -301,13 +334,25 @@ describe('直写档工具注册', () => {
       'cocos_prefab_save',
       'cocos_prefab_delete',
       'cocos_asset_import',
-      'cocos_asset_refresh'
+      'cocos_asset_refresh',
+      'cocos_batch_write'
     ]) {
       expect(writeNames).toContain(gated);
     }
     expect(writeNames.filter((name) => COCOS_DIRECT_WRITE_TOOL_NAMES.includes(
       name as (typeof COCOS_DIRECT_WRITE_TOOL_NAMES)[number]
     ))).toEqual([...COCOS_DIRECT_WRITE_TOOL_NAMES]);
+    const batchTool = writeTools.find((tool) => tool.name === 'cocos_batch_write');
+    expect(batchTool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(batchTool?.description).toContain('node.* / component.*');
+    expect(batchTool?.description).toContain('asset.* / prefab.*');
+    const batchSchema = JSON.stringify(batchTool?.inputSchema);
+    expect(batchSchema).not.toContain('asset.delete');
+    expect(batchSchema).not.toContain('prefab.delete_asset');
+    expect(batchSchema).toContain('node.set_transform');
+    expect(batchSchema).toContain('component.set_property');
+    const transformTool = writeTools.find((tool) => tool.name === 'cocos_node_set_transform');
+    expect(transformTool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
   });
 });
 
@@ -368,6 +413,61 @@ describe('直写档只读工具', () => {
       method: 'probe.hierarchy',
       payload: { selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' }, params: { depth: 6 } }
     });
+    expect(JSON.stringify(result.structuredContent)).toContain('raw');
+  });
+
+  it('cocos_hierarchy 的紧凑参数按子树和查询投影并移除所有 raw', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_hierarchy',
+      arguments: {
+        projectId: 'proj1',
+        rootPath: 'Root',
+        query: 'Panel',
+        fields: ['name', 'identity.objectUuid'],
+        summary: true
+      }
+    });
+    expect(result.structuredContent).toMatchObject({
+      hierarchy: {
+        rootPath: 'Root',
+        summary: { scopedNodeCount: 2, matchedNodeCount: 1 },
+        nodes: [{ path: 'Root/Panel', name: 'Panel', identity: { objectUuid: 'panel-uuid' } }]
+      }
+    });
+    expect(JSON.stringify(result.structuredContent)).not.toContain('"raw"');
+    expect(probeClient.requests.at(-1)).toMatchObject({
+      method: 'probe.hierarchy',
+      payload: { params: { depth: 50 } }
+    });
+  });
+
+  it('cocos_hierarchy summary=false 保持完整旧返回', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_hierarchy',
+      arguments: { projectId: 'proj1', summary: false }
+    });
+    expect(result.structuredContent).toMatchObject({ hierarchy: { data: { name: 'Root' } } });
+    expect(JSON.stringify(result.structuredContent)).toContain('"raw"');
+  });
+
+  it('cocos_hierarchy summary-only 不重复返回节点树', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_hierarchy',
+      arguments: { projectId: 'proj1', summary: true }
+    });
+    expect(result.structuredContent).toMatchObject({
+      hierarchy: { summary: { totalNodeCount: 2, scopedNodeCount: 2 } }
+    });
+    expect((result.structuredContent as { hierarchy: Record<string, unknown> }).hierarchy).not.toHaveProperty('nodes');
   });
 
   it('cocos_node_read 提供 componentType 时返回组件完整属性', async () => {
@@ -396,6 +496,142 @@ describe('直写档只读工具', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('COMPONENT_NOT_FOUND');
     expect(JSON.stringify(result.content)).toContain('cc.Label');
+  });
+
+  it('cocos_node_read propertyPaths 只返回指定组件属性并移除 raw', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.component': { data: { schema: COMPONENT_SCHEMA_WITH_PROPERTIES, raw: { duplicate: true } }, raw: { envelope: true }, source: 'message-api' }
+    }));
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_node_read',
+      arguments: {
+        projectId: 'proj1',
+        path: 'Root/Panel',
+        componentType: 'cc.Label',
+        fields: ['name', 'transform.position'],
+        propertyPaths: ['string'],
+        summary: true,
+        includeRaw: true
+      }
+    });
+    expect(result.structuredContent).toMatchObject({
+      nodeUuid: 'panel-uuid',
+      componentUuid: 'label-comp-uuid',
+      node: { name: 'Panel', transform: { position: null } },
+      component: {
+        className: 'cc.Label',
+        propertyCount: 1,
+        properties: [{ propertyPath: 'string', currentValue: '当前标题' }]
+      }
+    });
+    expect(JSON.stringify(result.structuredContent)).not.toContain('"raw"');
+  });
+
+  it('cocos_node_read 紧凑投影保留业务 currentValue 内的 raw 字段', async () => {
+    const schema = {
+      ...COMPONENT_SCHEMA_WITH_PROPERTIES,
+      properties: [{
+        ...COMPONENT_SCHEMA_WITH_PROPERTIES.properties[0],
+        currentValue: { raw: 'keep-me', nested: { raw: 'keep-nested' } },
+        raw: { inspectorDuplicate: true }
+      }]
+    };
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.component': { data: { schema, raw: { duplicate: true } }, raw: { envelope: true }, source: 'message-api' }
+    }));
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_node_read',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuid: 'panel-uuid',
+        componentType: 'cc.Label',
+        propertyPaths: ['string']
+      }
+    });
+    expect(result.structuredContent).toMatchObject({
+      component: {
+        properties: [{
+          currentValue: { raw: 'keep-me', nested: { raw: 'keep-nested' } }
+        }]
+      }
+    });
+    expect(result.structuredContent).not.toHaveProperty('raw');
+  });
+
+  it('cocos_node_read fields 支持数组下标投影', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_node_read',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuid: 'panel-uuid',
+        fields: ['components[0].class.className']
+      }
+    });
+    expect(result.structuredContent).toMatchObject({
+      node: { components: [{ class: { className: 'cc.Label' } }] }
+    });
+  });
+
+  it('fields 拒绝原型链危险字段且不会污染 Object.prototype', async () => {
+    const beforeToString = Object.prototype.toString;
+    const beforeConstructor = Object.prototype.constructor;
+
+    for (const testCase of [
+      { name: 'cocos_hierarchy', arguments: { projectId: 'proj1', fields: ['__proto__.polluted'] } },
+      { name: 'cocos_node_read', arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', fields: ['identity.prototype.polluted'] } },
+      { name: 'cocos_node_read', arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', fields: ['identity.constructor'] } }
+    ]) {
+      const probeClient = new RecordingProbeClient(createRespond());
+      const { client } = await createHarness(probeClient);
+      const result = await client.callTool(testCase);
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain('FIELD_PATH_FORBIDDEN');
+      expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.hierarchy');
+    }
+
+    expect(Object.prototype.toString).toBe(beforeToString);
+    expect(Object.prototype.constructor).toBe(beforeConstructor);
+    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it('cocos_node_read 对缺失 propertyPath 返回可用路径', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.component': { data: { schema: COMPONENT_SCHEMA_WITH_PROPERTIES, raw: null }, raw: null, source: 'message-api' }
+    }));
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_node_read',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuid: 'panel-uuid',
+        componentType: 'cc.Label',
+        propertyPaths: ['missing.path']
+      }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('PROPERTY_PATH_NOT_FOUND');
+    expect(JSON.stringify(result.content)).toContain('string');
+  });
+
+  it('cocos_node_read 禁止在没有 componentType 时使用 propertyPaths', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_node_read',
+      arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', propertyPaths: ['string'] }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('PROPERTY_PATHS_REQUIRE_COMPONENT_TYPE');
   });
 });
 
@@ -449,6 +685,49 @@ describe('直写档写工具', () => {
     const payload = write?.payload as { params: { operations: Array<Record<string, unknown>> } };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.operations).toEqual([{ type: 'node.delete', nodeUuid: 'panel-uuid' }]);
+  });
+
+  it('cocos_node_set_transform 按 path 直写 node.set_transform', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    await client.callTool({
+      name: 'cocos_node_set_transform',
+      arguments: {
+        projectId: 'proj1',
+        path: 'Root/Panel',
+        localTransform: { position: { x: 12, y: 34, z: 0 } }
+      }
+    });
+    const write = probeClient.requests.at(-1);
+    const payload = write?.payload as { params: { operations: Array<Record<string, unknown>> } };
+    expect(payload.params.operations).toEqual([{
+      type: 'node.set_transform',
+      nodeUuid: 'panel-uuid',
+      localTransform: { position: { x: 12, y: 34, z: 0 } }
+    }]);
+  });
+
+  it('cocos_node_set_transform 严格要求 nodeUuid 或 path 二选一', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    for (const address of [
+      {},
+      { nodeUuid: 'panel-uuid', path: 'Root/Panel' }
+    ]) {
+      const result = await client.callTool({
+        name: 'cocos_node_set_transform',
+        arguments: {
+          projectId: 'proj1',
+          ...address,
+          localTransform: { position: { x: 1, y: 2, z: 3 } }
+        }
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
+    }
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('cocos_node_reparent 按 UUID 和 parentPath 直写 node.reparent', async () => {
@@ -564,6 +843,22 @@ describe('直写档写工具', () => {
     });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('DIRECT_WRITE_OPERATION_FAILED');
+    expect(JSON.stringify(result.content)).toContain('executedOps');
+    expect(JSON.stringify(result.content)).toContain('evidence');
+  });
+
+  it('直写 operation-failed 缺少 failure 时拒绝无效 Bridge 结果', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.directWrite': { kind: 'operation-failed', executedOps: 1 }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_node_delete',
+      arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid' }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('DIRECT_WRITE_OUTCOME_INVALID:MISSING_FAILURE');
   });
 
   it('直写重读不符抛 DIRECT_WRITE_VERIFY_FAILED', async () => {
@@ -592,6 +887,156 @@ describe('直写档写工具', () => {
     });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('DIRECT_WRITE_VERIFY_FAILED');
+  });
+
+  it('直写 success 但 verification=null 仍判定验证失败', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.directWrite': { kind: 'success', executedOps: 1, verification: null }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_node_delete',
+      arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid' }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('DIRECT_WRITE_VERIFY_FAILED');
+    expect(JSON.stringify(result.content)).toContain('verification');
+  });
+
+  it('直写 success 必须提供完整、有序且逐项通过的 verification', async () => {
+    const passedItem = (operationIndex: number) => ({
+      operationIndex,
+      description: `operation-${operationIndex}`,
+      expected: true,
+      actual: true,
+      passed: true
+    });
+    const operations = [
+      { type: 'node.set_active' as const, nodeUuid: 'panel-uuid', active: true },
+      { type: 'node.set_layer' as const, nodeUuid: 'panel-uuid', layer: 1 }
+    ];
+    const invalidOutcomes = [
+      {
+        kind: 'success',
+        executedOps: 1,
+        verification: { passed: true, verifiedAt: '2026-07-30T00:00:00.000Z', items: [passedItem(0), passedItem(1)] }
+      },
+      {
+        kind: 'success',
+        executedOps: 2,
+        verification: { passed: true, verifiedAt: '2026-07-30T00:00:00.000Z', items: [passedItem(0)] }
+      },
+      {
+        kind: 'success',
+        executedOps: 2,
+        verification: { passed: true, verifiedAt: '2026-07-30T00:00:00.000Z', items: [passedItem(0), passedItem(0)] }
+      },
+      {
+        kind: 'success',
+        executedOps: 2,
+        verification: {
+          passed: true,
+          verifiedAt: '2026-07-30T00:00:00.000Z',
+          items: [passedItem(0), { ...passedItem(1), passed: false }]
+        }
+      }
+    ];
+
+    for (const outcome of invalidOutcomes) {
+      const probeClient = new RecordingProbeClient(createRespond({ 'probe.directWrite': outcome }));
+      const { client } = await createHarness(probeClient, { enableWrites: true });
+      const result = await client.callTool({
+        name: 'cocos_batch_write',
+        arguments: { projectId: 'proj1', operations }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain('DIRECT_WRITE_VERIFY_FAILED');
+    }
+  });
+
+  it('cocos_batch_write 复用直写通道并原样转发协议操作', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.directWrite': {
+        kind: 'success',
+        executedOps: 2,
+        verification: {
+          passed: true,
+          verifiedAt: '2026-07-30T00:00:00.000Z',
+          items: [
+            { operationIndex: 0, description: 'active', expected: true, actual: true, passed: true },
+            { operationIndex: 1, description: 'position', expected: 12, actual: 12, passed: true }
+          ]
+        }
+      }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const operations = [
+      { type: 'node.set_active', nodeUuid: 'panel-uuid', active: true },
+      { type: 'node.set_transform', nodeUuid: 'panel-uuid', localTransform: { position: { x: 12, y: 34, z: 0 } } }
+    ];
+
+    const result = await client.callTool({
+      name: 'cocos_batch_write',
+      arguments: { projectId: 'proj1', operations }
+    });
+    expect(result.structuredContent).toMatchObject({ outcome: { executedOps: 2 } });
+    const write = probeClient.requests.at(-1);
+    const payload = write?.payload as { params: { operations: unknown[]; undoGroup: string } };
+    expect(payload.params.operations).toEqual(operations);
+    expect(payload.params.undoGroup).toContain('batch-write');
+  });
+
+  it('cocos_batch_write 的公开 Schema 拒绝 asset.* 与 prefab.* 且不调用直写通道', async () => {
+    for (const operation of [
+      {
+        type: 'asset.delete',
+        assetUrl: 'db://assets/ui/icon.png',
+        expectedAssetUuid: 'image-uuid-1'
+      },
+      {
+        type: 'prefab.delete_asset',
+        assetUrl: 'db://assets/ui/Test.prefab'
+      }
+    ]) {
+      const probeClient = new RecordingProbeClient(createRespond());
+      const { client } = await createHarness(probeClient, { enableWrites: true });
+      const result = await client.callTool({
+        name: 'cocos_batch_write',
+        arguments: { projectId: 'proj1', operations: [operation] }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+    }
+  });
+
+  it('cocos_batch_write 服务层仍以 allowlist 拒绝绕过公开 Schema 的危险操作', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const reportRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-mcp-batch-allowlist-'));
+    temporaryRoots.push(reportRoot);
+    const serviceOptions = { probeClient, reportRoot };
+    const readonlyService = new CocosReadonlyToolService(serviceOptions);
+    const service = new CocosDirectToolService(serviceOptions, readonlyService);
+
+    for (const operation of [
+      {
+        type: 'asset.delete',
+        assetUrl: 'db://assets/ui/icon.png',
+        expectedAssetUuid: 'image-uuid-1'
+      },
+      {
+        type: 'prefab.delete_asset',
+        assetUrl: 'db://assets/ui/Test.prefab'
+      }
+    ]) {
+      await expect(service.batchWrite({
+        projectId: 'proj1',
+        operations: [operation] as never
+      })).rejects.toThrow('BATCH_WRITE_OPERATION_NOT_ALLOWED');
+    }
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('cocos_prefab_create 转发 probe.createPrefab', async () => {

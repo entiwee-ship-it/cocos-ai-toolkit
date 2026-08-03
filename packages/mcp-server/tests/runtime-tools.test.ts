@@ -165,6 +165,21 @@ describe('运行态 MCP 工具（阶段五）', () => {
     }
     const launchTool = writeTools.tools.find((tool) => tool.name === 'cocos_preview_launch');
     expect(launchTool?.annotations?.readOnlyHint).toBe(false);
+    const scenarioTool = writeTools.tools.find((tool) => tool.name === 'cocos_runtime_run_scenario');
+    for (const stepKind of [
+      'launch',
+      'wait-node',
+      'assert-property',
+      'dispatch-input',
+      'instantiate-prefab',
+      'assert-console',
+      'capture',
+      'assert-image-diff',
+      'stop'
+    ]) {
+      expect(scenarioTool?.description).toContain(stepKind);
+    }
+    expect(scenarioTool?.description).toContain('stop(always:true)');
   });
 
   it('cocos_preview_sessions 转发 server.previewSessions', async () => {
@@ -326,12 +341,21 @@ describe('运行态 MCP 工具（阶段五）', () => {
   it('cocos_runtime_run_scenario 校验步骤并返回报告', async () => {
     const probeClient = new RecordingProbeClient(createRuntimeRespond());
     const { client } = await createHarness(probeClient, { enableWrites: true });
+    const steps = [
+      { kind: 'launch' },
+      { kind: 'instantiate-prefab', assetUuid: 'asset-1', parentPath: 'Canvas/LayerUI', x: 0, y: -10 },
+      { kind: 'stop', always: true }
+    ];
 
     const result = await client.callTool({
       name: 'cocos_runtime_run_scenario',
-      arguments: { sessionId: 'preview-1', steps: [{ kind: 'launch' }] }
+      arguments: { sessionId: 'preview-1', steps }
     });
     expect(result.structuredContent).toMatchObject({ passed: true });
+    expect(probeClient.requests.at(-1)).toEqual({
+      method: 'server.runtimeRunScenario',
+      payload: { sessionId: 'preview-1', steps }
+    });
 
     const invalid = await client.callTool({
       name: 'cocos_runtime_run_scenario',

@@ -16,6 +16,15 @@ export interface ScenarioRuntime {
   readProperty(sessionId: string, path: string, componentType: string, property: string): Promise<{ found: boolean; value?: unknown; reason?: string }>;
   /** 派发输入。 */
   dispatchInput(sessionId: string, input: { inputType: string; x?: number; y?: number; key?: string }): Promise<unknown>;
+  /** 在运行时节点下实例化 Prefab。 */
+  instantiatePrefab(sessionId: string, input: {
+    assetUuid: string;
+    parentPath: string;
+    x?: number;
+    y?: number;
+  }): Promise<{ done: boolean; reason?: string; error?: string; [key: string]: unknown }>;
+  /** 关闭 Preview 会话。 */
+  stop(sessionId: string): Promise<{ closed: boolean; [key: string]: unknown }>;
   /** 增量读取 console。 */
   readConsole(sessionId: string, sinceSeq: number): Promise<{ entries: Array<{ level: string; text: string }>; nextSeq: number }>;
   /** 截图并落盘，返回文件路径。 */
@@ -58,29 +67,63 @@ export async function runRuntimeScenario(
   const results: ScenarioStepResult[] = [];
   let sessionId = options.sessionId;
   let aborted = false;
+  let hadFailure = false;
   // Console 游标以场景启动时刻为基准：断言匹配场景运行期间出现的日志，
   // 覆盖"动作同步产生日志"的典型用法（步骤开始前已入缓冲也能匹配）。
   let consoleCursor = 0;
   if (sessionId) {
-    consoleCursor = (await runtime.readConsole(sessionId, 0)).nextSeq;
+    try {
+      consoleCursor = (await runtime.readConsole(sessionId, 0)).nextSeq;
+    } catch (error) {
+      const cleanupFailures: Array<{ index: number; error?: string; actual?: unknown }> = [];
+      for (const [index, step] of steps.entries()) {
+        if (step.kind !== 'stop' || step.always !== true) continue;
+        const cleanup = await executeStep(
+          step,
+          index,
+          runtime,
+          options,
+          () => sessionId,
+          () => undefined,
+          () => consoleCursor
+        );
+        if (!cleanup.passed) {
+          cleanupFailures.push({
+            index,
+            ...(cleanup.error ? { error: cleanup.error } : {}),
+            ...(cleanup.actual !== undefined ? { actual: cleanup.actual } : {})
+          });
+        }
+      }
+      if (cleanupFailures.length) {
+        const baselineMessage = error instanceof Error ? error.message : String(error);
+        throw new Error(`${baselineMessage};SCENARIO_ALWAYS_STOP_FAILED:${JSON.stringify(cleanupFailures)}`);
+      }
+      throw error;
+    }
   }
 
   for (const [index, step] of steps.entries()) {
+    if (aborted && !(step.kind === 'stop' && step.always === true)) {
+      continue;
+    }
     const result = await executeStep(step, index, runtime, options, () => sessionId, (next) => {
       sessionId = next;
-      // 新 launch 的会话缓冲全新，游标归零
+      // 新 launch 的会话缓冲全新；stop 后也清掉旧游标。
       consoleCursor = 0;
     }, () => consoleCursor);
     results.push(result);
-    if (!result.passed && step.onFail !== 'continue') {
-      aborted = true;
-      break;
+    if (!result.passed) {
+      hadFailure = true;
+      if (step.onFail !== 'continue') {
+        aborted = true;
+      }
     }
   }
 
   return ScenarioReportSchema.parse({
     steps: results,
-    passed: !aborted && results.every((result) => result.passed),
+    passed: !hadFailure && results.every((result) => result.passed),
     startedAt,
     finishedAt: now().toISOString()
   });
@@ -92,7 +135,7 @@ async function executeStep(
   runtime: ScenarioRuntime,
   options: RunScenarioOptions,
   readSessionId: () => string | undefined,
-  writeSessionId: (sessionId: string) => void,
+  writeSessionId: (sessionId: string | undefined) => void,
   readConsoleCursor: () => number
 ): Promise<ScenarioStepResult> {
   const base = { index, kind: step.kind as string };
@@ -148,6 +191,24 @@ async function executeStep(
         });
         return { ...base, passed: true, actual: receipt as never };
       }
+      case 'instantiate-prefab': {
+        const sid = requireSessionId(readSessionId());
+        const result = await runtime.instantiatePrefab(sid, {
+          assetUuid: step.assetUuid,
+          parentPath: step.parentPath,
+          ...(step.x !== undefined ? { x: step.x } : {}),
+          ...(step.y !== undefined ? { y: step.y } : {})
+        });
+        return {
+          ...base,
+          passed: result.done === true,
+          expected: { done: true },
+          actual: result,
+          ...(result.done === true ? {} : {
+            error: `INSTANTIATE_PREFAB_FAILED:${result.reason ?? 'unknown'}${result.error ? `:${result.error}` : ''}`
+          })
+        };
+      }
       case 'assert-console': {
         const sid = requireSessionId(readSessionId());
         const timeoutMs = step.timeoutMs ?? options.consoleTimeoutMs ?? 3_000;
@@ -188,6 +249,15 @@ async function executeStep(
           actual: result.diffRatio,
           evidence: result.diffPngPath
         };
+      }
+      case 'stop': {
+        const sid = requireSessionId(readSessionId());
+        const result = await runtime.stop(sid);
+        if (result.closed !== true) {
+          return { ...base, passed: false, expected: { closed: true }, actual: result, error: 'PREVIEW_CLOSE_NOT_CONFIRMED' };
+        }
+        writeSessionId(undefined);
+        return { ...base, passed: true, actual: result };
       }
       default:
         return { ...base, passed: false, error: `UNKNOWN_STEP_KIND:${(step as { kind: string }).kind}` };

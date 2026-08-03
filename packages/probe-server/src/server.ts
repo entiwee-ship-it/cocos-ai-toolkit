@@ -281,16 +281,42 @@ export class ProbeServer {
     }
 
     this.requestRouter.abortAll();
+    const cleanupErrors: string[] = [];
+    let runtimeDisposeFailed = false;
     if (this.options.runtimeDriver) {
-      await this.options.runtimeDriver.dispose().catch(() => undefined);
+      try {
+        await this.options.runtimeDriver.dispose();
+      } catch (error) {
+        runtimeDisposeFailed = true;
+        cleanupErrors.push(`runtime:${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     for (const socket of server.clients) {
-      socket.close();
+      try {
+        socket.close();
+      } catch (error) {
+        cleanupErrors.push(`socket:${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    this.server = null;
+    let serverClosed = false;
+    try {
+      await new Promise<void>((resolve, reject) => server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      }));
+      serverClosed = true;
+    } catch (error) {
+      cleanupErrors.push(`server:${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (serverClosed) {
+      this.server = null;
+    }
     this.sockets.clear();
+    if (cleanupErrors.length) {
+      const code = runtimeDisposeFailed ? 'PROBE_RUNTIME_DISPOSE_FAILED' : 'PROBE_STOP_FAILED';
+      throw new Error(`${code}:${JSON.stringify(cleanupErrors)}`);
+    }
   }
 
   /**
@@ -650,6 +676,16 @@ export class ProbeServer {
         return { found: true, value: result.value };
       },
       dispatchInput: (sessionId, input) => driver.dispatchInput(sessionId, input as never),
+      instantiatePrefab: async (sessionId, input) => driver.evaluate(
+        sessionId,
+        buildRuntimeScript('instantiateRuntimePrefab', {
+          assetUuid: input.assetUuid,
+          parentPath: input.parentPath,
+          ...(input.x !== undefined ? { x: input.x } : {}),
+          ...(input.y !== undefined ? { y: input.y } : {})
+        })
+      ) as Promise<{ done: boolean; reason?: string; error?: string; [key: string]: unknown }>,
+      stop: (sessionId) => driver.close(sessionId),
       readConsole: (sessionId, sinceSeq) => Promise.resolve(driver.readConsole(sessionId, { sinceSeq })),
       capture: async (sessionId, options) => {
         const overlay = options.overlay

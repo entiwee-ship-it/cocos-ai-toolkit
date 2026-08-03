@@ -30,71 +30,66 @@ export const LocalTransformSchema = z.object({
   }
 });
 
-/**
- * 直写架构支持的全部原子写操作。
- * 节点八类、组件七类；每个操作都是一次直写调用内可独立重读验证的最小单元。
- */
-export const WriteOperationSchema = z.discriminatedUnion('type', [
-  z.object({
+const NodeCreateOperationSchema = z.object({
     type: z.literal('node.create'),
     parentNodeUuid: z.string().min(1),
     name: z.string().min(1),
     layer: z.number().optional(),
     active: z.boolean().optional()
-  }),
-  z.object({
+  });
+const NodeDeleteOperationSchema = z.object({
     type: z.literal('node.delete'),
     nodeUuid: z.string().min(1)
-  }),
-  z.object({
+  });
+const NodeRenameOperationSchema = z.object({
     type: z.literal('node.rename'),
     nodeUuid: z.string().min(1),
     name: z.string().min(1)
-  }),
-  z.object({
+  });
+const NodeReparentOperationSchema = z.object({
     type: z.literal('node.reparent'),
     nodeUuid: z.string().min(1),
     newParentUuid: z.string().min(1),
     siblingIndex: z.number().int().optional()
-  }),
-  z.object({
+  });
+const NodeDuplicateOperationSchema = z.object({
     type: z.literal('node.duplicate'),
     nodeUuid: z.string().min(1),
     parentUuid: z.string().min(1).optional(),
     name: z.string().min(1).optional()
-  }),
-  z.object({
+  });
+const NodeSetActiveOperationSchema = z.object({
     type: z.literal('node.set_active'),
     nodeUuid: z.string().min(1),
     active: z.boolean()
-  }),
-  z.object({
+  });
+const NodeSetLayerOperationSchema = z.object({
     type: z.literal('node.set_layer'),
     nodeUuid: z.string().min(1),
     layer: z.number()
-  }),
-  z.object({
+  });
+const NodeSetTransformOperationSchema = z.object({
     type: z.literal('node.set_transform'),
     nodeUuid: z.string().min(1),
     localTransform: LocalTransformSchema
-  }),
-  z.object({
+  });
+const ComponentAddOperationSchema = z.object({
     type: z.literal('component.add'),
     nodeUuid: z.string().min(1),
     componentType: z.string().min(1),
     // 内置组件为 null；自定义脚本组件必须携带脚本资产 uuid，供挂载守卫核对。
     scriptUuid: z.string().min(1).nullable()
-  }),
-  z.object({
+  });
+const ComponentRemoveOperationSchema = z.object({
     type: z.literal('component.remove'),
     componentUuid: z.string().min(1)
-  }),
-  z.object({
+  });
+const ComponentEnableOperationSchema = z.object({
     type: z.literal('component.enable'),
     componentUuid: z.string().min(1),
     enabled: z.boolean()
-  }),
-  z.object({
+  });
+const ComponentSetPropertyOperationSchema = z.object({
     type: z.literal('component.set_property'),
     componentUuid: z.string().min(1),
     // 支持 items[2]、settings.colors[0] 这类嵌套路径。
@@ -102,24 +97,53 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
     value: z.unknown(),
     // 提供时作为乐观锁：写入前实际旧值不一致则拒绝执行。
     expectedOldValue: z.unknown().optional()
-  }),
-  z.object({
+  });
+const ComponentSetReferenceOperationSchema = z.object({
     type: z.literal('component.set_reference'),
     componentUuid: z.string().min(1),
     propertyPath: z.string().min(1),
     reference: z.union([ReferenceSchema, z.array(ReferenceSchema)])
-  }),
-  z.object({
+  });
+const ComponentClearReferenceOperationSchema = z.object({
     type: z.literal('component.clear_reference'),
     componentUuid: z.string().min(1),
     propertyPath: z.string().min(1)
-  }),
-  z.object({
+  });
+const ComponentResizeArrayOperationSchema = z.object({
     type: z.literal('component.resize_array'),
     componentUuid: z.string().min(1),
     propertyPath: z.string().min(1),
     length: z.number().int().nonnegative()
-  }),
+  });
+
+/**
+ * 当前文档内可由公开批量工具直接发送的节点/组件原子写操作。
+ * 资产和 Prefab 语义操作必须走各自的专用入口，不能借 batch 绕过身份校验。
+ */
+export const DocumentWriteOperationSchema = z.discriminatedUnion('type', [
+  NodeCreateOperationSchema,
+  NodeDeleteOperationSchema,
+  NodeRenameOperationSchema,
+  NodeReparentOperationSchema,
+  NodeDuplicateOperationSchema,
+  NodeSetActiveOperationSchema,
+  NodeSetLayerOperationSchema,
+  NodeSetTransformOperationSchema,
+  ComponentAddOperationSchema,
+  ComponentRemoveOperationSchema,
+  ComponentEnableOperationSchema,
+  ComponentSetPropertyOperationSchema,
+  ComponentSetReferenceOperationSchema,
+  ComponentClearReferenceOperationSchema,
+  ComponentResizeArrayOperationSchema
+]);
+
+/**
+ * 直写协议内部支持的全部原子写操作。
+ * 该联合类型供 Bridge/执行器使用，不等于每个公开 MCP 工具都允许全部成员。
+ */
+export const WriteOperationSchema = z.discriminatedUnion('type', [
+  ...DocumentWriteOperationSchema.options,
   z.object({
     type: z.literal('asset.create'),
     assetUrl: z.string().min(1),
@@ -227,4 +251,5 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
 export type Vec3 = z.infer<typeof Vec3Schema>;
 export type Quat = z.infer<typeof QuatSchema>;
 export type LocalTransform = z.infer<typeof LocalTransformSchema>;
+export type DocumentWriteOperation = z.infer<typeof DocumentWriteOperationSchema>;
 export type WriteOperation = z.infer<typeof WriteOperationSchema>;

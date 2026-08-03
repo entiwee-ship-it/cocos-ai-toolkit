@@ -267,12 +267,24 @@ export class RuntimeDriver {
     }
   }
 
-  /** 关闭会话页面并标记 closed（会话记录保留供审计）。 */
+  /** 关闭会话页面和浏览器；任一关闭失败都保留非 closed 状态并显式报错。 */
   async close(sessionId: string): Promise<{ closed: true }> {
     const managed = this.requireSession(sessionId);
     if (managed.session.state !== 'closed') {
-      await managed.page.close().catch(() => undefined);
-      await managed.browser.close().catch(() => undefined);
+      const errors: string[] = [];
+      try {
+        await managed.page.close();
+      } catch (error) {
+        errors.push(`page:${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        await managed.browser.close();
+      } catch (error) {
+        errors.push(`browser:${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (errors.length) {
+        throw new Error(`PREVIEW_CLOSE_FAILED:${JSON.stringify(errors)}`);
+      }
       managed.session.state = 'closed';
     }
     return { closed: true };
@@ -438,11 +450,19 @@ export class RuntimeDriver {
     return { buffer, width: decoded.width, height: decoded.height, actualResolution };
   }
 
-  /** 关闭全部会话与浏览器。 */
+  /** 关闭全部会话与浏览器；逐会话继续清理，任一失败都保留非 closed 状态并汇总报错。 */
   async dispose(): Promise<void> {
-    for (const managed of this.sessions.values()) {
-      await managed.browser.close().catch(() => undefined);
-      managed.session.state = 'closed';
+    const errors: string[] = [];
+    for (const [sessionId, managed] of this.sessions.entries()) {
+      if (managed.session.state === 'closed') continue;
+      try {
+        await this.close(sessionId);
+      } catch (error) {
+        errors.push(`${sessionId}:${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (errors.length) {
+      throw new Error(`PREVIEW_DISPOSE_FAILED:${JSON.stringify(errors)}`);
     }
   }
 

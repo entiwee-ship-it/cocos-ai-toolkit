@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { DirectWriteOutcomeSchema } from '@cocos-ai/protocol';
+import {
+  DocumentWriteOperationSchema,
+  DirectWriteOutcomeSchema,
+  LocalTransformSchema,
+  type DocumentWriteOperation,
+  type LocalTransform,
+  type WriteOperation
+} from '@cocos-ai/protocol';
 import { z } from 'zod';
 import {
   CocosReadonlyToolService,
@@ -18,6 +25,24 @@ const NodeAddressInput = {
   nodeUuid: z.string().min(1).optional(),
   path: z.string().min(1).optional()
 };
+
+const BATCH_WRITE_ALLOWED_OPERATION_TYPES = new Set<DocumentWriteOperation['type']>([
+  'node.create',
+  'node.delete',
+  'node.rename',
+  'node.reparent',
+  'node.duplicate',
+  'node.set_active',
+  'node.set_layer',
+  'node.set_transform',
+  'component.add',
+  'component.remove',
+  'component.enable',
+  'component.set_property',
+  'component.set_reference',
+  'component.clear_reference',
+  'component.resize_array'
+]);
 
 function assertExclusiveNodeAddress(address: NodeAddress, fieldName = 'NODE_ADDRESS'): void {
   const hasUuid = Boolean(address.nodeUuid);
@@ -54,6 +79,7 @@ export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
 
 export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_node_create',
+  'cocos_node_set_transform',
   'cocos_node_reparent',
   'cocos_node_delete',
   'cocos_component_add',
@@ -62,7 +88,8 @@ export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_prefab_save',
   'cocos_prefab_delete',
   'cocos_asset_import',
-  'cocos_asset_refresh'
+  'cocos_asset_refresh',
+  'cocos_batch_write'
 ] as const;
 
 interface ProjectSelector {
@@ -99,8 +126,18 @@ export class CocosDirectToolService {
     return this.readonlyService.searchAssets(input);
   }
 
-  async readHierarchy(input: ProjectSelector & { depth?: number }) {
-    return this.readonlyService.readHierarchy(input);
+  async readHierarchy(input: ProjectSelector & {
+    depth?: number;
+    rootPath?: string;
+    query?: string;
+    fields?: string[];
+    summary?: boolean;
+  }) {
+    assertProjectionFieldsSafe(input.fields);
+    const depth = input.depth ?? (input.rootPath || input.query ? 50 : undefined);
+    const result = await this.readonlyService.readHierarchy({ ...input, ...(depth === undefined ? {} : { depth }) });
+    if (!usesHierarchyProjection(input)) return result;
+    return projectHierarchyResult(result, input);
   }
 
   /** 读取节点详情；提供 componentType 时返回该组件的完整属性 Schema（改属性前看现值）。 */
@@ -109,18 +146,29 @@ export class CocosDirectToolService {
     path?: string;
     componentType?: string;
     includeRaw?: boolean;
+    fields?: string[];
+    propertyPaths?: string[];
+    summary?: boolean;
   }) {
+    assertProjectionFieldsSafe(input.fields);
+    if (input.propertyPaths?.length && !input.componentType) {
+      throw new Error('PROPERTY_PATHS_REQUIRE_COMPONENT_TYPE');
+    }
     const editor = await this.readonlyService.resolveEditor(input);
     const nodeUuid = await this.resolveNodeUuid(editor, input);
     const { node } = await this.readonlyService.readNode({ ...input, uuid: nodeUuid });
-    if (!input.componentType) return { editor, node };
+    if (!input.componentType) {
+      const result = { editor, node };
+      return usesNodeProjection(input) ? projectNodeResult(result, input) : result;
+    }
     const componentUuid = this.resolveComponentUuid(node, input.componentType);
     const component = await this.readonlyService.readComponentSchema({
       ...input,
       uuid: componentUuid,
       includeRaw: input.includeRaw
     });
-    return { editor, nodeUuid, componentUuid, component: component.schema, ...(component.raw !== undefined ? { raw: component.raw } : {}) };
+    const result = { editor, nodeUuid, componentUuid, component: component.schema, ...(component.raw !== undefined ? { raw: component.raw } : {}) };
+    return usesNodeProjection(input) ? projectNodeResult({ ...result, node }, input) : result;
   }
 
   /** 打开 Prefab 并等待编辑器当前文档身份切换到目标 UUID。 */
@@ -163,6 +211,18 @@ export class CocosDirectToolService {
     const editor = await this.readonlyService.resolveEditor(input);
     const nodeUuid = await this.resolveNodeUuid(editor, input);
     return this.directWrite(editor, [{ type: 'node.delete' as const, nodeUuid }], 'node-delete');
+  }
+
+  /** 修改节点局部位置、旋转或缩放；未提供的分量保持原值。 */
+  async setNodeTransform(input: ProjectSelector & NodeAddress & { localTransform: LocalTransform }) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    assertExclusiveNodeAddress(input);
+    const nodeUuid = await this.resolveNodeUuid(editor, input);
+    return this.directWrite(editor, [{
+      type: 'node.set_transform' as const,
+      nodeUuid,
+      localTransform: input.localTransform
+    }], 'node-set-transform');
   }
 
   async addComponent(input: ProjectSelector & NodeAddress & {
@@ -284,12 +344,29 @@ export class CocosDirectToolService {
   }
 
   /**
+   * 一次直写请求执行多项协议操作。它只减少 MCP 往返，不提供事务或回滚；
+   * 任一操作失败时，executedOps 之前的修改可能已经保存。
+   */
+  async batchWrite(input: ProjectSelector & { operations: DocumentWriteOperation[] }) {
+    const blockedTypes = [...new Set(
+      input.operations
+        .map((operation) => operation.type)
+        .filter((type) => !BATCH_WRITE_ALLOWED_OPERATION_TYPES.has(type))
+    )];
+    if (blockedTypes.length) {
+      throw new Error(`BATCH_WRITE_OPERATION_NOT_ALLOWED:${JSON.stringify(blockedTypes)}`);
+    }
+    const editor = await this.readonlyService.resolveEditor(input);
+    return this.directWrite(editor, input.operations, 'batch-write');
+  }
+
+  /**
    * 经直写通道执行一批原子写操作：Scene 写执行器逐操作执行、保存文档并逐项重读验证。
    * 操作级失败或重读不符一律抛错，错误文本携带失败明细。
    */
   private async directWrite(
     editor: EditorSession,
-    operations: Array<Record<string, unknown>>,
+    operations: WriteOperation[],
     undoLabel: string
   ) {
     const raw = await this.readonlyService.requestBridge(editor, 'probe.directWrite', {
@@ -303,10 +380,34 @@ export class CocosDirectToolService {
     }
     const outcome = parsed.data;
     if (outcome.kind === 'operation-failed') {
-      throw new Error(`DIRECT_WRITE_OPERATION_FAILED:${JSON.stringify(outcome.failure)}`);
+      if (!outcome.failure) {
+        throw new Error('DIRECT_WRITE_OUTCOME_INVALID:MISSING_FAILURE');
+      }
+      throw new Error(`DIRECT_WRITE_OPERATION_FAILED:${JSON.stringify({
+        executedOps: outcome.executedOps,
+        failure: outcome.failure,
+        evidence: outcome.evidence ?? {}
+      })}`);
     }
-    if (outcome.verification && !outcome.verification.passed) {
-      throw new Error(`DIRECT_WRITE_VERIFY_FAILED:${JSON.stringify(outcome.verification.items)}`);
+    const verification = outcome.verification;
+    const expectedIndexes = operations.map((_, index) => index);
+    const actualIndexes = verification?.items.map((item) => item.operationIndex).sort((left, right) => left - right) ?? [];
+    const verificationComplete = Boolean(
+      verification
+      && verification.passed
+      && outcome.executedOps === operations.length
+      && verification.items.length === operations.length
+      && verification.items.every((item) => item.passed)
+      && actualIndexes.length === expectedIndexes.length
+      && actualIndexes.every((value, index) => value === expectedIndexes[index])
+    );
+    if (!verificationComplete) {
+      throw new Error(`DIRECT_WRITE_VERIFY_FAILED:${JSON.stringify({
+        expectedOps: operations.length,
+        executedOps: outcome.executedOps,
+        verification: verification ?? null,
+        evidence: outcome.evidence ?? {}
+      })}`);
     }
     return { editor, outcome };
   }
@@ -405,6 +506,350 @@ export class CocosDirectToolService {
   }
 }
 
+interface HierarchyProjectionInput {
+  rootPath?: string;
+  query?: string;
+  fields?: string[];
+  summary?: boolean;
+}
+
+interface NodeProjectionInput {
+  fields?: string[];
+  propertyPaths?: string[];
+  summary?: boolean;
+}
+
+function usesHierarchyProjection(input: HierarchyProjectionInput): boolean {
+  return Boolean(input.rootPath || input.query || input.fields?.length || input.summary === true);
+}
+
+function usesNodeProjection(input: NodeProjectionInput): boolean {
+  return Boolean(input.fields?.length || input.propertyPaths?.length || input.summary === true);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+const RAW_VALUE_FIELDS = new Set(['currentValue', 'defaultValue', 'value', 'expectedOldValue']);
+const FORBIDDEN_FIELD_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+const FIELD_PATH_PATTERN = /^[^.[\]]+(?:(?:\.[^.[\]]+)|(?:\[\d+\]))*$/;
+
+function assertProjectionFieldsSafe(fields?: string[]): void {
+  for (const field of fields ?? []) {
+    const segments = pathSegments(field);
+    if (
+      !FIELD_PATH_PATTERN.test(field)
+      || !segments.length
+      || segments.some((segment) => typeof segment === 'string' && FORBIDDEN_FIELD_SEGMENTS.has(segment))
+    ) {
+      throw new Error(`FIELD_PATH_FORBIDDEN:${field}`);
+    }
+  }
+}
+
+/** 紧凑返回移除结构元数据 raw，但保留 Inspector 业务值内部合法的 raw 字段。 */
+function stripRawDeep(value: unknown, preserveRaw = false): unknown {
+  if (Array.isArray(value)) return value.map((item) => stripRawDeep(item, preserveRaw));
+  if (!value || typeof value !== 'object') return value;
+  const output = Object.create(null) as Record<string, unknown>;
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (key === 'raw' && !preserveRaw) continue;
+    output[key] = stripRawDeep(nested, preserveRaw || RAW_VALUE_FIELDS.has(key));
+  }
+  return output;
+}
+
+function pathSegments(propertyPath: string): Array<string | number> {
+  const segments: Array<string | number> = [];
+  for (const match of propertyPath.matchAll(/([^[.\]]+)|\[(\d+)\]/g)) {
+    if (match[1]) segments.push(match[1]);
+    else if (match[2]) segments.push(Number(match[2]));
+  }
+  return segments;
+}
+
+function readPath(value: unknown, propertyPath: string): { found: boolean; value?: unknown } {
+  let current = value;
+  for (const segment of pathSegments(propertyPath)) {
+    if (typeof segment === 'number') {
+      if (!Array.isArray(current) || segment >= current.length) return { found: false };
+      current = current[segment];
+      continue;
+    }
+    if (
+      !current
+      || typeof current !== 'object'
+      || !Object.prototype.hasOwnProperty.call(current, segment)
+    ) return { found: false };
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return { found: true, value: current };
+}
+
+type ProjectionContainer = Record<string, unknown> | unknown[];
+
+function writePath(target: Record<string, unknown>, propertyPath: string, value: unknown): void {
+  const segments = pathSegments(propertyPath);
+  if (!segments.length) return;
+  if (typeof segments[0] === 'number') throw new Error(`FIELD_PATH_INVALID:${propertyPath}`);
+  let current: ProjectionContainer = target;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (index === segments.length - 1) {
+      if (typeof segment === 'number') {
+        if (!Array.isArray(current)) throw new Error(`FIELD_PATH_INVALID:${propertyPath}`);
+        current[segment] = value;
+      } else {
+        if (Array.isArray(current)) throw new Error(`FIELD_PATH_INVALID:${propertyPath}`);
+        current[segment] = value;
+      }
+      return;
+    }
+    const wantsArray = typeof segments[index + 1] === 'number';
+    if (typeof segment === 'number') {
+      if (!Array.isArray(current)) throw new Error(`FIELD_PATH_INVALID:${propertyPath}`);
+      const next = Object.prototype.hasOwnProperty.call(current, segment) ? current[segment] : undefined;
+      if (!next || typeof next !== 'object' || Array.isArray(next) !== wantsArray) {
+        current[segment] = wantsArray ? [] : Object.create(null);
+      }
+      current = current[segment] as ProjectionContainer;
+    } else {
+      if (Array.isArray(current)) throw new Error(`FIELD_PATH_INVALID:${propertyPath}`);
+      const next = Object.prototype.hasOwnProperty.call(current, segment) ? current[segment] : undefined;
+      if (!next || typeof next !== 'object' || Array.isArray(next) !== wantsArray) {
+        current[segment] = wantsArray ? [] : Object.create(null);
+      }
+      current = current[segment] as ProjectionContainer;
+    }
+  }
+}
+
+function pickFields(value: Record<string, unknown>, fields: string[], always: Record<string, unknown> = {}): Record<string, unknown> {
+  const output: Record<string, unknown> = { ...always };
+  for (const field of fields) {
+    const selected = readPath(value, field);
+    const preserveRaw = pathSegments(field).some((segment) => (
+      typeof segment === 'string' && RAW_VALUE_FIELDS.has(segment)
+    ));
+    if (selected.found) writePath(output, field, stripRawDeep(selected.value, preserveRaw));
+  }
+  return output;
+}
+
+function componentLabel(component: unknown): string {
+  const record = asRecord(component);
+  const klass = asRecord(record.class);
+  return String(klass.className || klass.typeId || record.type || record.name || '');
+}
+
+function compactHierarchyComponent(component: unknown): unknown {
+  const record = asRecord(stripRawDeep(component));
+  return {
+    ...(record.identity !== undefined ? { identity: record.identity } : {}),
+    ...(record.class !== undefined ? { class: record.class } : {}),
+    ...(record.enabled !== undefined ? { enabled: record.enabled } : {})
+  };
+}
+
+interface FlatHierarchyNode {
+  node: Record<string, unknown>;
+  path: string;
+}
+
+function flattenHierarchy(root: unknown, parentPath = ''): FlatHierarchyNode[] {
+  const record = asRecord(root);
+  if (!Object.keys(record).length) return [];
+  const name = typeof record.name === 'string' ? record.name : '';
+  const declaredPath = typeof record.path === 'string' ? record.path.replace(/^\/+/, '') : '';
+  const computedPath = parentPath ? `${parentPath}/${name}` : name;
+  const nodePath = declaredPath || computedPath;
+  const output: FlatHierarchyNode[] = [{ node: record, path: nodePath }];
+  for (const child of Array.isArray(record.children) ? record.children : []) {
+    output.push(...flattenHierarchy(child, nodePath));
+  }
+  return output;
+}
+
+function hierarchyNodeMatches(entry: FlatHierarchyNode, query: string): boolean {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted) return true;
+  const components = Array.isArray(entry.node.components) ? entry.node.components : [];
+  return entry.path.toLowerCase().includes(wanted)
+    || String(entry.node.name || '').toLowerCase().includes(wanted)
+    || components.some((component) => componentLabel(component).toLowerCase().includes(wanted));
+}
+
+function compactHierarchyNode(entry: FlatHierarchyNode, fields?: string[]): Record<string, unknown> {
+  const clean = asRecord(stripRawDeep(entry.node));
+  clean.path = entry.path;
+  if (fields?.length) return pickFields(clean, fields, { path: entry.path });
+  const components = Array.isArray(clean.components) ? clean.components : [];
+  return {
+    ...(clean.identity !== undefined ? { identity: clean.identity } : {}),
+    ...(clean.name !== undefined ? { name: clean.name } : {}),
+    path: entry.path,
+    ...(clean.active !== undefined ? { active: clean.active } : {}),
+    ...(clean.layer !== undefined ? { layer: clean.layer } : {}),
+    components: components.map(compactHierarchyComponent)
+  };
+}
+
+function projectHierarchyResult(
+  result: { editor: EditorSession; hierarchy: unknown },
+  input: HierarchyProjectionInput
+) {
+  const allNodes = flattenHierarchy(readHierarchyRoot(result.hierarchy));
+  let scopedNodes = allNodes;
+  let resolvedRootPath = allNodes[0]?.path || '';
+  if (input.rootPath) {
+    const wanted = input.rootPath.replace(/^\/+/, '');
+    const roots = allNodes.filter((entry) => entry.path === wanted || entry.path.endsWith(`/${wanted}`));
+    if (roots.length === 0) {
+      throw new Error(`HIERARCHY_ROOT_NOT_FOUND:${input.rootPath}:available=${JSON.stringify(allNodes.slice(0, 30).map((entry) => entry.path))}`);
+    }
+    if (roots.length > 1) {
+      throw new Error(`HIERARCHY_ROOT_AMBIGUOUS:${input.rootPath}:matches=${JSON.stringify(roots.map((entry) => entry.path))}`);
+    }
+    resolvedRootPath = roots[0].path;
+    scopedNodes = allNodes.filter((entry) => entry.path === resolvedRootPath || entry.path.startsWith(`${resolvedRootPath}/`));
+  }
+  const matchedNodes = input.query
+    ? scopedNodes.filter((entry) => hierarchyNodeMatches(entry, input.query!))
+    : scopedNodes;
+  const componentCount = scopedNodes.reduce(
+    (total, entry) => total + (Array.isArray(entry.node.components) ? entry.node.components.length : 0),
+    0
+  );
+  const hierarchy = {
+    rootPath: resolvedRootPath,
+    query: input.query || null,
+    fields: input.fields || null,
+    summary: {
+      totalNodeCount: allNodes.length,
+      scopedNodeCount: scopedNodes.length,
+      matchedNodeCount: matchedNodes.length,
+      componentCount
+    },
+    ...(
+      input.summary === true && !input.rootPath && !input.query && !input.fields?.length
+        ? {}
+        : { nodes: matchedNodes.map((entry) => compactHierarchyNode(entry, input.fields)) }
+    )
+  };
+  return stripRawDeep({ editor: result.editor, hierarchy });
+}
+
+function unwrapData(value: unknown): Record<string, unknown> {
+  const record = asRecord(value);
+  return asRecord(record.data ?? value);
+}
+
+function compactNodeData(node: Record<string, unknown>, fields?: string[]): Record<string, unknown> {
+  const clean = asRecord(stripRawDeep(node));
+  if (fields?.length) return pickFields(clean, fields);
+  const components = Array.isArray(clean.components) ? clean.components : [];
+  return {
+    ...(clean.identity !== undefined ? { identity: clean.identity } : {}),
+    ...(clean.name !== undefined ? { name: clean.name } : {}),
+    ...(clean.type !== undefined ? { type: clean.type } : {}),
+    ...(clean.active !== undefined ? { active: clean.active } : {}),
+    ...(clean.layer !== undefined ? { layer: clean.layer } : {}),
+    ...(clean.siblingIndex !== undefined ? { siblingIndex: clean.siblingIndex } : {}),
+    ...(clean.parentUuid !== undefined ? { parentUuid: clean.parentUuid } : {}),
+    ...(clean.childUuids !== undefined ? { childUuids: clean.childUuids } : {}),
+    ...(clean.transform !== undefined ? { transform: clean.transform } : {}),
+    components: components.map(compactHierarchyComponent),
+    ...(clean.unresolved !== undefined ? { unresolved: clean.unresolved } : {})
+  };
+}
+
+function compactPropertyDescriptor(property: unknown): Record<string, unknown> {
+  const record = asRecord(stripRawDeep(property));
+  return {
+    propertyPath: record.propertyPath,
+    currentValue: record.currentValue,
+    declaredType: record.declaredType,
+    actualType: record.actualType,
+    valueKind: record.valueKind,
+    readonly: record.readonly,
+    visible: record.visible,
+    references: record.references
+  };
+}
+
+function compactComponentSchema(component: unknown, propertyPaths?: string[]): Record<string, unknown> {
+  const clean = asRecord(stripRawDeep(component));
+  const properties = Array.isArray(clean.properties) ? clean.properties : [];
+  let selected = properties;
+  if (propertyPaths?.length) {
+    const byPath = new Map(properties.map((property) => [String(asRecord(property).propertyPath || ''), property]));
+    const missing = propertyPaths.filter((propertyPath) => !byPath.has(propertyPath));
+    if (missing.length) {
+      throw new Error(`PROPERTY_PATH_NOT_FOUND:${JSON.stringify(missing)}:available=${JSON.stringify(Array.from(byPath.keys()).filter(Boolean).sort())}`);
+    }
+    selected = propertyPaths.map((propertyPath) => byPath.get(propertyPath));
+  } else {
+    selected = [];
+  }
+  return {
+    className: clean.className,
+    qualifiedName: clean.qualifiedName,
+    typeId: clean.typeId,
+    scriptUuid: clean.scriptUuid,
+    scriptPath: clean.scriptPath,
+    componentUuid: clean.componentUuid,
+    nodeUuid: clean.nodeUuid,
+    nodePath: clean.nodePath,
+    propertyCount: properties.length,
+    ...(propertyPaths?.length ? { properties: selected.map(compactPropertyDescriptor) } : {})
+  };
+}
+
+function projectNodeResult(
+  result: {
+    editor: EditorSession;
+    node: unknown;
+    nodeUuid?: string;
+    componentUuid?: string;
+    component?: unknown;
+    raw?: unknown;
+  },
+  input: NodeProjectionInput
+) {
+  const node = unwrapData(result.node);
+  const components = Array.isArray(node.components) ? node.components : [];
+  const summary = {
+    name: node.name ?? null,
+    nodeUuid: result.nodeUuid || asRecord(node.identity).objectUuid || null,
+    childCount: Array.isArray(node.childUuids)
+      ? node.childUuids.length
+      : (Array.isArray(node.children) ? node.children.length : 0),
+    componentCount: components.length,
+    componentTypes: components.map(componentLabel).filter(Boolean),
+    unresolvedCount: Array.isArray(node.unresolved) ? node.unresolved.length : 0,
+    ...(result.component !== undefined ? {
+      selectedComponent: String(asRecord(result.component).className || asRecord(result.component).qualifiedName || ''),
+      selectedPropertyCount: Array.isArray(asRecord(result.component).properties)
+        ? (asRecord(result.component).properties as unknown[]).length
+        : 0
+    } : {})
+  };
+  const summaryOnly = input.summary === true && !input.fields?.length && !input.propertyPaths?.length;
+  return stripRawDeep({
+    editor: result.editor,
+    nodeUuid: result.nodeUuid || asRecord(node.identity).objectUuid || null,
+    ...(result.componentUuid ? { componentUuid: result.componentUuid } : {}),
+    summary,
+    ...(!summaryOnly ? { node: compactNodeData(node, input.fields) } : {}),
+    ...(result.component !== undefined && !summaryOnly
+      ? { component: compactComponentSchema(result.component, input.propertyPaths) }
+      : {})
+  });
+}
+
 /** probe.hierarchy 响应信封解包：优先 data 字段，兼容无信封形状。 */
 function readHierarchyRoot(hierarchy: unknown): unknown {
   const record = hierarchy && typeof hierarchy === 'object' && !Array.isArray(hierarchy)
@@ -455,22 +900,29 @@ export function registerCocosDirectReadonlyTools(
   }, async (input) => toToolResult(await service.searchAssets(input)));
 
   server.registerTool('cocos_hierarchy', {
-    description: '读取当前文档节点树（uuid、名称、路径、组件清单），供寻址；depth 默认 4，最大 50。',
+    description: '读取当前文档节点树；缺省保持完整旧返回，rootPath/query/fields/summary 可启用紧凑投影。紧凑结果去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw。depth 默认 4，最大 50。',
     inputSchema: {
       ...ProjectSelectorInput,
-      depth: z.number().int().min(1).max(50).optional()
+      depth: z.number().int().min(1).max(50).optional(),
+      rootPath: z.string().min(1).optional(),
+      query: z.string().min(1).optional(),
+      fields: z.array(z.string().min(1)).min(1).optional(),
+      summary: z.boolean().optional()
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(await service.readHierarchy(input)));
 
   server.registerTool('cocos_node_read', {
-    description: '按 nodeUuid 或 path 读取节点详情；提供 componentType 时返回该组件完整属性（改属性前看现值）。',
+    description: '按 nodeUuid 或 path 读取节点详情；缺省保持完整旧返回。fields/propertyPaths/summary 启用紧凑投影：去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw；propertyPaths 必须配合 componentType。',
     inputSchema: {
       ...ProjectSelectorInput,
       ...NodeAddressInput,
       componentType: z.string().min(1).optional(),
-      includeRaw: z.boolean().optional()
+      includeRaw: z.boolean().optional(),
+      fields: z.array(z.string().min(1)).min(1).optional(),
+      propertyPaths: z.array(z.string().min(1)).min(1).optional(),
+      summary: z.boolean().optional()
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
@@ -505,6 +957,17 @@ export function registerCocosDirectWriteTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.createNode(input)));
+
+  server.registerTool('cocos_node_set_transform', {
+    description: '修改节点局部 position/rotation/scale 并保存回读；nodeUuid 或 path 二选一，至少提供一个 transform 分量。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      ...NodeAddressInput,
+      localTransform: LocalTransformSchema
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.setNodeTransform(input)));
 
   server.registerTool('cocos_node_reparent', {
     description: '把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex。',
@@ -604,6 +1067,16 @@ export function registerCocosDirectWriteTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.refreshAsset(input)));
+
+  server.registerTool('cocos_batch_write', {
+    description: '一次请求仅执行多项 node.* / component.* 写操作并保存回读；asset.* / prefab.* 不在公开输入契约内。只减少往返，不提供事务或回滚，失败时 executedOps 之前的修改可能已生效。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      operations: z.array(DocumentWriteOperationSchema).min(1)
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: DELETE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.batchWrite(input)));
 }
 
 function toToolResult(value: unknown) {

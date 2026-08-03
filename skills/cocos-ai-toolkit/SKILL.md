@@ -28,6 +28,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | Intent | Tool |
 | --- | --- |
 | 创建节点 | `cocos_node_create`（parentUuid 或 parentPath，二选一） |
+| 修改节点局部变换 | `cocos_node_set_transform`（nodeUuid 或 path 二选一；position/rotation/scale 至少一项） |
 | 删除节点及子树 | `cocos_node_delete` |
 | 迁移节点 | `cocos_node_reparent`（源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex） |
 | 挂载组件 | `cocos_component_add`（自定义脚本组件必须给 scriptUuid，用 asset_search 查） |
@@ -37,6 +38,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | 删除 Prefab | `cocos_prefab_delete`（不可回滚、不检查引用，删前自行确认） |
 | 导入外部文件 | `cocos_asset_import`（图片/音频等，复制进 assets 并导入） |
 | 重导入+触发编译 | `cocos_asset_refresh`（脚本改动后调用） |
+| 一次直发多项写操作 | `cocos_batch_write`（仅接受 `node.*` 与 `component.*`；`asset.*` / `prefab.*` 会以 `BATCH_WRITE_OPERATION_NOT_ALLOWED` 拒绝；只减少往返，不是事务、无回滚，失败时已执行项可能已生效） |
 
 节点寻址同时接受 `nodeUuid` 或 `path`（如 `Root/Panel/Button`）；组件类型兼容 `cc.` 前缀（`Label` = `cc.Label`）。
 
@@ -45,13 +47,13 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 - 直写没有事务和回滚：失败即停，已生效修改保留。误操作只能用 git 还原，动手前确认目标工作区状态。
 - Creator 对部分写入会静默不生效（典型：预制体编辑模式下嵌套实例内部）。工具写完会逐项重读，重读不符报 `DIRECT_WRITE_VERIFY_FAILED`——看到这个错不要当成已写入，换路径（如打开内层 Prefab 直接改）再写。
 - 运行期节点/组件 UUID 每次重开文档都会变，禁止缓存；每个编辑会话内现取 hierarchy。
-- 连续多处修改时按"先读后写、逐项确认"推进；每次调用都是完整落盘，不需要也不存在批量暂存。
+- 连续多处修改时按"先读后写、逐项确认"推进；`cocos_batch_write` 仅接受 `node.*` 与 `component.*` 操作，是单次请求直发多项操作，不是批量暂存、事务或回滚。
 - 错误码都带下一步指引：`NODE_NOT_FOUND` 重取 hierarchy、`COMPONENT_NOT_FOUND` 会附可用组件清单、`ASSET_ALREADY_EXISTS` 换 URL、`PREFAB_OPEN_NOT_READY` 核对 UUID 重试。
 
 ## 运行态工具
 
 只读组：`cocos_preview_sessions`、`cocos_runtime_get_hierarchy`、`cocos_runtime_inspect_component`、`cocos_runtime_get_console`、`cocos_runtime_watch_property`、`cocos_runtime_capture`（Game 视图截图，支持多分辨率、裁剪、节点边界叠加）。
 
-动作组（--enable-writes）：`cocos_preview_launch/stop`、`cocos_runtime_invoke_method`、`cocos_runtime_sample_window`、`cocos_runtime_dispatch_input`（坐标是画布 CSS 像素）、`cocos_runtime_instantiate_prefab`、`cocos_runtime_run_scenario`（launch/wait/assert/input/capture 编排）。
+动作组（--enable-writes）：`cocos_preview_launch/stop`、`cocos_runtime_invoke_method`、`cocos_runtime_sample_window`、`cocos_runtime_dispatch_input`（坐标是画布 CSS 像素）、`cocos_runtime_instantiate_prefab`、`cocos_runtime_run_scenario`。Scenario 精确步骤为 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；用 `stop(always:true)` 确保前序失败后仍关闭 Preview。
 
 视觉结果仅作辅助证据；结构化状态以 Creator 编辑态重读为准。

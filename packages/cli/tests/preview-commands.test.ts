@@ -128,10 +128,16 @@ describe('preview 命令解析（阶段五）', () => {
   it('runtime-scenario 解析目标与步骤 JSON', () => {
     const steps = JSON.stringify([
       { kind: 'launch' },
-      { kind: 'assert-property', path: 'Canvas/btn', property: 'cc.Button.interactable', expected: true }
+      { kind: 'instantiate-prefab', assetUuid: 'asset-1', parentPath: 'Canvas/LayerUI' },
+      { kind: 'assert-property', path: 'Canvas/btn', property: 'cc.Button.interactable', expected: true },
+      { kind: 'stop', always: true }
     ]);
     expect(parseCommand(['runtime-scenario', '--session-id', 's1', '--steps', steps]))
-      .toMatchObject({ command: 'runtime-scenario', sessionId: 's1', steps: [{ kind: 'launch' }, { kind: 'assert-property' }] });
+      .toMatchObject({
+        command: 'runtime-scenario',
+        sessionId: 's1',
+        steps: [{ kind: 'launch' }, { kind: 'instantiate-prefab' }, { kind: 'assert-property' }, { kind: 'stop', always: true }]
+      });
     expect(parseCommand(['runtime-scenario', '--project-id', 'p1', '--editor-instance-id', 'e1', '--steps', steps]))
       .toMatchObject({ projectId: 'p1', editorInstanceId: 'e1' });
     expect(() => parseCommand(['runtime-scenario', '--steps', steps])).toThrow('SCENARIO_TARGET_REQUIRED');

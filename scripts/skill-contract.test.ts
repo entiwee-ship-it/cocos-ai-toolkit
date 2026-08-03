@@ -2,11 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 const skillPath = new URL('../skills/cocos-ai-toolkit/SKILL.md', import.meta.url);
+const readmePath = new URL('../README.md', import.meta.url);
 
 const EXPECTED_TOOL_NAMES = [
   'cocos_asset_import',
   'cocos_asset_refresh',
   'cocos_asset_search',
+  'cocos_batch_write',
   'cocos_component_add',
   'cocos_component_set_property',
   'cocos_editor_list',
@@ -15,6 +17,7 @@ const EXPECTED_TOOL_NAMES = [
   'cocos_node_delete',
   'cocos_node_read',
   'cocos_node_reparent',
+  'cocos_node_set_transform',
   'cocos_prefab_create',
   'cocos_prefab_delete',
   'cocos_prefab_open',
@@ -35,7 +38,7 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 describe('Cocos AI Toolkit 技能契约', () => {
-  it('教授直写档全部二十八个工具，且不含已移除的旧工具', async () => {
+  it('教授直写档全部三十个工具，且不含已移除的旧工具', async () => {
     const skill = await readFile(skillPath, 'utf8');
     const names = [...new Set(skill.match(/\bcocos_[a-z0-9_]+\b/g) ?? [])].sort();
     expect(names).toEqual(EXPECTED_TOOL_NAMES);
@@ -62,6 +65,39 @@ describe('Cocos AI Toolkit 技能契约', () => {
     expect(skill).toContain('停下并报告阻塞');
     expect(skill).toContain('直写没有事务和回滚');
     expect(skill).toContain('DIRECT_WRITE_VERIFY_FAILED');
+    expect(skill).toContain('不是批量暂存、事务或回滚');
+  });
+
+  it('技能和 README 都明确 batch 只允许节点与组件操作', async () => {
+    const [skill, readme] = await Promise.all([
+      readFile(skillPath, 'utf8'),
+      readFile(readmePath, 'utf8')
+    ]);
+    for (const document of [skill, readme]) {
+      expect(document).toContain('`node.*`');
+      expect(document).toContain('`component.*`');
+      expect(document).toContain('`asset.*`');
+      expect(document).toContain('`prefab.*`');
+    }
+    expect(skill).toContain('BATCH_WRITE_OPERATION_NOT_ALLOWED');
+  });
+
+  it('列出全部 Scenario 步骤并说明 always-stop 清理语义', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    for (const step of [
+      'launch',
+      'wait-node',
+      'assert-property',
+      'dispatch-input',
+      'instantiate-prefab',
+      'assert-console',
+      'capture',
+      'assert-image-diff',
+      'stop'
+    ]) {
+      expect(skill).toContain(`\`${step}\``);
+    }
+    expect(skill).toContain('`stop(always:true)`');
   });
 
   it('描述覆盖中英文 Prefab 创建、查看、编辑和删除触发词', async () => {

@@ -250,6 +250,76 @@ describe('RuntimeDriver', () => {
     await driver.dispose();
   });
 
+  it('close 在页面或浏览器关闭失败时显式报错且不伪造 closed', async () => {
+    for (const failure of ['page', 'browser'] as const) {
+      const { page } = createFakePage();
+      const browser = createFakeBrowser(page);
+      if (failure === 'page') {
+        page.close = async () => {
+          throw new Error('page close failed');
+        };
+      } else {
+        browser.close = async () => {
+          throw new Error('browser close failed');
+        };
+      }
+      const sessionId = `close-failure-${failure}`;
+      const driver = new RuntimeDriver({
+        launcher: async () => browser,
+        createSessionId: () => sessionId
+      });
+      await driver.launch({ projectId: 'proj1', url: 'http://192.168.1.23:7457/' });
+
+      await expect(driver.close(sessionId)).rejects.toThrow('PREVIEW_CLOSE_FAILED');
+      expect(driver.get(sessionId).state).not.toBe('closed');
+      await driver.dispose().catch(() => undefined);
+    }
+  });
+
+  it('close 会聚合页面和浏览器的双重关闭错误', async () => {
+    const { page } = createFakePage();
+    page.close = async () => {
+      throw new Error('page close failed');
+    };
+    const browser = createFakeBrowser(page);
+    browser.close = async () => {
+      throw new Error('browser close failed');
+    };
+    const driver = new RuntimeDriver({
+      launcher: async () => browser,
+      createSessionId: () => 'close-double-failure'
+    });
+    await driver.launch({ projectId: 'proj1', url: 'http://192.168.1.23:7457/' });
+
+    await expect(driver.close('close-double-failure')).rejects.toThrow(/PREVIEW_CLOSE_FAILED:.*page:.*browser:/);
+    expect(driver.get('close-double-failure').state).not.toBe('closed');
+    await driver.dispose().catch(() => undefined);
+  });
+
+  it('dispose 会继续关闭其他会话，汇总失败且不伪造失败会话为 closed', async () => {
+    const first = createFakePage();
+    const second = createFakePage();
+    const firstBrowser = createFakeBrowser(first.page);
+    const secondBrowser = createFakeBrowser(second.page);
+    firstBrowser.close = async () => {
+      throw new Error('browser close failed');
+    };
+    const browsers = [firstBrowser, secondBrowser];
+    const sessionIds = ['dispose-failure', 'dispose-success'];
+    const driver = new RuntimeDriver({
+      launcher: async () => browsers.shift()!,
+      createSessionId: () => sessionIds.shift()!
+    });
+    await driver.launch({ projectId: 'proj1', url: 'http://192.168.1.23:7457/' });
+    await driver.launch({ projectId: 'proj1', url: 'http://192.168.1.23:7457/' });
+
+    await expect(driver.dispose()).rejects.toThrow(/PREVIEW_DISPOSE_FAILED:.*dispose-failure:.*browser close failed/);
+    expect(driver.get('dispose-failure').state).not.toBe('closed');
+    expect(driver.get('dispose-success').state).toBe('closed');
+    expect(second.state.closed).toBe(true);
+    await driver.dispose().catch(() => undefined);
+  });
+
   it('页面异常断开时会话标记 lost 并拒绝读写', async () => {
     const { page, state } = createFakePage();
     const driver = new RuntimeDriver({

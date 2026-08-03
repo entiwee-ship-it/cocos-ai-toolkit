@@ -507,7 +507,7 @@ export function registerCocosRuntimeGatedTools(
   }, async (input) => toToolResult(await service.instantiateRuntimePrefab(input)));
 
   server.registerTool('cocos_runtime_run_scenario', {
-    description: '执行 launch/wait/assert/input/capture 场景并产出逐项证据；SESSION_REQUIRED/LOST 时传有效 sessionId 或先 launch 后重跑。',
+    description: '按 launch、wait-node、assert-property、dispatch-input、instantiate-prefab、assert-console、capture、assert-image-diff、stop 九类步骤执行场景并产出逐项证据；stop(always:true) 会在前序步骤失败后继续清理 Preview。SESSION_REQUIRED/LOST 时传有效 sessionId 或先 launch 后重跑。',
     inputSchema: {
       sessionId: zod.string().min(1).optional(),
       projectId: zod.string().min(1).optional(),
