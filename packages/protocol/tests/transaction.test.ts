@@ -275,6 +275,21 @@ describe('DirectWriteOutcomeSchema', () => {
     })).toBeTruthy();
   });
 
+  it('接受保留已执行证据的未知结果', () => {
+    expect(DirectWriteOutcomeSchema.parse({
+      kind: 'unknown',
+      executedOps: 1,
+      failure: {
+        code: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+        message: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+        operationIndex: null,
+        stage: 'unknown',
+        nextAction: '先重读当前文档状态，确认前不要重试写入。'
+      },
+      evidence: [{ operation: { type: 'node.rename' } }]
+    })).toBeTruthy();
+  });
+
   it('拒绝未知结果类型', () => {
     expect(() => DirectWriteOutcomeSchema.parse({ kind: 'half-done', executedOps: 0 })).toThrow();
   });

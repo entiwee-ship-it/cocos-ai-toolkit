@@ -48,6 +48,33 @@ async function startTestServer(
 }
 
 describe('ProbeClient shared behavior', () => {
+  it('配置 session token 时在 WebSocket 握手发送 Bearer header', async () => {
+    let authorization: string | undefined;
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    server.on('connection', (socket, request) => {
+      authorization = request.headers.authorization;
+      socket.on('message', (raw) => {
+        const message = JSON.parse(raw.toString()) as ClientMessage;
+        if (message.method === 'client.hello') {
+          socket.send(JSON.stringify({
+            type: 'response', correlationId: 'client.hello', ok: true, payload: {}
+          }));
+        }
+      });
+    });
+    const port = (server.address() as AddressInfo).port;
+    const client = new ProbeClient(`ws://127.0.0.1:${port}`, 1000, undefined, 500, 10000, 'secret-token');
+
+    try {
+      await client.connect();
+      expect(authorization).toBe('Bearer secret-token');
+    } finally {
+      await client.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('首次握手后断线会自动重连，并让新请求等待新握手完成', async () => {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>((resolve) => server.once('listening', resolve));

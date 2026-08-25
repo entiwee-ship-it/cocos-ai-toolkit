@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const updaterPath = new URL('./update-runtime.ps1', import.meta.url);
+const installerPath = new URL('./install-bridge.ps1', import.meta.url);
 const cleanerPath = new URL('./clean-dist.mjs', import.meta.url);
 const rootPackagePath = new URL('../package.json', import.meta.url);
 const readmePath = new URL('../README.md', import.meta.url);
@@ -20,6 +21,28 @@ describe('运行工作树同步合同', () => {
     expect(updater).not.toContain("branch', '--set-upstream-to");
     expect(readme).toContain('detached HEAD');
     expect(readme).not.toContain('本地 `runtime` 分支');
+  });
+
+  it('安装示例与隔离 Worktree 安全边界一致', async () => {
+    const installer = await readFile(installerPath, 'utf8');
+    const readme = await readFile(readmePath, 'utf8');
+
+    expect(readme).not.toContain("-ProjectPath 'E:/xile-workspace/qyProject/xy-client'");
+    expect(readme).toContain("-ProjectPath 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe'");
+    expect(readme).toContain("-ToolkitPath 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0'");
+    expect(installer).toContain('[string]$WorktreeRoot');
+    expect(installer).not.toContain('$realProject');
+  });
+
+  it('更新失败会恢复旧提交和旧 Probe，并以 Ready 与 WebSocket 请求作为健康门禁', async () => {
+    const updater = await readFile(updaterPath, 'utf8');
+
+    expect(updater).toContain("Invoke-Git @('checkout', '--detach', $old)");
+    expect(updater).toContain('probe-server.ready');
+    expect(updater).toContain("'editors'");
+    expect(updater).toContain('更新失败，已恢复旧运行时');
+    expect(updater).toContain('回滚失败');
+    expect(updater).toContain('$normalizedEntry');
   });
 
   it('每次构建前清空所有 workspace 的旧 dist 产物', async () => {

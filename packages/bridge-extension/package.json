@@ -36,11 +36,6 @@
           "probe-asset-index"
         ]
       },
-      "probe-document-snapshot": {
-        "methods": [
-          "probe-document-snapshot"
-        ]
-      },
       "probe-hierarchy": {
         "methods": [
           "probe-hierarchy"
@@ -59,31 +54,6 @@
       "probe-prefab": {
         "methods": [
           "probe-prefab"
-        ]
-      },
-      "probe-write-prepare": {
-        "methods": [
-          "probe-write-prepare"
-        ]
-      },
-      "probe-write-confirm": {
-        "methods": [
-          "probe-write-confirm"
-        ]
-      },
-      "probe-transaction-status": {
-        "methods": [
-          "probe-transaction-status"
-        ]
-      },
-      "probe-transaction-list": {
-        "methods": [
-          "probe-transaction-list"
-        ]
-      },
-      "probe-transaction-rollback": {
-        "methods": [
-          "probe-transaction-rollback"
         ]
       }
     }

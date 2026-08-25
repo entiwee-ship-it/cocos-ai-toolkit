@@ -30,6 +30,7 @@ export interface McpRuntimeConfig {
   reportRoot: string;
   enableWrites: boolean;
   requestTimeoutMs: number;
+  sessionToken: string | undefined;
 }
 
 /**
@@ -50,7 +51,8 @@ export function readMcpRuntimeConfig(
     serverUrl: environment.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL,
     reportRoot: resolve(environment.COCOS_AI_MCP_REPORT_ROOT ?? DEFAULT_REPORT_ROOT),
     enableWrites: readEnableWrites(argv),
-    requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_PROBE_TIMEOUT_MS)
+    requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_PROBE_TIMEOUT_MS),
+    sessionToken: environment.COCOS_AI_SESSION_TOKEN || undefined
   };
 }
 
@@ -110,7 +112,14 @@ export async function runMcpServer(
   argv: readonly string[] = process.argv.slice(2)
 ): Promise<McpRuntime> {
   const config = readMcpRuntimeConfig(environment, argv);
-  const probeClient = new ProbeClient(config.serverUrl, config.requestTimeoutMs);
+  const probeClient = new ProbeClient(
+    config.serverUrl,
+    config.requestTimeoutMs,
+    undefined,
+    500,
+    10_000,
+    config.sessionToken
+  );
   const server = createCocosMcpServer(
     { probeClient, reportRoot: config.reportRoot },
     { enableWrites: config.enableWrites }

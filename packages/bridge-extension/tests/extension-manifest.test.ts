@@ -7,10 +7,23 @@ describe('bridge extension manifest', () => {
       readFileSync(new URL('../package.json', import.meta.url), 'utf8')
     ) as {
       main?: string;
-      contributions?: { scene?: { script?: string } };
+      contributions?: {
+        scene?: { script?: string };
+        messages?: Record<string, unknown>;
+      };
     };
 
     expect(manifest.main).toBe('./dist/main.js');
     expect(manifest.contributions?.scene?.script).toBe('./dist/scene.js');
+    for (const removed of [
+      'probe-document-snapshot',
+      'probe-write-prepare',
+      'probe-write-confirm',
+      'probe-transaction-status',
+      'probe-transaction-list',
+      'probe-transaction-rollback'
+    ]) {
+      expect(manifest.contributions?.messages).not.toHaveProperty(removed);
+    }
   });
 });

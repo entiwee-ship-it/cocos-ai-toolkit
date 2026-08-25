@@ -83,8 +83,8 @@ describe('node.reparent', () => {
     );
 
     expect(dependencies.calls).toContain('reparentNode:node-2:parent-2:0');
-    expect(result.before).toMatchObject({ parentUuid: 'parent-1' });
-    expect(result.after).toMatchObject({ parentUuid: 'parent-2' });
+    expect(result.before).toMatchObject({ parentUuid: 'parent-1', stablePath: '/parent-1/node-2' });
+    expect(result.after).toMatchObject({ parentUuid: 'parent-2', stablePath: '/parent-2/node-2' });
     expect(result.inverse).toEqual([{ type: 'node.reparent', nodeUuid: 'node-2', newParentUuid: 'parent-1' }]);
   });
 
@@ -288,7 +288,7 @@ function createDependencies(options: {
         throw new ProbeError('NODE_PARENT_NOT_FOUND', { parentNodeUuid: newParentUuid });
       }
       const info = nodes.get(uuid);
-      if (info) nodes.set(uuid, { ...info, parentUuid: newParentUuid });
+      if (info) nodes.set(uuid, { ...info, parentUuid: newParentUuid, stablePath: `/${newParentUuid}/${uuid}` });
     },
     duplicateNode: async (uuid) => {
       calls.push(`duplicateNode:${uuid}`);
@@ -304,6 +304,7 @@ function nodeInfo(uuid: string, parentUuid: string | null, overrides: Partial<No
   return {
     uuid,
     name: uuid === 'node-1' ? 'NodeOne' : `Node-${uuid}`,
+    stablePath: `/${parentUuid ?? 'root'}/${uuid}`,
     active: true,
     layer: 1,
     parentUuid,

@@ -1,4 +1,5 @@
 import { ConsoleEntrySchema, PreviewSessionSchema, ResolutionSchema, type ConsoleEntry, type PreviewSession, type Resolution } from '@cocos-ai/protocol';
+import { randomUUID } from 'node:crypto';
 
 /**
  * 运行态浏览器驱动（阶段五）。
@@ -213,33 +214,38 @@ export class RuntimeDriver {
       throw new Error(`PREVIEW_BROWSER_LAUNCH_FAILED:${launchErrors.join(';')}`);
     }
 
-    const sessionId = this.options.createSessionId?.() ?? `preview-${Date.now()}`;
+    const sessionId = this.options.createSessionId?.() ?? `preview-${randomUUID()}`;
     const consoleBuffer = new ConsoleBuffer({
       ...(this.options.consoleCapacity !== undefined ? { capacity: this.options.consoleCapacity } : {}),
       ...(this.options.now ? { now: this.options.now } : {})
     });
-    const page = await browser.newPage();
-    page.onConsole((entry) => consoleBuffer.push(entry));
-    page.onPageError((error) => consoleBuffer.push({ level: 'error', text: error.message, ...(error.stack ? { stack: error.stack } : {}) }));
-
-    const managed: ManagedSession = {
-      session: PreviewSessionSchema.parse({
-        sessionId,
-        projectId: options.projectId,
-        ...(options.editorInstanceId ? { editorInstanceId: options.editorInstanceId } : {}),
-        url,
-        pageSource: 'self-launched',
-        state: 'launching',
-        ...(options.resolution ? { requestedResolution: options.resolution } : {}),
-        launchedAt: (this.options.now?.() ?? new Date()).toISOString()
-      }),
-      browser,
-      page,
-      consoleBuffer
-    };
-    this.sessions.set(sessionId, managed);
-
+    let page: RuntimeBrowserPage | null = null;
+    let managed: ManagedSession | null = null;
+    let registered = false;
     try {
+      if (this.sessions.has(sessionId)) {
+        throw new Error(`PREVIEW_SESSION_ID_CONFLICT:${sessionId}`);
+      }
+      page = await browser.newPage();
+      page.onConsole((entry) => consoleBuffer.push(entry));
+      page.onPageError((error) => consoleBuffer.push({ level: 'error', text: error.message, ...(error.stack ? { stack: error.stack } : {}) }));
+      managed = {
+        session: PreviewSessionSchema.parse({
+          sessionId,
+          projectId: options.projectId,
+          ...(options.editorInstanceId ? { editorInstanceId: options.editorInstanceId } : {}),
+          url,
+          pageSource: 'self-launched',
+          state: 'launching',
+          ...(options.resolution ? { requestedResolution: options.resolution } : {}),
+          launchedAt: (this.options.now?.() ?? new Date()).toISOString()
+        }),
+        browser,
+        page,
+        consoleBuffer
+      };
+      this.sessions.set(sessionId, managed);
+      registered = true;
       await page.goto(url);
       await this.waitGameReady(managed);
       if (options.resolution) {
@@ -261,7 +267,8 @@ export class RuntimeDriver {
       managed.session.state = 'ready';
       return { ...managed.session };
     } catch (error) {
-      this.sessions.delete(sessionId);
+      if (registered) this.sessions.delete(sessionId);
+      if (page) await page.close().catch(() => undefined);
       await browser.close().catch(() => undefined);
       throw error;
     }

@@ -309,17 +309,55 @@ export class CocosDirectToolService {
     return { editor, result };
   }
 
-  /** 删除 Prefab 资产（不可回滚；不做反向引用检查）。 */
-  async deletePrefab(input: ProjectSelector & { uuid: string }) {
+  /** 删除 Prefab 资产；要求精确 URL 确认，存在引用时要求二次确认。 */
+  async deletePrefab(input: ProjectSelector & {
+    uuid: string;
+    confirmAssetUrl?: string;
+    confirmReferenced?: boolean;
+  }) {
     const editor = await this.readonlyService.resolveEditor(input);
-    const inspected = await this.readonlyService.inspectAsset({ ...input, pageSize: 1 });
+    let cursor: string | undefined;
+    let inspected: Awaited<ReturnType<CocosReadonlyToolService['inspectAsset']>> | null = null;
+    const users = new Set<string>();
+    const dependencies = new Set<string>();
+    const unresolved: Array<{ path: string; reason: string }> = [];
+    do {
+      const page = await this.readonlyService.inspectAsset({ ...input, pageSize: 500, ...(cursor ? { cursor } : {}) });
+      inspected ??= page;
+      for (const relation of page.page.items) {
+        (relation.kind === 'user' ? users : dependencies).add(relation.assetUuid);
+      }
+      unresolved.push(...page.unresolved);
+      cursor = page.page.nextCursor ?? undefined;
+    } while (cursor);
+    if (!inspected) throw new Error(`ASSET_NOT_FOUND:${input.uuid}`);
     const assetUrl = inspected.asset.url ?? inspected.asset.path;
     if (!assetUrl) throw new Error(`ASSET_URL_UNAVAILABLE:${input.uuid}`);
     if (inspected.asset.type !== 'cc.Prefab') {
       throw new Error(`ASSET_NOT_PREFAB:${input.uuid}`);
     }
+    if (input.confirmAssetUrl !== assetUrl) {
+      throw new Error(`PREFAB_DELETE_CONFIRMATION_REQUIRED:${JSON.stringify({ assetUrl })}`);
+    }
+    const userQueryFailures = unresolved.filter((item) => item.path === 'query-asset-users');
+    if (userQueryFailures.length) {
+      throw new Error(`PREFAB_REFERENCES_UNRESOLVED:${JSON.stringify(userQueryFailures)}`);
+    }
+    const referencedBy = [...users].sort();
+    if (referencedBy.length && input.confirmReferenced !== true) {
+      throw new Error(`PREFAB_REFERENCES_CONFIRMATION_REQUIRED:${JSON.stringify({
+        assetUrl,
+        userCount: referencedBy.length,
+        users: referencedBy
+      })}`);
+    }
     const result = await this.readonlyService.requestBridge(editor, 'probe.deleteAsset', { assetUrl });
-    return { editor, assetUrl, result };
+    return {
+      editor,
+      assetUrl,
+      references: { users: referencedBy, dependencies: [...dependencies].sort() },
+      result
+    };
   }
 
   /** 导入外部文件为项目资产并触发 AssetDB 导入。 */
@@ -379,6 +417,16 @@ export class CocosDirectToolService {
       throw new Error(`DIRECT_WRITE_OUTCOME_INVALID:${parsed.error.message}`);
     }
     const outcome = parsed.data;
+    if (outcome.kind === 'unknown') {
+      if (!outcome.failure) {
+        throw new Error('DIRECT_WRITE_OUTCOME_INVALID:MISSING_FAILURE');
+      }
+      throw new Error(`DIRECT_WRITE_OUTCOME_UNKNOWN:${JSON.stringify({
+        executedOps: outcome.executedOps,
+        failure: outcome.failure,
+        evidence: outcome.evidence ?? {}
+      })}`);
+    }
     if (outcome.kind === 'operation-failed') {
       if (!outcome.failure) {
         throw new Error('DIRECT_WRITE_OUTCOME_INVALID:MISSING_FAILURE');
@@ -1038,10 +1086,12 @@ export function registerCocosDirectWriteTools(
   }, async (input) => toToolResult(await service.savePrefab(input)));
 
   server.registerTool('cocos_prefab_delete', {
-    description: '按 UUID 删除 Prefab 资产；不可回滚且不检查引用，删除前确认不再使用。',
+    description: '按 UUID 删除 Prefab 资产；不可回滚。必须传精确 confirmAssetUrl；存在引用时还需 confirmReferenced=true。',
     inputSchema: {
       ...ProjectSelectorInput,
-      uuid: z.string().min(1)
+      uuid: z.string().min(1),
+      confirmAssetUrl: z.string().min(1).optional(),
+      confirmReferenced: z.boolean().optional()
     },
     outputSchema: ToolOutputSchema,
     annotations: DELETE_ANNOTATIONS

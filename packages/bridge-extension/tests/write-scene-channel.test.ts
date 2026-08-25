@@ -108,6 +108,30 @@ describe('executeWriteSceneOperations', () => {
     expect(dependencies.calls).not.toContain('saveDocument');
   });
 
+  it('保存或验证异常时返回 unknown 并保留全部已执行证据', async () => {
+    const dependencies = createDependencies();
+    dependencies.verify = async () => {
+      throw new Error('reload failed');
+    };
+
+    const outcome = await executeWriteSceneOperations({
+      operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
+      save: true,
+      undoGroup: 'verification-unknown'
+    }, dependencies);
+
+    expect(outcome).toMatchObject({
+      kind: 'unknown',
+      executedOps: 1,
+      failure: {
+        code: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+        operationIndex: null,
+        stage: 'unknown'
+      }
+    });
+    expect(outcome.evidence).toHaveLength(1);
+  });
+
   it('把 Prefab 实例稳定身份与目标 FileID 回填给重载后验证', async () => {
     const dependencies = createDependencies();
     dependencies.executePrefabOperation = async () => ({

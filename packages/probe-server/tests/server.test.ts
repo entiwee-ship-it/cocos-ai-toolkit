@@ -54,6 +54,47 @@ describe('ArtifactStore', () => {
 });
 
 describe('ProbeServer', () => {
+  it('配置 session token 后仅允许正确 Bearer token 完成握手', async () => {
+    const server = new ProbeServer({
+      host: '127.0.0.1',
+      port: 0,
+      requestTimeoutMs: 1000,
+      sessionToken: 'secret-token'
+    });
+    const address = await server.start();
+    const url = `ws://127.0.0.1:${address.port}`;
+
+    try {
+      for (const headers of [undefined, { Authorization: 'Bearer wrong-token' }]) {
+        const socket = new WebSocket(url, headers ? { headers } : undefined);
+        const statusCode = await new Promise<number>((resolve, reject) => {
+          socket.once('unexpected-response', (_request, response) => {
+            response.resume();
+            resolve(response.statusCode ?? 0);
+          });
+          socket.once('error', () => undefined);
+          socket.once('open', () => reject(new Error('UNAUTHORIZED_SOCKET_OPENED')));
+        });
+        expect(statusCode).toBe(401);
+      }
+
+      const authenticated = new WebSocket(url, {
+        headers: { Authorization: 'Bearer secret-token' }
+      });
+      const response = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        authenticated.once('open', () => authenticated.send(JSON.stringify({
+          method: 'client.hello', payload: { clientName: 'authenticated-client' }
+        })));
+        authenticated.once('message', (raw) => resolve(JSON.parse(raw.toString()) as Record<string, unknown>));
+        authenticated.once('error', reject);
+      });
+      expect(response).toMatchObject({ correlationId: 'client.hello', ok: true });
+      authenticated.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('超大消息只关闭当前连接且后续客户端仍可握手', async () => {
     const server = new ProbeServer({
       host: '127.0.0.1',

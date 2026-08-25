@@ -157,6 +157,57 @@ describe('RuntimeDriver', () => {
       .rejects.toThrow('PREVIEW_BROWSER_LAUNCH_FAILED');
   });
 
+  it('newPage 失败时关闭已启动浏览器', async () => {
+    const browser = {
+      closed: false,
+      async newPage(): Promise<RuntimeBrowserPage> {
+        throw new Error('new page failed');
+      },
+      async close() {
+        browser.closed = true;
+      }
+    };
+    const driver = new RuntimeDriver({ launcher: async () => browser });
+
+    await expect(driver.launch({ projectId: 'proj1', url: 'http://127.0.0.1:7457/' }))
+      .rejects.toThrow('new page failed');
+    expect(browser.closed).toBe(true);
+  });
+
+  it('launch 初始化失败时同时关闭页面和浏览器', async () => {
+    const { page, state } = createFakePage();
+    page.goto = async () => {
+      throw new Error('goto failed');
+    };
+    const browser = createFakeBrowser(page);
+    const driver = new RuntimeDriver({ launcher: async () => browser, createSessionId: () => 'goto-failure' });
+
+    await expect(driver.launch({ projectId: 'proj1', url: 'http://127.0.0.1:7457/' }))
+      .rejects.toThrow('goto failed');
+    expect(state.closed).toBe(true);
+    expect(browser.closed).toBe(true);
+  });
+
+  it('重复会话 ID 拒绝覆盖旧会话并清理新浏览器', async () => {
+    const first = createFakePage();
+    const second = createFakePage();
+    const firstBrowser = createFakeBrowser(first.page);
+    const secondBrowser = createFakeBrowser(second.page);
+    const browsers = [firstBrowser, secondBrowser];
+    const driver = new RuntimeDriver({
+      launcher: async () => browsers.shift()!,
+      createSessionId: () => 'same-session'
+    });
+
+    await driver.launch({ projectId: 'proj1', url: 'http://127.0.0.1:7457/' });
+    await expect(driver.launch({ projectId: 'proj1', url: 'http://127.0.0.1:7457/' }))
+      .rejects.toThrow('PREVIEW_SESSION_ID_CONFLICT');
+    expect(driver.get('same-session').state).toBe('ready');
+    expect(firstBrowser.closed).toBe(false);
+    expect(secondBrowser.closed).toBe(true);
+    await driver.dispose();
+  });
+
   it('游戏就绪采用有界轮询而非固定延时，超时抛出未就绪', async () => {
     const { page, state } = createFakePage({ readyAfterCalls: 3 });
     const driver = new RuntimeDriver({

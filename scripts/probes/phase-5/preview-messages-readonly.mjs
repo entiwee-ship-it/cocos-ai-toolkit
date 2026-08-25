@@ -16,7 +16,7 @@ const CASES = [
   { namespace: 'preview', method: 'generate-settings' }
 ];
 
-const client = new ProbeClient('ws://127.0.0.1:32188', 15_000);
+const client = new ProbeClient('ws://127.0.0.1:32188', 15_000, undefined, 500, 10_000, process.env.COCOS_AI_SESSION_TOKEN);
 await client.connect();
 
 for (const item of CASES) {

@@ -10,10 +10,6 @@
       "types": "./dist/index.d.ts",
       "development": "./src/index.ts",
       "import": "./dist/index.js"
-    },
-    "./prefab-graph": {
-      "types": "./dist/prefab-graph.d.ts",
-      "import": "./dist/prefab-graph.js"
     }
   },
   "scripts": {

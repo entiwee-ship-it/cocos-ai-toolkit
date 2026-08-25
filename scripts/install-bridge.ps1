@@ -1,18 +1,15 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$ProjectPath,
-    [string]$ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0'
+    [string]$ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0',
+    [string]$WorktreeRoot = 'E:/xile-workspace/worktrees'
 )
 
 $ErrorActionPreference = 'Stop'
 $sourceProject = (Resolve-Path -LiteralPath $ProjectPath).Path
-$realProject = (Resolve-Path -LiteralPath 'E:/xile-workspace/qyProject/xy-client').Path
 $toolkit = (Resolve-Path -LiteralPath $ToolkitPath).Path
-$worktreeRoot = [IO.Path]::GetFullPath('E:/xile-workspace/worktrees')
+$worktreeRoot = [IO.Path]::GetFullPath($WorktreeRoot)
 
-if ($sourceProject.TrimEnd('\') -ieq $realProject.TrimEnd('\')) {
-    throw '禁止安装到当前真实工作区；请先创建隔离 Worktree'
-}
 if (-not $sourceProject.StartsWith($worktreeRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw "项目必须位于隔离 Worktree 根目录: $worktreeRoot"
 }

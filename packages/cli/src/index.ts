@@ -42,6 +42,7 @@ const HELP = `用法:
 环境变量:
   COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
   COCOS_AI_PROBE_TIMEOUT_MS  单次请求等待毫秒数，默认 60000
+  COCOS_AI_SESSION_TOKEN     Probe Server 启用认证时使用的 Bearer Token
 
 说明: CLI 定位为只读诊断入口；写操作请使用 MCP 直写工具（事务、回滚、扫描和声明式命令已移除）。`;
 
@@ -66,7 +67,14 @@ export async function runCli(
   }
 
   const requestTimeoutMs = readRequestTimeoutMs(process.env.COCOS_AI_PROBE_TIMEOUT_MS);
-  const client = new ProbeClient(options.serverUrl ?? DEFAULT_SERVER_URL, requestTimeoutMs);
+  const client = new ProbeClient(
+    options.serverUrl ?? DEFAULT_SERVER_URL,
+    requestTimeoutMs,
+    undefined,
+    500,
+    10_000,
+    process.env.COCOS_AI_SESSION_TOKEN || undefined
+  );
   try {
     await client.connect();
     const payload = await executeCommand(command, client);

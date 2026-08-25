@@ -138,7 +138,12 @@ async function verifyOperationUnsafe(
       const actual = await resolveNodeInfo(operation, operation.nodeUuid as string, dependencies);
       const stablePath = readResultNodeStablePath(operation);
       if (stablePath) {
-        return build(stablePath, actual?.stablePath ?? (actual ? stablePath : null), actual !== null);
+        const actualStablePath = typeof actual?.stablePath === 'string' && actual.stablePath
+          ? actual.stablePath
+          : null;
+        if (actualStablePath) {
+          return build(stablePath, actualStablePath, actualStablePath === stablePath);
+        }
       }
       const actualParent = actual?.parentUuid ?? null;
       return build(operation.newParentUuid, actualParent, actualParent === operation.newParentUuid);
@@ -476,12 +481,12 @@ async function resolveNodeInfo(
   fallbackNodeUuid: string,
   dependencies: WriteVerifierDependencies
 ): Promise<Record<string, unknown> | null> {
-  const byUuid = await dependencies.getNodeInfo(fallbackNodeUuid);
-  if (byUuid) return byUuid;
   const stablePath = readResultNodeStablePath(operation);
-  return stablePath && dependencies.getNodeInfoByStablePath
-    ? dependencies.getNodeInfoByStablePath(stablePath)
-    : null;
+  if (stablePath && dependencies.getNodeInfoByStablePath) {
+    const byStablePath = await dependencies.getNodeInfoByStablePath(stablePath);
+    if (byStablePath) return byStablePath;
+  }
+  return dependencies.getNodeInfo(fallbackNodeUuid);
 }
 
 async function resolveComponentInfo(

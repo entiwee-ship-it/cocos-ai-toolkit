@@ -125,8 +125,31 @@ export async function executeWriteSceneOperations(
     }
   }
 
-  // 保存、软重载与重读由 verifier 统一执行，避免同一事务重复保存和重复重载。
-  const verification = await dependencies.verify(executed);
+  // 保存、软重载与重读由 verifier 统一执行。异常时写入可能已经落地，必须保留证据并禁止乐观重试。
+  let verification: WriteVerificationReport;
+  try {
+    verification = await dependencies.verify(executed);
+  } catch (error) {
+    const original = error instanceof ProbeError
+      ? { code: error.code, message: error.message, details: error.details }
+      : {
+          code: 'WRITE_VERIFICATION_FAILED',
+          message: error instanceof Error ? error.message : 'WRITE_VERIFICATION_FAILED'
+        };
+    return {
+      kind: 'unknown',
+      executedOps: executed.length,
+      failure: {
+        code: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+        message: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+        operationIndex: null,
+        stage: 'unknown',
+        originalError: original,
+        nextAction: '写入可能已生效；先重读当前文档状态，确认前不要重试。'
+      },
+      evidence: executed
+    };
+  }
   return {
     kind: 'success',
     executedOps: executed.length,

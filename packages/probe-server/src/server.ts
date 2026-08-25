@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join, resolve, sep } from 'node:path';
@@ -204,6 +204,8 @@ export interface ProbeServerOptions {
   runtimeDriver?: RuntimeDriver;
   /** 截图落盘根目录（默认 `<cwd>/reports/runtime-captures`）。 */
   captureRoot?: string;
+  /** 可选 WebSocket Bearer Token；配置后 Bridge 和控制客户端都必须携带。 */
+  sessionToken?: string;
 }
 
 export interface ProbeServerAddress {
@@ -233,10 +235,16 @@ export class ProbeServer {
       throw new Error('PROBE_SERVER_ALREADY_STARTED');
     }
 
+    const sessionToken = this.options.sessionToken || undefined;
     const server = new WebSocketServer({
       host: this.options.host,
       port: this.options.port,
-      maxPayload: resolveWebSocketMaxPayload(this.options.maxPayload)
+      maxPayload: resolveWebSocketMaxPayload(this.options.maxPayload),
+      ...(sessionToken ? {
+        verifyClient: ({ req }: { req: { headers: { authorization?: string } } }) => (
+          hasValidSessionToken(req.headers.authorization, sessionToken)
+        )
+      } : {})
     });
     this.server = server;
     server.on('connection', (socket) => this.handleConnection(socket));
@@ -815,4 +823,11 @@ export class ProbeServer {
       return null;
     }
   }
+}
+
+function hasValidSessionToken(authorization: string | undefined, expectedToken: string): boolean {
+  if (!authorization?.startsWith('Bearer ')) return false;
+  const actual = Buffer.from(authorization.slice('Bearer '.length));
+  const expected = Buffer.from(expectedToken);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }

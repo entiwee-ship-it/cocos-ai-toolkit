@@ -37,7 +37,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | 改组件属性值 | `cocos_component_set_property`（propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致会拒绝写入） |
 | 节点生成 Prefab | `cocos_prefab_create`（assetUrl 必须 `db://assets/` 且 `.prefab` 后缀） |
 | 保存当前文档 | `cocos_prefab_save`（写工具已自动保存，此入口用于手工改动落盘） |
-| 删除 Prefab | `cocos_prefab_delete`（不可回滚、不检查引用，删前自行确认） |
+| 删除 Prefab | `cocos_prefab_delete`（不可回滚；传精确 `confirmAssetUrl`，有引用时再传 `confirmReferenced:true`） |
 | 导入外部文件 | `cocos_asset_import`（图片/音频等，复制进 assets 并导入） |
 | 重导入+触发编译 | `cocos_asset_refresh`（脚本改动后调用） |
 | 一次直发多项写操作 | `cocos_batch_write`（仅接受 `node.*` 与 `component.*`；`asset.*` / `prefab.*` 会以 `BATCH_WRITE_OPERATION_NOT_ALLOWED` 拒绝；只减少往返，不是事务、无回滚，失败时已执行项可能已生效） |
@@ -48,9 +48,10 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 
 - 直写没有事务和回滚：失败即停，已生效修改保留。误操作只能用 git 还原，动手前确认目标工作区状态。
 - Creator 对部分写入会静默不生效（典型：预制体编辑模式下嵌套实例内部）。工具写完会逐项重读，重读不符报 `DIRECT_WRITE_VERIFY_FAILED`——看到这个错不要当成已写入，换路径（如打开内层 Prefab 直接改）再写。
+- `DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已执行但保存/验证结局未知；先重读当前文档状态，确认前禁止重试。
 - 运行期节点/组件 UUID 每次重开文档都会变，禁止缓存；每个编辑会话内现取 hierarchy。
 - 连续多处修改时按"先读后写、逐项确认"推进；`cocos_batch_write` 仅接受 `node.*` 与 `component.*` 操作，是单次请求直发多项操作，不是批量暂存、事务或回滚。
-- 错误码都带下一步指引：`NODE_NOT_FOUND` 重取 hierarchy、`COMPONENT_NOT_FOUND` 会附可用组件清单、`ASSET_ALREADY_EXISTS` 换 URL、`PREFAB_OPEN_NOT_READY` 核对 UUID 重试。
+- 错误码都带下一步指引：`NODE_NOT_FOUND` 重取 hierarchy、`COMPONENT_NOT_FOUND` 会附可用组件清单、`ASSET_ALREADY_EXISTS` 换 URL、`PREFAB_OPEN_NOT_READY` 核对 UUID 重试；Prefab 删除先处理 `PREFAB_DELETE_CONFIRMATION_REQUIRED`，有引用再处理 `PREFAB_REFERENCES_CONFIRMATION_REQUIRED`。
 
 ## 运行态工具
 

@@ -533,6 +533,50 @@ describe('saveAndVerifyWriteTransaction', () => {
     expect(report.passed).toBe(true);
   });
 
+  it('node.reparent 节点存在但稳定路径错误时验证失败', async () => {
+    const dependencies = createDependencies();
+    dependencies.getNodeInfo = async () => ({
+      uuid: 'node-old',
+      parentUuid: 'wrong-parent',
+      stablePath: '/Scene~0/WrongParent~0/Panel~0'
+    });
+
+    const report = await saveAndVerifyWriteTransaction(writeRequest(), [nodeResult({
+      nodeUuid: 'node-old',
+      after: { uuid: 'node-old', parentUuid: 'parent-new', stablePath: '/Scene~0/NewParent~0/Panel~0' }
+    }, {
+      type: 'node.reparent',
+      nodeUuid: 'node-old',
+      newParentUuid: 'parent-new',
+      resultNodeStablePath: '/Scene~0/NewParent~0/Panel~0'
+    })], dependencies);
+
+    expect(report.passed).toBe(false);
+    expect(report.items[0]).toMatchObject({
+      expected: '/Scene~0/NewParent~0/Panel~0',
+      actual: '/Scene~0/WrongParent~0/Panel~0',
+      passed: false
+    });
+  });
+
+  it('node.reparent 缺少稳定路径时回退验证新父节点', async () => {
+    const dependencies = createDependencies();
+    dependencies.getNodeInfo = async () => ({ uuid: 'node-old', parentUuid: 'parent-new' });
+
+    const report = await saveAndVerifyWriteTransaction(writeRequest(), [nodeResult({
+      nodeUuid: 'node-old',
+      after: { uuid: 'node-old', parentUuid: 'parent-new', stablePath: '/Scene~0/NewParent~0/Panel~0' }
+    }, {
+      type: 'node.reparent',
+      nodeUuid: 'node-old',
+      newParentUuid: 'parent-new',
+      resultNodeStablePath: '/Scene~0/NewParent~0/Panel~0'
+    })], dependencies);
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({ expected: 'parent-new', actual: 'parent-new', passed: true });
+  });
+
   it('node.delete 重载后仍能用删除前稳定路径发现残留节点', async () => {
     const dependencies = createDependencies();
     dependencies.getNodeInfo = async () => null;

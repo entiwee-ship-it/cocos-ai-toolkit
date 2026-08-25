@@ -7,7 +7,7 @@
 import { ProbeClient } from '../../../packages/client/dist/index.js';
 
 const projectId = process.argv[2] ?? 'b7d6c25f-30f3-44e7-874a-9284c0517a3f';
-const client = new ProbeClient('ws://127.0.0.1:32188', 20_000);
+const client = new ProbeClient('ws://127.0.0.1:32188', 20_000, undefined, 500, 10_000, process.env.COCOS_AI_SESSION_TOKEN);
 await client.connect();
 
 async function call(method, args = [], timeoutMs = 10_000) {

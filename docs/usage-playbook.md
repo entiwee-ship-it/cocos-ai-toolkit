@@ -14,12 +14,12 @@
    - 挂组件：`cocos_component_add`（内置组件给 componentType；自定义脚本组件另给 scriptUuid）
    - 删节点：`cocos_node_delete`
    - 节点转 Prefab：`cocos_prefab_create`（assetUrl 必须 `db://assets/*.prefab`）
-   - 删 Prefab：`cocos_prefab_delete`（uuid；不可回滚、不查引用）
+   - 删 Prefab：`cocos_prefab_delete`（uuid + 精确 confirmAssetUrl；有引用时再传 confirmReferenced=true；不可回滚）
    - 导入文件：`cocos_asset_import`（sourceFilePath + assetUrl）
    - 重导入/编译：`cocos_asset_refresh`（assetUrl）
 6. 视觉验证：`cocos_preview_launch` → `cocos_runtime_capture` → `cocos_preview_stop`。
 
-错误处理：`NODE_NOT_FOUND` 重取 hierarchy；`COMPONENT_NOT_FOUND` 附可用清单；`DIRECT_WRITE_VERIFY_FAILED` 表示 Creator 静默未生效（典型为预制体编辑模式下嵌套实例内部），换路径再写；`ASSET_ALREADY_EXISTS` 换 URL。直写无回滚，误操作用 git 还原。
+错误处理：`NODE_NOT_FOUND` 重取 hierarchy；`COMPONENT_NOT_FOUND` 附可用清单；`DIRECT_WRITE_VERIFY_FAILED` 表示 Creator 静默未生效（典型为预制体编辑模式下嵌套实例内部），换路径再写；`DIRECT_WRITE_OUTCOME_UNKNOWN` 表示已执行但保存/验证结局未知，先重读状态且禁止直接重试；`ASSET_ALREADY_EXISTS` 换 URL。直写无回滚，误操作用 git 还原。
 
 普通资源删除不需要 MCP 工具：非 Prefab 资源文件可以直接通过文件系统删除，无需 Creator/MCP；同时删除同名 `.meta` 文件（如存在）。这是整文件删除，不是手改 `.meta` JSON。只有 `.prefab` 删除必须使用 `cocos_prefab_delete`。
 

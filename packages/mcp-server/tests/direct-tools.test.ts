@@ -223,7 +223,7 @@ function createRespond(overrides: Record<string, unknown> = {}) {
     if (method === 'probe.assets') return INSPECT_ASSET_RESPONSE;
     if (method === 'probe.directWrite') return DIRECT_WRITE_SUCCESS;
     if (method === 'probe.createPrefab') return { created: true, assetUuid: 'new-prefab-uuid' };
-    if (method === 'probe.deleteAsset') return { deleted: true, assetUrl: 'db://assets/ui/Test.prefab' };
+    if (method === 'probe.deleteAsset') return { deleted: true, assetUrl: 'db://assets/ui/Test.prefab', verified: true };
     if (method === 'probe.saveDocument') return { saved: true };
     if (method === 'probe.importAsset') {
       return { uuid: 'imported-uuid', type: 'cc.Texture2D', assetUrl: 'db://assets/ui/icon.png' };
@@ -861,6 +861,31 @@ describe('直写档写工具', () => {
     expect(JSON.stringify(result.content)).toContain('DIRECT_WRITE_OUTCOME_INVALID:MISSING_FAILURE');
   });
 
+  it('直写 unknown 结果保留证据并禁止按验证失败重试', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.directWrite': {
+        kind: 'unknown',
+        executedOps: 1,
+        failure: {
+          code: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+          message: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+          operationIndex: null,
+          stage: 'unknown'
+        },
+        evidence: [{ operation: { type: 'node.delete', nodeUuid: 'panel-uuid' } }]
+      }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_node_delete',
+      arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid' }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('DIRECT_WRITE_OUTCOME_UNKNOWN');
+    expect(JSON.stringify(result.content)).toContain('evidence');
+  });
+
   it('直写重读不符抛 DIRECT_WRITE_VERIFY_FAILED', async () => {
     const probeClient = new RecordingProbeClient(createRespond({
       'probe.directWrite': {
@@ -1073,7 +1098,7 @@ describe('直写档写工具', () => {
     expect(JSON.stringify(result.content)).toContain('ASSET_URL_TYPE_INVALID');
   });
 
-  it('cocos_prefab_delete 查 URL 后转发 probe.deleteAsset', async () => {
+  it('cocos_prefab_delete 缺少精确 URL 确认时拒绝删除', async () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const { client } = await createHarness(probeClient, { enableWrites: true });
 
@@ -1081,9 +1106,70 @@ describe('直写档写工具', () => {
       name: 'cocos_prefab_delete',
       arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1' }
     });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('PREFAB_DELETE_CONFIRMATION_REQUIRED');
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
+  });
+
+  it('cocos_prefab_delete 有引用但未显式确认时拒绝删除', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.assets': { ...INSPECT_ASSET_RESPONSE, users: ['scene-uuid-1'] }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_delete',
+      arguments: {
+        projectId: 'proj1',
+        uuid: 'prefab-uuid-1',
+        confirmAssetUrl: 'db://assets/ui/Test.prefab'
+      }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('PREFAB_REFERENCES_CONFIRMATION_REQUIRED');
+    expect(JSON.stringify(result.content)).toContain('scene-uuid-1');
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
+  });
+
+  it('cocos_prefab_delete 引用查询不可用时默认拒绝删除', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.assets': {
+        ...INSPECT_ASSET_RESPONSE,
+        users: null,
+        unresolved: [{ path: 'query-asset-users', reason: 'MESSAGE_API_UNAVAILABLE' }]
+      }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_delete',
+      arguments: {
+        projectId: 'proj1',
+        uuid: 'prefab-uuid-1',
+        confirmAssetUrl: 'db://assets/ui/Test.prefab'
+      }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('PREFAB_REFERENCES_UNRESOLVED');
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
+  });
+
+  it('cocos_prefab_delete 精确确认无引用目标后删除并返回验证结果', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_delete',
+      arguments: {
+        projectId: 'proj1',
+        uuid: 'prefab-uuid-1',
+        confirmAssetUrl: 'db://assets/ui/Test.prefab'
+      }
+    });
     expect(result.structuredContent).toMatchObject({
       assetUrl: 'db://assets/ui/Test.prefab',
-      result: { deleted: true }
+      references: { users: [], dependencies: [] },
+      result: { deleted: true, verified: true }
     });
     expect(probeClient.requests.at(-1)).toMatchObject({
       method: 'probe.deleteAsset',
@@ -1092,6 +1178,25 @@ describe('直写档写工具', () => {
         params: { assetUrl: 'db://assets/ui/Test.prefab' }
       }
     });
+  });
+
+  it('cocos_prefab_delete 引用确认后允许删除', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.assets': { ...INSPECT_ASSET_RESPONSE, users: ['scene-uuid-1'] }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_delete',
+      arguments: {
+        projectId: 'proj1',
+        uuid: 'prefab-uuid-1',
+        confirmAssetUrl: 'db://assets/ui/Test.prefab',
+        confirmReferenced: true
+      }
+    });
+    expect(result.structuredContent).toMatchObject({ references: { users: ['scene-uuid-1'] } });
+    expect(probeClient.requests.at(-1)?.method).toBe('probe.deleteAsset');
   });
 
   it('cocos_prefab_save 转发 probe.saveDocument', async () => {

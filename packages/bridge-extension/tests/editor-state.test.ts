@@ -20,6 +20,7 @@ describe('buildBridgeHello', () => {
     expect(BRIDGE_CAPABILITIES).toContain('probe.directWrite');
     expect(BRIDGE_CAPABILITIES).toContain('probe.saveDocument');
     expect(BRIDGE_CAPABILITIES).toContain('probe.importAsset');
+    expect(BRIDGE_CAPABILITIES).not.toContain('probe.documentSnapshot');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.writePrepare');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.writeRevision');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.writeConfirm');

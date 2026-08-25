@@ -60,13 +60,15 @@ export class ProbeClient {
    * @param maxPayload WebSocket 单条消息的最大接收字节数。
    * @param reconnectBaseMs 断线重连基础退避毫秒数。
    * @param reconnectMaxMs 断线重连最大退避毫秒数。
+   * @param sessionToken 可选 WebSocket Bearer Token；服务端未启用认证时留空。
    */
   constructor(
     private readonly url: string,
     private readonly timeoutMs = 10_000,
     private readonly maxPayload?: number,
     private readonly reconnectBaseMs = 500,
-    private readonly reconnectMaxMs = 10_000
+    private readonly reconnectMaxMs = 10_000,
+    private readonly sessionToken?: string
   ) {}
 
   /**
@@ -135,7 +137,8 @@ export class ProbeClient {
   private openSocket(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(this.url, {
-        maxPayload: resolveWebSocketMaxPayload(this.maxPayload)
+        maxPayload: resolveWebSocketMaxPayload(this.maxPayload),
+        ...(this.sessionToken ? { headers: { Authorization: `Bearer ${this.sessionToken}` } } : {})
       });
       this.socket = socket;
       let settled = false;

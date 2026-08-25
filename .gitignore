@@ -12,3 +12,4 @@ reports/*.png
 reports/write-journal/
 reports/*.txt
 reports/runtime-captures/
+reports/creator-smoke/

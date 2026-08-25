@@ -237,7 +237,11 @@ async function deleteAsset(request: unknown): Promise<unknown> {
     throw new ProbeError('ASSET_NOT_FOUND', { assetUrl });
   }
   const deleted = await Editor.Message.request('asset-db', 'delete-asset', assetUrl as never);
-  return { deleted: Boolean(deleted), assetUrl };
+  const remaining = await Editor.Message.request('asset-db', 'query-asset-info', assetUrl);
+  if (remaining) {
+    throw new ProbeError('PREFAB_DELETE_VERIFY_FAILED', { assetUrl, deleted: Boolean(deleted) });
+  }
+  return { deleted: true, assetUrl, verified: true };
 }
 
 /**

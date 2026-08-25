@@ -9,7 +9,6 @@ export const BRIDGE_CAPABILITIES = [
   'probe.hierarchy',
   'probe.node',
   'probe.component',
-  'probe.documentSnapshot',
   'probe.prefab',
   'probe.directWrite',
   'probe.saveDocument',

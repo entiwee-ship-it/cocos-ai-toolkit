@@ -195,8 +195,16 @@ async function reparentNode(
   const after = await requireNodeInfo(dependencies, nodeUuid);
   return {
     nodeUuid,
-    before: { uuid: nodeUuid, parentUuid: before.parentUuid },
-    after: { uuid: nodeUuid, parentUuid: after.parentUuid },
+    before: {
+      uuid: nodeUuid,
+      parentUuid: before.parentUuid,
+      ...(before.stablePath ? { stablePath: before.stablePath } : {})
+    },
+    after: {
+      uuid: nodeUuid,
+      parentUuid: after.parentUuid,
+      ...(after.stablePath ? { stablePath: after.stablePath } : {})
+    },
     inverse: [{ type: 'node.reparent', nodeUuid, newParentUuid: before.parentUuid as string }]
   };
 }

@@ -48,4 +48,5 @@ export interface WriteFailure {
  */
 export type WriteExecutionOutcome =
   | { kind: 'success'; executedOps: number; verification: WriteVerificationReport | null; undoGroupId?: string | null; evidence?: unknown }
-  | { kind: 'operation-failed'; executedOps: number; failure: WriteFailure; undoGroupId?: string | null; evidence?: unknown };
+  | { kind: 'operation-failed'; executedOps: number; failure: WriteFailure; undoGroupId?: string | null; evidence?: unknown }
+  | { kind: 'unknown'; executedOps: number; failure: WriteFailure; undoGroupId?: string | null; evidence?: unknown };

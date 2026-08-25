@@ -42,12 +42,13 @@ npm run build
 ## 安装 Bridge
 
 ```powershell
+& scripts/create-xy-client-worktree.ps1
 & scripts/install-bridge.ps1 `
-  -ProjectPath 'E:/xile-workspace/qyProject/xy-client' `
-  -ToolkitPath (Get-Location).Path
+  -ProjectPath 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe' `
+  -ToolkitPath 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0'
 ```
 
-Bridge 使用 Junction 指向本工具的 `packages/bridge-extension`，不会复制代码到业务仓库。安装后用 Creator 3.8.8 打开目标项目，或在 Creator 中刷新扩展。
+Bridge 使用 Junction 指向运行时 Worktree 的 `packages/bridge-extension`，不会复制代码到业务仓库，也不会安装到真实业务检出。安装后用 Creator 3.8.8 打开隔离项目，或在 Creator 中刷新扩展。
 
 ## 启动 Probe Server
 
@@ -73,6 +74,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 - `COCOS_AI_PROBE_SERVER_URL`：Probe Server 地址，默认 `ws://127.0.0.1:32188`。
 - `COCOS_AI_MCP_REPORT_ROOT`：MCP 进程唯一授权的报告根目录，默认当前工作目录下的 `reports`。
+- `COCOS_AI_SESSION_TOKEN`：可选本机会话 Token；配置后 Probe、Bridge、CLI 和 MCP 必须使用相同值。
 
 启动参数只有 `--enable-writes`：裸启动只注册只读工具；写工具必须显式开启，环境变量不能开启写能力。0.2.x 的 `--profile` 参数已移除，传入会报 `MCP_PROFILE_REMOVED`。
 
@@ -111,12 +113,12 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_component_set_property` | 修改组件属性值；propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致时拒绝写入 |
 | `cocos_prefab_create` | 把当前文档中的节点生成为 Prefab 资产 |
 | `cocos_prefab_save` | 保存当前文档（手工修改后的落盘入口） |
-| `cocos_prefab_delete` | 按 UUID 删除 Prefab 资产；不可回滚且不检查引用 |
+| `cocos_prefab_delete` | 按 UUID 删除 Prefab 资产；不可回滚，必须精确确认 URL，存在反向引用时需二次确认 |
 | `cocos_asset_import` | 把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入 |
 | `cocos_asset_refresh` | 重新导入资产并尝试触发 TypeScript 编译 |
 | `cocos_batch_write` | 一次直发多项 `node.*` / `component.*` 操作；不接受 `asset.*` / `prefab.*`，只减少 MCP 往返，不是事务且无回滚，失败时 `executedOps` 之前的修改可能已生效 |
 
-节点寻址同时接受 `nodeUuid` 或 `path`（如 `Root/Panel/Button`）；组件按类型解析，兼容 `cc.` 前缀（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。
+节点寻址同时接受 `nodeUuid` 或 `path`（如 `Root/Panel/Button`）；组件按类型解析，兼容 `cc.` 前缀（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。`DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已经执行但保存或验证结局未知，必须先重读状态，确认前禁止重试。
 
 ### 运行态 13 个（只读组默认开放，动作组需 `--enable-writes`）
 
@@ -132,9 +134,15 @@ AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-works
 & E:/xile-workspace/cocos-ai-toolkit/scripts/update-runtime.ps1
 ```
 
-脚本依次完成：fetch 远程并让运行时 Worktree 以 detached HEAD 对齐 `origin/master`、依赖变化时 `npm install`、代码变化或产物缺失时全量 `npm run build`、重启 Probe Server 并等待端口就绪。它不会创建额外本地分支；运行时 Worktree 存在未提交的 tracked 改动时会中止，避免覆盖手工修改。
+脚本依次完成：fetch 远程并让运行时 Worktree 以 detached HEAD 对齐 `origin/master`、依赖变化时 `npm install`、代码变化或产物缺失时全量 `npm run build`、重启 Probe Server、等待 Ready 事件并执行真实 WebSocket `editors` 请求。任一步失败会恢复旧提交、旧构建和原 Probe 运行状态。它不会创建额外本地分支；运行时 Worktree 存在未提交的 tracked 改动时会中止，避免覆盖手工修改。
 
 执行完后按提示生效：MCP Server 是 AI 客户端在会话启动时拉起的 stdio 进程，需要重启 Kimi Code / Codex 会话加载新构建；若 Bridge Extension 有变更，还需要在 Cocos Creator 中刷新/重启扩展。常用参数：`-SkipProbeRestart`、`-Force`、`-TargetRef`。
+
+当前直写架构的真实 Creator 3.8.8 smoke 使用隔离项目执行只读发现和一次 `cc.UITransform` no-op 直写，前后 Git 状态必须完全一致：
+
+```powershell
+npm run smoke:creator -- --project-path E:/xile-workspace/worktrees/xy-client-cocos-ai-probe
+```
 
 ## 安装 AI 使用技能
 
@@ -205,7 +213,7 @@ CLI 只允许预定义命令，不提供任意 JavaScript 执行入口，写操�
 
 ## 历史归档
 
-`docs/`（phase-0 ~ phase-5 findings、能力矩阵、可用性缺口报告、superpowers 计划）和统一验证脚本 `scripts/run-phase-0-validation.ps1`、`scripts/run-phase-1-readonly-validation.ps1`、`scripts/run-phase-2-write-validation.ps1` 为 0.2.x 事务架构的历史归档，保留供查阅；这些脚本依赖已移除的 CLI 命令，不再可运行。
+`docs/` 中的 phase-0 ~ phase-5 findings、能力矩阵、可用性缺口报告和 superpowers 计划是历史证据，继续保留供查阅。依赖旧事务、声明式和扫描命令的 Phase 0 ~ Phase 4 验证脚本及其合同测试已经删除；`scripts/run-phase-5-runtime-validation.ps1` 仍作为当前 Preview/runtime 扩展验收入口保留。
 
 ## 详细结论
 

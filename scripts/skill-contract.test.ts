@@ -73,6 +73,9 @@ describe('Cocos AI Toolkit 技能契约', () => {
     expect(skill).toContain('停下并报告阻塞');
     expect(skill).toContain('直写没有事务和回滚');
     expect(skill).toContain('DIRECT_WRITE_VERIFY_FAILED');
+    expect(skill).toContain('DIRECT_WRITE_OUTCOME_UNKNOWN');
+    expect(skill).toContain('PREFAB_DELETE_CONFIRMATION_REQUIRED');
+    expect(skill).toContain('PREFAB_REFERENCES_CONFIRMATION_REQUIRED');
     expect(skill).toContain('不是批量暂存、事务或回滚');
   });
 

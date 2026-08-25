@@ -66,10 +66,10 @@ export const DirectWriteRequestSchema = z.object({
 /**
  * 直写执行结果（probe.directWrite 响应）。
  * kind 为 success 时 verification 必须存在且 passed 为 true 才算写入生效；
- * operation-failed 时 failure 指明失败操作位置。
+ * operation-failed 时 failure 指明失败操作位置；unknown 表示操作已执行但保存或验证结局无法确认。
  */
 export const DirectWriteOutcomeSchema = z.object({
-  kind: z.enum(['success', 'operation-failed']),
+  kind: z.enum(['success', 'operation-failed', 'unknown']),
   executedOps: z.number().int().nonnegative(),
   verification: WriteVerificationReportSchema.nullable().optional(),
   failure: WriteFailureSchema.optional(),
