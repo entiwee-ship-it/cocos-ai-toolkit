@@ -21,6 +21,8 @@
 
 错误处理：`NODE_NOT_FOUND` 重取 hierarchy；`COMPONENT_NOT_FOUND` 附可用清单；`DIRECT_WRITE_VERIFY_FAILED` 表示 Creator 静默未生效（典型为预制体编辑模式下嵌套实例内部），换路径再写；`ASSET_ALREADY_EXISTS` 换 URL。直写无回滚，误操作用 git 还原。
 
+普通资源删除不需要 MCP 工具：非 Prefab 资源文件可以直接通过文件系统删除，无需 Creator/MCP；同时删除同名 `.meta` 文件（如存在）。这是整文件删除，不是手改 `.meta` JSON。只有 `.prefab` 删除必须使用 `cocos_prefab_delete`。
+
 ---
 
 本文面向 Cocos Creator 3.8.8 项目，给出 Prefab 新建、子树抽取、嵌套实例 Override、引用数组、Enum/嵌套对象，以及写后 Preview 验证的标准调用顺序。
@@ -31,7 +33,7 @@
 2. 启动 Probe Server 和 MCP Server；写操作必须带 `--enable-writes`。
 3. 调用 `cocos_editor_list`，记录目标 `projectId`；同一项目有多个 Creator 时同时传 `editorInstanceId`。
 4. 先 `mode: "preview"`，检查差异、风险、引用影响和返回的 revision，再用完全相同的目标调用 `mode: "apply"`。
-5. 所有 Prefab、Scene 和 Meta 写入都必须经过 Creator/AssetDB；不要直接修改 `.prefab`、`.scene` 或 `.meta` 文件。
+5. Prefab、Scene 和 Meta 的 JSON 内容写入必须经过 Creator/AssetDB；不要直接修改 `.prefab`、`.scene` 或 `.meta` 内容。整文件删除按第 0 节当前边界执行：只有 `.prefab` 必须经 Creator，非 Prefab 资源可直接删除。
 
 默认 `prefab` profile 提供 4 个只读工具和 7 个写工具。需要底层 design、transaction 或 runtime 工具时使用 `--profile full`。
 

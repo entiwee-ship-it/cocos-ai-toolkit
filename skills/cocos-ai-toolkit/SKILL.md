@@ -1,6 +1,6 @@
 ---
 name: cocos-ai-toolkit
-description: Use when a Cocos Creator 3.8.x task must create, inspect, edit, delete, search, or verify Prefabs, scenes, UI hierarchy, components, or asset references; also use for 创建、查看、编辑、删除、查找或验证预制体/场景 and any `.prefab`, `.scene`, or `.meta` work. Do not use for pure `.ts` changes that do not touch Creator serialized assets.
+description: Use when a Cocos Creator 3.8.x task must create, inspect, edit, delete, search, or verify Prefabs, scenes, UI hierarchy, components, or asset references; also use for 创建、查看、编辑、删除、查找或验证预制体/场景 and `.prefab`, `.scene`, or `.meta` JSON work. For deletion, only `.prefab` requires Creator/MCP; non-Prefab files and their matching `.meta` may be deleted directly. Do not use for pure `.ts` changes that do not touch Creator serialized assets.
 ---
 
 # Cocos AI Toolkit（直写档）
@@ -9,9 +9,11 @@ Use the Cocos MCP for Creator resources. Match namespaced tools by the `cocos_*`
 
 ## Non-negotiable boundary
 
-禁止手写或直接编辑 `.prefab`、`.scene`、`.meta` JSON。不得使用 shell、脚本、Edit、Write 或 apply_patch 创建、修改、删除、复制、格式化这些 Creator 序列化资源。
+禁止手写或直接编辑 `.prefab`、`.scene`、`.meta` JSON。不得使用 shell、脚本、Edit、Write 或 apply_patch 创建、修改、复制或格式化这些 Creator 序列化文件。
 
-If MCP, Creator, Probe, Bridge, target identity, or write capability is unavailable, 停下并报告阻塞. Never fall back to file edits.
+删除边界：只有 `.prefab` 必须通过 Creator/MCP 删除。非 Prefab 资源文件可以直接通过文件系统删除，无需 Creator/MCP；同时删除同名 `.meta` 文件（如存在）。这是整文件删除，不是手改 `.meta` JSON。删除前确认目标和引用，删除后检查 git 状态；Creator 正在运行时让 AssetDB 自动刷新，但 Creator 不可用不阻塞这类删除。
+
+If MCP, Creator, Probe, Bridge, target identity, or write capability is unavailable for Prefab operations or serialized-content writes, 停下并报告阻塞. Never fall back to editing serialized JSON. This block does not apply to non-Prefab file deletion.
 
 ## 编辑主流程（按序组合）
 

@@ -14,7 +14,7 @@ AI / Codex / Kimi Code
   -> Cocos Creator Editor / Scene / AssetDB
 ```
 
-外部服务不直接修改 `.prefab`、`.scene` 或 `.meta`。所有 Cocos 语义写入都必须在 Creator 内执行。
+外部服务不直接修改 `.prefab`、`.scene` 或 `.meta` JSON 内容，这些序列化内容的语义写入必须在 Creator 内执行。删除边界单独处理：只有 `.prefab` 必须经过 Creator/MCP；非 Prefab 资源文件可以直接通过文件系统删除，无需 Creator/MCP，同时删除同名 `.meta` 文件（如存在）。这是整文件删除，不是手改 `.meta` JSON。
 
 ## 环境要求
 
@@ -185,7 +185,7 @@ CLI 只允许预定义命令，不提供任意 JavaScript 执行入口，写操�
 - 裸启动只暴露只读工具；写工具仅当显式 `--enable-writes` 启动时注册。
 - **直写不提供事务和回滚**：每个写操作执行 + 自动保存 + 逐项重读即结束；失败即停，已生效的修改保留在文档中。误操作的还原手段是 git。
 - 写后逐项重读是唯一生效性防线：Creator 对部分写入会静默不生效（如预制体编辑模式下嵌套实例内部），重读不符会显式报错。
-- 外部进程不得直接写 `.prefab`、`.scene` 或 `.meta`。
+- 外部进程不得直接修改 `.prefab`、`.scene` 或 `.meta` JSON 内容；只有 `.prefab` 删除必须经过 Creator/MCP，非 Prefab 资源文件可直接删除并同时删除同名 `.meta`。
 - MCP 报告路径受服务端授权根约束，AI 不能提供绝对路径或越过根目录。
 - Creator 3.8.x 小版本变化必须通过真实验证，不允许推测兼容；当前结论严格限定 3.8.8。
 

@@ -58,10 +58,18 @@ describe('Cocos AI Toolkit 技能契约', () => {
     }
   });
 
-  it('明确禁止手写 Creator JSON，并规定直写纪律与阻塞上报', async () => {
-    const skill = await readFile(skillPath, 'utf8');
+  it('只强制 Creator 删除 Prefab，并允许普通资源直接删除', async () => {
+    const [skill, readme] = await Promise.all([
+      readFile(skillPath, 'utf8'),
+      readFile(readmePath, 'utf8')
+    ]);
     expect(skill).toContain('禁止手写或直接编辑 `.prefab`、`.scene`、`.meta` JSON');
-    expect(skill).toContain('不得使用 shell、脚本、Edit、Write 或 apply_patch');
+    expect(skill).toContain('删除边界：只有 `.prefab` 必须通过 Creator/MCP 删除');
+    for (const document of [skill, readme]) {
+      expect(document).toContain('非 Prefab 资源文件可以直接通过文件系统删除，无需 Creator/MCP');
+      expect(document).toContain('同时删除同名 `.meta` 文件（如存在）');
+      expect(document).toContain('整文件删除，不是手改 `.meta` JSON');
+    }
     expect(skill).toContain('停下并报告阻塞');
     expect(skill).toContain('直写没有事务和回滚');
     expect(skill).toContain('DIRECT_WRITE_VERIFY_FAILED');
