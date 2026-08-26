@@ -11,9 +11,11 @@
 5. 写入（每次调用自动保存 + 逐项重读回显）：
    - 改属性：`cocos_component_set_property`（path 或 nodeUuid 寻址节点，componentType 兼容 cc. 前缀，propertyPath 支持 `items[2]`）
    - 建节点：`cocos_node_create`（parentUuid/parentPath + name）
+   - 重命名节点：`cocos_node_rename`（nodeUuid/path + name）
    - 挂组件：`cocos_component_add`（内置组件给 componentType；自定义脚本组件另给 scriptUuid）
    - 删节点：`cocos_node_delete`
    - 节点转 Prefab：`cocos_prefab_create`（assetUrl 必须 `db://assets/*.prefab`）
+   - 重命名 Prefab：`cocos_prefab_rename`（uuid + newName；只改原目录内文件名并保持 UUID）
    - 删 Prefab：`cocos_prefab_delete`（uuid + 精确 confirmAssetUrl；有引用时再传 confirmReferenced=true；不可回滚）
    - 导入文件：`cocos_asset_import`（sourceFilePath + assetUrl）
    - 重导入/编译：`cocos_asset_refresh`（assetUrl）

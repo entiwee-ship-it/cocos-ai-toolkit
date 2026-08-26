@@ -26,6 +26,11 @@ const NodeAddressInput = {
   path: z.string().min(1).optional()
 };
 
+const PrefabNameSchema = z.string().trim().min(1, 'PREFAB_NAME_INVALID').refine(
+  (name) => !name.includes('/') && !name.includes('\\') && !name.toLowerCase().endsWith('.prefab'),
+  'PREFAB_NAME_INVALID'
+);
+
 const BATCH_WRITE_ALLOWED_OPERATION_TYPES = new Set<DocumentWriteOperation['type']>([
   'node.create',
   'node.delete',
@@ -79,12 +84,14 @@ export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
 
 export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_node_create',
+  'cocos_node_rename',
   'cocos_node_set_transform',
   'cocos_node_reparent',
   'cocos_node_delete',
   'cocos_component_add',
   'cocos_component_set_property',
   'cocos_prefab_create',
+  'cocos_prefab_rename',
   'cocos_prefab_save',
   'cocos_prefab_delete',
   'cocos_asset_import',
@@ -207,6 +214,13 @@ export class CocosDirectToolService {
     return this.directWrite(editor, [operation], 'node-create');
   }
 
+  async renameNode(input: ProjectSelector & NodeAddress & { name: string }) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    assertExclusiveNodeAddress(input);
+    const nodeUuid = await this.resolveNodeUuid(editor, input);
+    return this.directWrite(editor, [{ type: 'node.rename' as const, nodeUuid, name: input.name }], 'node-rename');
+  }
+
   async deleteNode(input: ProjectSelector & NodeAddress) {
     const editor = await this.readonlyService.resolveEditor(input);
     const nodeUuid = await this.resolveNodeUuid(editor, input);
@@ -300,6 +314,27 @@ export class CocosDirectToolService {
       assetUrl: input.assetUrl
     });
     return { editor, result };
+  }
+
+  /** 通过 Creator AssetDB 在原目录内重命名 Prefab，并保持原 UUID。 */
+  async renamePrefab(input: ProjectSelector & { uuid: string; newName: string }) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    const inspected = await this.readonlyService.inspectAsset({ ...input, pageSize: 1 });
+    if (inspected.asset.type !== 'cc.Prefab') {
+      throw new Error(`ASSET_NOT_PREFAB:${input.uuid}`);
+    }
+    const sourceUrl = inspected.asset.url ?? inspected.asset.path;
+    if (!sourceUrl) throw new Error(`ASSET_URL_UNAVAILABLE:${input.uuid}`);
+    assertAssetUrl(sourceUrl, '.prefab');
+    const newName = PrefabNameSchema.parse(input.newName);
+    const targetUrl = `${sourceUrl.slice(0, sourceUrl.lastIndexOf('/') + 1)}${newName}.prefab`;
+    const result = await this.directWrite(editor, [{
+      type: 'asset.move' as const,
+      sourceUrl,
+      targetUrl,
+      expectedAssetUuid: input.uuid
+    }], 'prefab-rename');
+    return { ...result, assetUuid: input.uuid, sourceUrl, targetUrl };
   }
 
   /** 保存当前文档。 */
@@ -1006,6 +1041,17 @@ export function registerCocosDirectWriteTools(
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.createNode(input)));
 
+  server.registerTool('cocos_node_rename', {
+    description: '按 nodeUuid 或 path 重命名节点并保存回读；二者必须且只能提供一个。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      ...NodeAddressInput,
+      name: z.string().min(1)
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.renameNode(input)));
+
   server.registerTool('cocos_node_set_transform', {
     description: '修改节点局部 position/rotation/scale 并保存回读；nodeUuid 或 path 二选一，至少提供一个 transform 分量。',
     inputSchema: {
@@ -1077,6 +1123,17 @@ export function registerCocosDirectWriteTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.createPrefab(input)));
+
+  server.registerTool('cocos_prefab_rename', {
+    description: '按 UUID 在原目录内重命名 Prefab；newName 不含路径或 .prefab 后缀，Creator AssetDB 会保持 UUID 并拒绝覆盖。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      uuid: z.string().min(1),
+      newName: PrefabNameSchema
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.renamePrefab(input)));
 
   server.registerTool('cocos_prefab_save', {
     description: '保存当前文档（直写工具已自动保存，此入口用于手工修改后的落盘）。',

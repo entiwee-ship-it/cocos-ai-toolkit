@@ -91,7 +91,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目。健康检查会核对安装模式、精确工具集合、Toolkit/MCP/Bridge 版本和源码提交，再调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（完整写模式 30 个）
+## MCP 工具面（完整写模式 32 个）
 
 ### 编辑态只读 5 个（默认开放）
 
@@ -103,17 +103,19 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_node_read` | 按 nodeUuid 或 path 读取节点详情；`fields/propertyPaths/summary` 可精确读取组件现值并缩小输出 |
 | `cocos_prefab_open` | 通过 Creator 打开 Prefab 并等待文档身份就绪 |
 
-### 编辑态直写 12 个（`--enable-writes` 才注册；每次写入自动保存并逐项重读回显）
+### 编辑态直写 14 个（`--enable-writes` 才注册；每次写入自动保存并逐项重读回显）
 
 | 工具 | 用途 |
 | --- | --- |
 | `cocos_node_create` | 在父节点（parentUuid 或 parentPath）下创建节点 |
+| `cocos_node_rename` | 按 nodeUuid 或 path 重命名节点并保存回读 |
 | `cocos_node_set_transform` | 按 nodeUuid 或 path 修改局部 position/rotation/scale，未提供的分量保持不变 |
 | `cocos_node_reparent` | 把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex |
 | `cocos_node_delete` | 按 nodeUuid 或 path 删除节点及子树，不可回滚 |
 | `cocos_component_add` | 在节点上挂载组件；自定义脚本组件必须提供 scriptUuid |
 | `cocos_component_set_property` | 修改组件属性值；propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致时拒绝写入 |
 | `cocos_prefab_create` | 把当前文档中的节点生成为 Prefab 资产 |
+| `cocos_prefab_rename` | 按 UUID 在原目录内重命名 Prefab，通过 Creator AssetDB 保持 UUID 并拒绝覆盖 |
 | `cocos_prefab_save` | 保存当前文档（手工修改后的落盘入口） |
 | `cocos_prefab_delete` | 按 UUID 删除 Prefab 资产；不可回滚，必须精确确认 URL，存在反向引用时需二次确认 |
 | `cocos_asset_import` | 把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入 |

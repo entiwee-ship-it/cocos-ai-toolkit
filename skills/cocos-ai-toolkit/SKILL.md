@@ -30,12 +30,14 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | Intent | Tool |
 | --- | --- |
 | 创建节点 | `cocos_node_create`（parentUuid 或 parentPath，二选一） |
+| 重命名节点 | `cocos_node_rename`（nodeUuid 或 path 二选一） |
 | 修改节点局部变换 | `cocos_node_set_transform`（nodeUuid 或 path 二选一；position/rotation/scale 至少一项） |
 | 删除节点及子树 | `cocos_node_delete` |
 | 迁移节点 | `cocos_node_reparent`（源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex） |
 | 挂载组件 | `cocos_component_add`（自定义脚本组件必须给 scriptUuid，用 asset_search 查） |
 | 改组件属性值 | `cocos_component_set_property`（propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致会拒绝写入） |
 | 节点生成 Prefab | `cocos_prefab_create`（assetUrl 必须 `db://assets/` 且 `.prefab` 后缀） |
+| 重命名 Prefab | `cocos_prefab_rename`（uuid + 不含路径和 `.prefab` 后缀的 newName；Creator AssetDB 保持 UUID 并拒绝覆盖） |
 | 保存当前文档 | `cocos_prefab_save`（写工具已自动保存，此入口用于手工改动落盘） |
 | 删除 Prefab | `cocos_prefab_delete`（不可回滚；传精确 `confirmAssetUrl`，有引用时再传 `confirmReferenced:true`） |
 | 导入外部文件 | `cocos_asset_import`（图片/音频等，复制进 assets 并导入） |

@@ -284,12 +284,14 @@ describe('直写档工具注册', () => {
     }
     for (const gated of [
       'cocos_node_create',
+      'cocos_node_rename',
       'cocos_node_set_transform',
       'cocos_node_delete',
       'cocos_node_reparent',
       'cocos_component_add',
       'cocos_component_set_property',
       'cocos_prefab_create',
+      'cocos_prefab_rename',
       'cocos_prefab_save',
       'cocos_prefab_delete',
       'cocos_asset_import',
@@ -325,12 +327,14 @@ describe('直写档工具注册', () => {
     const writeNames = writeTools.map((tool) => tool.name);
     for (const gated of [
       'cocos_node_create',
+      'cocos_node_rename',
       'cocos_node_set_transform',
       'cocos_node_delete',
       'cocos_node_reparent',
       'cocos_component_add',
       'cocos_component_set_property',
       'cocos_prefab_create',
+      'cocos_prefab_rename',
       'cocos_prefab_save',
       'cocos_prefab_delete',
       'cocos_asset_import',
@@ -685,6 +689,49 @@ describe('直写档写工具', () => {
     const payload = write?.payload as { params: { operations: Array<Record<string, unknown>> } };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.operations).toEqual([{ type: 'node.delete', nodeUuid: 'panel-uuid' }]);
+  });
+
+  it('cocos_node_rename 按 path 直写 node.rename', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_node_rename',
+      arguments: { projectId: 'proj1', path: 'Root/Panel', name: 'RenamedPanel' }
+    });
+    expect(result.structuredContent).toMatchObject({
+      outcome: { kind: 'success', executedOps: 1 }
+    });
+    const write = probeClient.requests.at(-1);
+    const payload = write?.payload as {
+      params: { operations: Array<Record<string, unknown>>; save: boolean; undoGroup: string }
+    };
+    expect(write?.method).toBe('probe.directWrite');
+    expect(payload.params.save).toBe(true);
+    expect(payload.params.undoGroup).toContain('node-rename');
+    expect(payload.params.operations).toEqual([{
+      type: 'node.rename',
+      nodeUuid: 'panel-uuid',
+      name: 'RenamedPanel'
+    }]);
+  });
+
+  it('cocos_node_rename 严格要求 nodeUuid 或 path 二选一', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    for (const address of [
+      {},
+      { nodeUuid: 'panel-uuid', path: 'Root/Panel' }
+    ]) {
+      const result = await client.callTool({
+        name: 'cocos_node_rename',
+        arguments: { projectId: 'proj1', ...address, name: 'RenamedPanel' }
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
+    }
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('cocos_node_set_transform 按 path 直写 node.set_transform', async () => {
@@ -1096,6 +1143,62 @@ describe('直写档写工具', () => {
     });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('ASSET_URL_TYPE_INVALID');
+  });
+
+  it('cocos_prefab_rename 按 UUID 在同目录内直写 asset.move 并保持 UUID', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_rename',
+      arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1', newName: 'RenamedPrefab' }
+    });
+    expect(result.structuredContent).toMatchObject({
+      assetUuid: 'prefab-uuid-1',
+      sourceUrl: 'db://assets/ui/Test.prefab',
+      targetUrl: 'db://assets/ui/RenamedPrefab.prefab',
+      outcome: { kind: 'success', executedOps: 1 }
+    });
+    const write = probeClient.requests.at(-1);
+    const payload = write?.payload as {
+      params: { operations: Array<Record<string, unknown>>; save: boolean; undoGroup: string }
+    };
+    expect(write?.method).toBe('probe.directWrite');
+    expect(payload.params.save).toBe(true);
+    expect(payload.params.undoGroup).toContain('prefab-rename');
+    expect(payload.params.operations).toEqual([{
+      type: 'asset.move',
+      sourceUrl: 'db://assets/ui/Test.prefab',
+      targetUrl: 'db://assets/ui/RenamedPrefab.prefab',
+      expectedAssetUuid: 'prefab-uuid-1'
+    }]);
+  });
+
+  it('cocos_prefab_rename 拒绝非 Prefab 资产和路径型名称', async () => {
+    const nonPrefabProbe = new RecordingProbeClient(createRespond({
+      'probe.assets': {
+        ...INSPECT_ASSET_RESPONSE,
+        details: { ...INSPECT_ASSET_RESPONSE.details, type: 'cc.ImageAsset' }
+      }
+    }));
+    const { client: nonPrefabClient } = await createHarness(nonPrefabProbe, { enableWrites: true });
+    const nonPrefab = await nonPrefabClient.callTool({
+      name: 'cocos_prefab_rename',
+      arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1', newName: 'RenamedPrefab' }
+    });
+    expect(nonPrefab.isError).toBe(true);
+    expect(JSON.stringify(nonPrefab.content)).toContain('ASSET_NOT_PREFAB');
+    expect(nonPrefabProbe.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+
+    const invalidNameProbe = new RecordingProbeClient(createRespond());
+    const { client: invalidNameClient } = await createHarness(invalidNameProbe, { enableWrites: true });
+    const invalidName = await invalidNameClient.callTool({
+      name: 'cocos_prefab_rename',
+      arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1', newName: '../RenamedPrefab' }
+    });
+    expect(invalidName.isError).toBe(true);
+    expect(JSON.stringify(invalidName.content)).toContain('PREFAB_NAME_INVALID');
+    expect(invalidNameProbe.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('cocos_prefab_delete 缺少精确 URL 确认时拒绝删除', async () => {
