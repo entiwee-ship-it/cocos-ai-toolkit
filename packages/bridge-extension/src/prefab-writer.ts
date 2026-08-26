@@ -226,13 +226,13 @@ async function unlinkInstance(
   await dependencies.unlinkPrefabInstance(operation.instanceRootUuid, false);
   let afterSubtree = await dependencies.getPrefabSubtreeSnapshot(operation.instanceRootUuid);
   if (operation.removeNested) {
-    let previousNestedCount = countNestedNodes(afterSubtree);
+    let previousNestedCount = countRemainingInstanceRoots(afterSubtree);
     while (afterSubtree && previousNestedCount > 0) {
-      const nestedRoot = findDeepestNestedRoot(afterSubtree);
+      const nestedRoot = findDeepestRemainingInstanceRoot(afterSubtree);
       if (!nestedRoot) break;
       await dependencies.unlinkPrefabInstance(nestedRoot.nodeUuid, false);
       const next = await dependencies.getPrefabSubtreeSnapshot(operation.instanceRootUuid);
-      const nextNestedCount = countNestedNodes(next);
+      const nextNestedCount = countRemainingInstanceRoots(next);
       if (!next || nextNestedCount >= previousNestedCount) {
         throw new ProbeError('PREFAB_COMPLETE_UNPACK_INCOMPLETE', {
           nodeUuid: operation.instanceRootUuid,
@@ -255,13 +255,13 @@ async function unlinkInstance(
   };
 }
 
-function countNestedNodes(snapshot: PrefabSubtreeSnapshot | null): number {
-  return snapshot?.nodes.filter((node) => node.isNested === true && node.state === 2).length ?? 0;
+function countRemainingInstanceRoots(snapshot: PrefabSubtreeSnapshot | null): number {
+  return snapshot?.nodes.filter((node) => node.state === 2 && Boolean(node.prefabAssetUuid)).length ?? 0;
 }
 
-function findDeepestNestedRoot(snapshot: PrefabSubtreeSnapshot) {
+function findDeepestRemainingInstanceRoot(snapshot: PrefabSubtreeSnapshot) {
   return snapshot.nodes
-    .filter((node) => node.isNested === true && node.state === 2 && Boolean(node.prefabAssetUuid))
+    .filter((node) => node.state === 2 && Boolean(node.prefabAssetUuid))
     .sort((left, right) => right.relativePath.split('/').length - left.relativePath.split('/').length)[0]
     ?? null;
 }

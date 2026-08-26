@@ -725,6 +725,36 @@ describe('saveAndVerifyDirectWrite', () => {
     });
   });
 
+  it('prefab.unlink_instance complete 内层实例提升为直接实例时验证失败', async () => {
+    const dependencies = createDependencies();
+    dependencies.getPrefabInstanceInfo = async () => prefabInfo({
+      nodeUuid: 'instance-new',
+      prefabAssetUuid: null,
+      instanceFileId: null
+    });
+    dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'instance-new' });
+    dependencies.getPrefabSubtreeSnapshot = async () => unpackSnapshot({ currentUnlinked: true });
+
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [{
+      operation: {
+        type: 'prefab.unlink_instance',
+        instanceRootUuid: 'instance-old',
+        removeNested: true,
+        expectedPrefabAssetUuid: 'asset-panel',
+        resultNodeStablePath: '/Scene~0/Panel~0',
+        resultPrefabBeforeSubtree: unpackSnapshot()
+      },
+      nodeUuid: 'instance-old', assetUuid: null,
+      before: prefabInfo(), after: prefabInfo({ prefabAssetUuid: null, instanceFileId: null })
+    } as never], dependencies);
+
+    expect(report.passed).toBe(false);
+    expect(report.items[0].actual).toMatchObject({
+      allAssociationsRemoved: false,
+      remainingNestedAssociationCount: 1
+    });
+  });
+
   it('prefab.unlink_instance 组件丢失时验证失败', async () => {
     const dependencies = createDependencies();
     dependencies.getPrefabInstanceInfo = async () => prefabInfo({
@@ -908,7 +938,7 @@ function unpackSnapshot(options: {
         componentTypes: ['cc.Sprite'],
         prefabAssetUuid: options.completeUnlinked ? 'host-asset' : 'asset-nested',
         instanceFileId: options.completeUnlinked ? null : 'nested-instance-file-id',
-        isNested: !options.completeUnlinked,
+        isNested: !(options.currentUnlinked || options.completeUnlinked),
         state: options.completeUnlinked ? 1 : 2
       }
     ]

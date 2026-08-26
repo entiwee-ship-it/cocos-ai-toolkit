@@ -499,7 +499,7 @@ describe('executePrefabWriteOperation', () => {
         },
         {
           nodeUuid: 'nested-node', relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
-          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: true, state: 2
+          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: false, state: 2
         }
       ]
     });
@@ -538,7 +538,7 @@ describe('executePrefabWriteOperation', () => {
         },
         {
           nodeUuid: 'nested-node', relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
-          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: true, state: 2
+          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: false, state: 2
         }
       ]
     });

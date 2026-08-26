@@ -603,11 +603,11 @@ function analyzePrefabUnpack(
   ));
   const nestedInstanceRoots = nestedAssociations.filter((node) => node.state === 2);
   const nestedAssociationsPreserved = actual !== null && nestedAssociations.every((node) => (
-    actualByPath.get(node.relativePath)?.isNested === true
-    && actualByPath.get(node.relativePath)?.prefabAssetUuid === node.prefabAssetUuid
+    actualByPath.get(node.relativePath)?.prefabAssetUuid === node.prefabAssetUuid
+    && actualByPath.get(node.relativePath)?.state === node.state
   ));
   const allAssociationsRemoved = actual !== null
-    && actualNodes.every((node) => node.isNested !== true);
+    && actualNodes.every((node) => node.state !== 2 || node.prefabAssetUuid === null);
   const nestedAssetUuids = [...new Set(
     nestedInstanceRoots
       .map((node) => node.prefabAssetUuid)
@@ -630,7 +630,7 @@ function analyzePrefabUnpack(
       nestedAssociationsPreserved,
       allAssociationsRemoved,
       remainingNestedAssociationCount: actualNodes.filter((node) => (
-        node.isNested === true && node.state === 2
+        node.state === 2 && node.prefabAssetUuid !== null
       )).length
     },
     passed: subtreePreserved
