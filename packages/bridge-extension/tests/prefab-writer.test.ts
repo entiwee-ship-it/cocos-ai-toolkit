@@ -41,7 +41,8 @@ function createSubtreeSnapshot(overrides: Record<string, unknown> = {}) {
         componentTypes: ['cc.UITransform'],
         prefabAssetUuid: 'asset-1',
         instanceFileId: 'inst-1',
-        isNested: true
+        isNested: true,
+        state: 2
       },
       {
         nodeUuid: 'nested-node',
@@ -50,7 +51,8 @@ function createSubtreeSnapshot(overrides: Record<string, unknown> = {}) {
         componentTypes: ['cc.Sprite'],
         prefabAssetUuid: 'asset-nested',
         instanceFileId: 'inst-nested',
-        isNested: true
+        isNested: true,
+        state: 2
       }
     ],
     ...overrides
@@ -493,11 +495,11 @@ describe('executePrefabWriteOperation', () => {
       nodes: [
         {
           nodeUuid: 'n1', relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
-          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false
+          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false, state: 1
         },
         {
           nodeUuid: 'nested-node', relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
-          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: true
+          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: true, state: 2
         }
       ]
     });
@@ -532,11 +534,11 @@ describe('executePrefabWriteOperation', () => {
       nodes: [
         {
           nodeUuid: 'n1', relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
-          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false
+          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false, state: 1
         },
         {
           nodeUuid: 'nested-node', relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
-          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: true
+          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: true, state: 2
         }
       ]
     });
@@ -544,11 +546,11 @@ describe('executePrefabWriteOperation', () => {
       nodes: [
         {
           nodeUuid: 'n1', relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
-          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false
+          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false, state: 1
         },
         {
           nodeUuid: 'nested-node', relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
-          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false
+          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false, state: 1
         }
       ]
     });

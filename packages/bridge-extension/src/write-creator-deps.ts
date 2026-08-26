@@ -556,7 +556,8 @@ async function readPrefabSubtreeSnapshot(nodeUuid: string): Promise<PrefabSubtre
       instanceFileId: typeof prefab.instanceFileId === 'string' && prefab.instanceFileId
         ? prefab.instanceFileId
         : null,
-      isNested: typeof prefab.isNested === 'boolean' ? prefab.isNested : null
+      isNested: typeof prefab.isNested === 'boolean' ? prefab.isNested : null,
+      state: typeof prefab.state === 'number' ? prefab.state : null
     });
     const children = Array.isArray(node.children) ? node.children : [];
     children.forEach((child, index) => visit(readObject(child), [...indexes, index]));

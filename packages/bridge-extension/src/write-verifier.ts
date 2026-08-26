@@ -566,7 +566,8 @@ function readPrefabSubtreeSnapshot(value: unknown): PrefabSubtreeSnapshot | null
       componentTypes: entry.componentTypes as string[],
       prefabAssetUuid: readOptionalString(entry.prefabAssetUuid),
       instanceFileId: readOptionalString(entry.instanceFileId),
-      isNested: typeof entry.isNested === 'boolean' ? entry.isNested : null
+      isNested: typeof entry.isNested === 'boolean' ? entry.isNested : null,
+      state: typeof entry.state === 'number' ? entry.state : null
     });
   }
   return { rootStablePath: record.rootStablePath, nodes };
@@ -597,6 +598,7 @@ function analyzePrefabUnpack(
     && node.prefabAssetUuid !== null
     && node.prefabAssetUuid !== expectedPrefabAssetUuid
   ));
+  const nestedInstanceRoots = nestedAssociations.filter((node) => node.state === 2);
   const nestedAssociationsPreserved = actual !== null && nestedAssociations.every((node) => (
     actualByPath.get(node.relativePath)?.isNested === true
     && actualByPath.get(node.relativePath)?.prefabAssetUuid === node.prefabAssetUuid
@@ -604,7 +606,7 @@ function analyzePrefabUnpack(
   const allAssociationsRemoved = actual !== null
     && actualNodes.every((node) => node.isNested !== true);
   const nestedAssetUuids = [...new Set(
-    nestedAssociations
+    nestedInstanceRoots
       .map((node) => node.prefabAssetUuid)
       .filter((assetUuid): assetUuid is string => assetUuid !== null)
   )].sort();
@@ -614,7 +616,7 @@ function analyzePrefabUnpack(
       oldPrefabAssetUuid: expectedPrefabAssetUuid,
       subtreeNodeCount: beforeNodes.length,
       preserveComponents: true,
-      nestedAssociationCount: nestedAssociations.length,
+      nestedAssociationCount: nestedInstanceRoots.length,
       nestedAssetUuids
     },
     actual: {
@@ -624,7 +626,9 @@ function analyzePrefabUnpack(
       oldAssociationRemoved,
       nestedAssociationsPreserved,
       allAssociationsRemoved,
-      remainingNestedAssociationCount: actualNodes.filter((node) => node.isNested === true).length
+      remainingNestedAssociationCount: actualNodes.filter((node) => (
+        node.isNested === true && node.state === 2
+      )).length
     },
     passed: subtreePreserved
       && componentsPreserved

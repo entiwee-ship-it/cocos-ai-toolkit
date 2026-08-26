@@ -876,7 +876,8 @@ function unpackSnapshot(options: {
         componentTypes: options.rootComponentTypes ?? ['cc.UITransform'],
         prefabAssetUuid: options.currentUnlinked || options.completeUnlinked ? 'host-asset' : 'asset-panel',
         instanceFileId: options.currentUnlinked || options.completeUnlinked ? null : 'instance-file-id',
-        isNested: !(options.currentUnlinked || options.completeUnlinked)
+        isNested: !(options.currentUnlinked || options.completeUnlinked),
+        state: options.currentUnlinked || options.completeUnlinked ? 1 : 2
       },
       {
         nodeUuid: 'nested-root',
@@ -885,7 +886,8 @@ function unpackSnapshot(options: {
         componentTypes: ['cc.Sprite'],
         prefabAssetUuid: options.completeUnlinked ? 'host-asset' : 'asset-nested',
         instanceFileId: options.completeUnlinked ? null : 'nested-instance-file-id',
-        isNested: !options.completeUnlinked
+        isNested: !options.completeUnlinked,
+        state: options.completeUnlinked ? 1 : 2
       }
     ]
   } as never;

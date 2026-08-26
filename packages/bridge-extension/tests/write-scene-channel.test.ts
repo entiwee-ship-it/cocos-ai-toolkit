@@ -167,7 +167,7 @@ describe('executeWriteSceneOperations', () => {
       rootStablePath: '/Scene~0/Panel~0',
       nodes: [{
         nodeUuid: 'instance-old', relativePath: '', name: 'Panel', componentTypes: [],
-        prefabAssetUuid: 'asset-panel', instanceFileId: 'instance-file-id', isNested: true
+        prefabAssetUuid: 'asset-panel', instanceFileId: 'instance-file-id', isNested: true, state: 2
       }]
     };
     dependencies.executePrefabOperation = async () => ({

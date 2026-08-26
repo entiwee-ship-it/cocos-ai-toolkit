@@ -43,6 +43,7 @@ export interface PrefabSubtreeSnapshot {
     prefabAssetUuid: string | null;
     instanceFileId: string | null;
     isNested: boolean | null;
+    state: number | null;
   }>;
 }
 
@@ -255,21 +256,12 @@ async function unlinkInstance(
 }
 
 function countNestedNodes(snapshot: PrefabSubtreeSnapshot | null): number {
-  return snapshot?.nodes.filter((node) => node.isNested === true).length ?? 0;
+  return snapshot?.nodes.filter((node) => node.isNested === true && node.state === 2).length ?? 0;
 }
 
 function findDeepestNestedRoot(snapshot: PrefabSubtreeSnapshot) {
-  const byPath = new Map(snapshot.nodes.map((node) => [node.relativePath, node]));
   return snapshot.nodes
-    .filter((node) => {
-      if (node.isNested !== true || !node.prefabAssetUuid) return false;
-      const separator = node.relativePath.lastIndexOf('/');
-      const parentPath = separator >= 0 ? node.relativePath.slice(0, separator) : '';
-      const parent = byPath.get(parentPath);
-      return !parent
-        || parent.isNested !== true
-        || parent.prefabAssetUuid !== node.prefabAssetUuid;
-    })
+    .filter((node) => node.isNested === true && node.state === 2 && Boolean(node.prefabAssetUuid))
     .sort((left, right) => right.relativePath.split('/').length - left.relativePath.split('/').length)[0]
     ?? null;
 }
