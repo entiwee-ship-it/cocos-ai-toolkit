@@ -1,6 +1,6 @@
 # Cocos AI Toolkit 使用手册
 
-本文只描述当前 `0.4.x` 直写架构。旧事务、声明式预览确认链路、回滚和状态查询已彻底移除，不属于当前或后续兼容面。
+本文只描述当前 `0.5.x` 直写架构。旧事务、声明式预览确认链路、回滚和状态查询已彻底移除，不属于当前或后续兼容面。
 
 ## 1. 核心边界
 
@@ -17,7 +17,7 @@
 3. `cocos_asset_search`：按名称或路径寻找 Prefab、Scene、脚本 UUID。
 4. `cocos_asset_inspect`：读取资产类型、URL、依赖和反向使用者。
 5. `cocos_prefab_open` 或 `cocos_scene_open`：通过 Creator 打开目标文档并等待身份就绪。
-6. `cocos_hierarchy`：读取节点树；`cocos_node_read`：查看节点、组件和属性现值。
+6. `cocos_hierarchy`：读取节点树；`cocos_node_read`：查看单节点、Prefab 实例摘要和 bounds；多节点使用 `cocos_nodes_read`。
 7. 调用写工具；成功响应中的 `outcome.verification.items` 是保存后重读证据。
 8. 手工编辑后需要显式落盘时调用 `cocos_document_save`。
 9. 需要视觉或交互验证时运行 Preview 工具，最后用 `cocos_preview_stop` 清理会话。
@@ -29,17 +29,19 @@
 - `cocos_editor_list`、`cocos_editor_state`
 - `cocos_asset_search`、`cocos_asset_inspect`
 - `cocos_prefab_open`、`cocos_scene_open`
-- `cocos_hierarchy`、`cocos_node_read`
+- `cocos_hierarchy`、`cocos_node_read`、`cocos_nodes_read`
 
 写工具：
 
-- 节点：`cocos_node_create`、`cocos_node_rename`、`cocos_node_set_transform`、`cocos_node_reparent`、`cocos_node_delete`
+- 节点：`cocos_node_create`、`cocos_node_rename`、`cocos_node_set_transform`、`cocos_node_select`、`cocos_node_reparent`、`cocos_node_delete`
 - 组件：`cocos_component_add`、`cocos_component_set_property`
 - Prefab：`cocos_prefab_instantiate`、`cocos_prefab_unpack`、`cocos_prefab_create`、`cocos_prefab_rename`、`cocos_prefab_delete`
 - 文档与资源：`cocos_document_save`、`cocos_asset_import`、`cocos_asset_refresh`
 - 多操作：`cocos_batch_write`，只接受 `node.*` 和 `component.*`；它只减少往返，不提供原子提交或回滚。
 
 Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读取返回的 `nodeUuid`、`instanceFileId` 和 `stablePath`；不要从创建瞬间缓存 UUID。解包使用 `cocos_prefab_unpack`：`current` 仅解除所选实例，`complete` 同时解除子树内嵌套实例；两种模式都必须传当前源资产 UUID 作为乐观锁。Prefab 重命名使用 `uuid + newName`，只修改原目录内文件名。Creator AssetDB 会拒绝覆盖已有目标，并验证移动后 UUID 不变。
+
+`cocos_node_read` 的 `prefabInstance` 提供实例根、源 UUID、instanceFileId、state 和 sourceUrl。需要布局证据时传 `includeBounds`；可追加后代可视并集和 `relativeToPath`。`cocos_nodes_read` 最多读取 32 项，按 nodeUuids 后接 paths 的顺序逐项返回，单项错误和输出截断都会显式标记。
 
 ## 4. Preview 与运行态验证
 

@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { BRIDGE_CAPABILITIES, buildBridgeHello } from '../src/bridge-state.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BRIDGE_CAPABILITIES, buildBridgeHello, selectEditorNode } from '../src/bridge-state.js';
 import { normalizeAssetInfo } from '../src/asset-probe.js';
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('buildBridgeHello', () => {
   it('保留项目身份并只声明当前 Bridge 真实提供的写能力', () => {
@@ -22,6 +24,7 @@ describe('buildBridgeHello', () => {
     expect(BRIDGE_CAPABILITIES).toContain('probe.directWrite');
     expect(BRIDGE_CAPABILITIES).toContain('probe.saveDocument');
     expect(BRIDGE_CAPABILITIES).toContain('probe.importAsset');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.nodeSelect');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.documentSnapshot');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.writePrepare');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.writeRevision');
@@ -30,6 +33,33 @@ describe('buildBridgeHello', () => {
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.transactionList');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.transactionRollback');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.createAsset');
+  });
+});
+
+describe('selectEditorNode', () => {
+  it('先清空再选择并回读唯一节点', () => {
+    const selection: string[] = ['old-node'];
+    const calls: string[] = [];
+    vi.stubGlobal('Editor', {
+      Selection: {
+        clear(type: string) {
+          calls.push(`clear:${type}`);
+          selection.splice(0);
+        },
+        select(type: string, uuid: string) {
+          calls.push(`select:${type}:${uuid}`);
+          selection.push(uuid);
+        },
+        getSelected: () => [...selection]
+      }
+    });
+
+    expect(selectEditorNode('node-1')).toEqual({
+      nodeUuid: 'node-1',
+      selected: true,
+      selection: ['node-1']
+    });
+    expect(calls).toEqual(['clear:node', 'select:node:node-1']);
   });
 });
 

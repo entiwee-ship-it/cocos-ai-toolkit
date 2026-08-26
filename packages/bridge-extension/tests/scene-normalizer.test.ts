@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { PrefabProbeSchema } from '../../protocol/src/index.js';
-import { normalizeComponentDump, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from '../src/scene-probe.js';
+import {
+  normalizeComponentDump,
+  normalizeHierarchyTree,
+  normalizeNodeDump,
+  normalizePrefabDump,
+  normalizePrefabInstanceSummary,
+  resolvePrefabOverrideValues
+} from '../src/scene-probe.js';
 
 describe('scene normalizer', () => {
   it('保留节点身份、Transform、层级和完整原始 Dump', () => {
@@ -18,6 +25,36 @@ describe('scene normalizer', () => {
       transform: { position: { x: 1, y: 2, z: 3 } }
     });
     expect(node.raw).toEqual(raw);
+  });
+
+  it('节点摘要直接返回 Prefab 实例根身份', () => {
+    const summary = normalizePrefabInstanceSummary({
+      uuid: { value: 'instance-node' },
+      __prefab__: {
+        uuid: 'source-prefab',
+        rootUuid: 'instance-node',
+        prefabStateInfo: { state: 2 },
+        instance: { value: { fileId: { value: 'instance-file-id' } } }
+      }
+    });
+
+    expect(summary).toEqual({
+      isInstanceRoot: true,
+      prefabAssetUuid: 'source-prefab',
+      instanceFileId: 'instance-file-id',
+      state: 2,
+      sourceUrl: null
+    });
+  });
+
+  it('层级深度截断时保留 truncated 标记', () => {
+    const hierarchy = normalizeHierarchyTree({
+      uuid: 'root', name: 'Root', children: [{
+        uuid: 'child', name: 'Child', children: [{ uuid: 'grandchild', name: 'Grandchild', children: [] }]
+      }]
+    }, 1) as { children: Array<{ truncated: boolean; children: unknown[] }> };
+
+    expect(hierarchy.children[0]).toMatchObject({ truncated: true, children: [] });
   });
 
   it('区分 Node、Component、Asset 引用并保留自定义组件信息', () => {

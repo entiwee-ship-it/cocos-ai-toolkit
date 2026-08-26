@@ -41,6 +41,7 @@ const ONLINE_EDITOR = {
     'probe.openAsset',
     'probe.hierarchy',
     'probe.node',
+    'probe.nodeSelect',
     'probe.component'
   ]
 };
@@ -128,6 +129,13 @@ const NODE_DETAIL = {
   parentUuid: 'root-uuid',
   childUuids: [],
   transform: { position: null, rotation: null, scale: null },
+  prefabInstance: {
+    isInstanceRoot: true,
+    prefabAssetUuid: 'source-prefab',
+    instanceFileId: 'instance-file-id',
+    state: 2,
+    sourceUrl: 'db://assets/ui/Source.prefab'
+  },
   components: [{
     identity: { objectUuid: 'label-comp-uuid', fileId: 'label-file-id' },
     class: {
@@ -221,7 +229,7 @@ const DIRECT_WRITE_SUCCESS = {
 };
 
 function createRespond(overrides: Record<string, unknown> = {}) {
-  return (method: string): unknown => {
+  return (method: string, _payload?: unknown): unknown => {
     if (method === 'server.editors') return [ONLINE_EDITOR];
     if (method in overrides) return overrides[method];
     if (method === 'probe.assetIndex') {
@@ -231,6 +239,7 @@ function createRespond(overrides: Record<string, unknown> = {}) {
     if (method === 'probe.openAsset') return { opened: true, uuid: 'prefab-uuid-1' };
     if (method === 'probe.hierarchy') return { data: HIERARCHY_TREE, raw: null, source: 'message-api' };
     if (method === 'probe.node') return { data: NODE_DETAIL, raw: null, source: 'message-api' };
+    if (method === 'probe.nodeSelect') return { nodeUuid: 'panel-uuid', selected: true, selection: ['panel-uuid'] };
     if (method === 'probe.component') {
       return { data: { schema: COMPONENT_SCHEMA, raw: null }, raw: null, source: 'message-api' };
     }
@@ -281,7 +290,7 @@ async function createHarness(
 }
 
 describe('直写档工具注册', () => {
-  it('默认注册 5 个只读直写工具，写工具仅 enableWrites 时注册', async () => {
+  it('默认注册只读工具，写工具仅 enableWrites 时注册', async () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const { client } = await createHarness(probeClient);
 
@@ -294,6 +303,7 @@ describe('直写档工具注册', () => {
       'cocos_asset_inspect',
       'cocos_hierarchy',
       'cocos_node_read',
+      'cocos_nodes_read',
       'cocos_prefab_open',
       'cocos_scene_open'
     ]) {
@@ -303,6 +313,7 @@ describe('直写档工具注册', () => {
       'cocos_node_create',
       'cocos_node_rename',
       'cocos_node_set_transform',
+      'cocos_node_select',
       'cocos_node_delete',
       'cocos_node_reparent',
       'cocos_component_add',
@@ -348,6 +359,7 @@ describe('直写档工具注册', () => {
       'cocos_node_create',
       'cocos_node_rename',
       'cocos_node_set_transform',
+      'cocos_node_select',
       'cocos_node_delete',
       'cocos_node_reparent',
       'cocos_component_add',
@@ -522,9 +534,48 @@ describe('直写档只读工具', () => {
       }
     });
     expect(JSON.stringify(result.structuredContent)).not.toContain('"raw"');
-    expect(probeClient.requests.at(-1)).toMatchObject({
-      method: 'probe.hierarchy',
-      payload: { params: { depth: 50 } }
+    const hierarchyRequests = probeClient.requests.filter((request) => request.method === 'probe.hierarchy');
+    expect(hierarchyRequests).toHaveLength(2);
+    expect(hierarchyRequests[0]).toMatchObject({ payload: { params: { depth: 50 } } });
+    expect(hierarchyRequests[1]).toMatchObject({
+      payload: { params: { depth: 50, rootUuid: 'root-uuid' } }
+    });
+  });
+
+  it('cocos_hierarchy 深层 rootPath 原生读取子树并保留截断', async () => {
+    const probeClient = new RecordingProbeClient((method, payload) => {
+      if (method === 'server.editors') return [ONLINE_EDITOR];
+      if (method === 'probe.hierarchy') {
+        const params = (payload as { params?: { rootUuid?: string } }).params ?? {};
+        return params.rootUuid ? {
+          data: {
+            ...HIERARCHY_TREE.children[0],
+            path: 'Panel',
+            truncated: true
+          },
+          raw: null,
+          source: 'message-api'
+        } : { data: HIERARCHY_TREE, raw: null, source: 'message-api' };
+      }
+      return createRespond()(method, payload);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_hierarchy',
+      arguments: { projectId: 'proj1', rootPath: 'Root/Panel', depth: 2, fields: ['name'] }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      hierarchy: {
+        rootPath: 'Root/Panel',
+        truncated: true,
+        nodes: [{ path: 'Root/Panel', name: 'Panel', truncated: true }]
+      }
+    });
+    const hierarchyRequests = probeClient.requests.filter((request) => request.method === 'probe.hierarchy');
+    expect(hierarchyRequests[1]).toMatchObject({
+      payload: { params: { depth: 2, rootUuid: 'panel-uuid' } }
     });
   });
 
@@ -566,6 +617,100 @@ describe('直写档只读工具', () => {
       nodeUuid: 'panel-uuid',
       componentUuid: 'label-comp-uuid',
       component: { className: 'cc.Label' }
+    });
+  });
+
+  it('cocos_node_read 返回 Prefab 摘要并转发编辑态 bounds 选项', async () => {
+    const bounds = {
+      hasUiTransform: true,
+      localRect: { x: -50, y: -50, width: 100, height: 100 },
+      worldRect: { x: 10, y: 20, width: 100, height: 100 }
+    };
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.node': { data: { ...NODE_DETAIL, bounds }, raw: null, source: 'message-api' }
+    }));
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_node_read',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuid: 'panel-uuid',
+        includeBounds: true,
+        includeDescendantVisualUnion: true,
+        relativeToPath: 'Root',
+        summary: true
+      }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      prefabInstance: NODE_DETAIL.prefabInstance,
+      bounds,
+      summary: { prefabInstance: NODE_DETAIL.prefabInstance }
+    });
+    expect(probeClient.requests.at(-1)).toMatchObject({
+      method: 'probe.node',
+      payload: {
+        params: {
+          uuid: 'panel-uuid',
+          includeBounds: true,
+          includeDescendantVisualUnion: true,
+          relativeToUuid: 'root-uuid',
+          relativeToPath: 'Root'
+        }
+      }
+    });
+  });
+
+  it('cocos_nodes_read 保留顺序并隔离单项错误', async () => {
+    const respond = createRespond();
+    const probeClient = new RecordingProbeClient((method, payload) => {
+      const uuid = (payload as { params?: { uuid?: string } }).params?.uuid;
+      if (method === 'probe.node' && uuid === 'missing-uuid') throw new Error('NODE_NOT_FOUND:missing-uuid');
+      return respond(method, payload);
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_nodes_read',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuids: ['panel-uuid', 'missing-uuid'],
+        paths: ['Root/Panel'],
+        fields: ['name', 'prefabInstance']
+      }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      items: [
+        { requestIndex: 0, requested: { nodeUuid: 'panel-uuid' }, found: true, node: { name: 'Panel' } },
+        { requestIndex: 1, requested: { nodeUuid: 'missing-uuid' }, found: false, error: { code: 'NODE_NOT_FOUND' } },
+        { requestIndex: 2, requested: { path: 'Root/Panel' }, nodeUuid: 'panel-uuid', found: true }
+      ],
+      count: { requested: 3, returned: 3, found: 2, errors: 1, omitted: 0 },
+      output: { truncated: false }
+    });
+    expect(probeClient.requests.filter((request) => request.method === 'probe.hierarchy')).toHaveLength(1);
+  });
+
+  it('cocos_nodes_read 超出输出预算时显式截断', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.node': {
+        data: { ...NODE_DETAIL, name: 'x'.repeat(20_000) },
+        raw: null,
+        source: 'message-api'
+      }
+    }));
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_nodes_read',
+      arguments: { projectId: 'proj1', nodeUuids: ['panel-uuid'], maxOutputBytes: 16 * 1024 }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      count: { requested: 1, returned: 0, omitted: 1 },
+      output: { truncated: true }
     });
   });
 
@@ -1137,6 +1282,27 @@ describe('直写档写工具', () => {
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
     }
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+  });
+
+  it('cocos_node_select 按 path 选择唯一节点且不走保存写通道', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_node_select',
+      arguments: { projectId: 'proj1', path: 'Root/Panel' }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      nodeUuid: 'panel-uuid',
+      selected: true,
+      selection: ['panel-uuid']
+    });
+    expect(probeClient.requests.at(-1)).toMatchObject({
+      method: 'probe.nodeSelect',
+      payload: { params: { uuid: 'panel-uuid' } }
+    });
     expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 

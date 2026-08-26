@@ -57,6 +57,8 @@ describe('运行工作树同步合同', () => {
     expect(updater).toContain('回滚失败');
     expect(updater).toContain('$normalizedEntry');
     expect(updater).toContain('Start-OrAdoptProbeRuntime');
+    expect(updater).toContain('$current.ProcessId -ne $Listener.ProcessId');
+    expect(updater).toContain('Assert-ProbeListener -Listener $current -ExpectedEntry $ExpectedEntry -Port $Port');
     expect(updater).toContain('Bridge 已抢先拉起同源 Probe');
   });
 

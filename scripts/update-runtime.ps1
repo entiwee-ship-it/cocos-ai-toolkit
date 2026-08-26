@@ -90,7 +90,12 @@ function Stop-ProbeRuntime {
     Stop-Process -Id $Listener.ProcessId -Force
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Milliseconds 250
-        if (-not (Get-ProbeListener -Port $Port)) { return }
+        $current = Get-ProbeListener -Port $Port
+        if (-not $current) { return }
+        if ($current.ProcessId -ne $Listener.ProcessId) {
+            Assert-ProbeListener -Listener $current -ExpectedEntry $ExpectedEntry -Port $Port
+            return
+        }
     }
     throw "Probe Server 停止后端口仍被占用: $Port"
 }

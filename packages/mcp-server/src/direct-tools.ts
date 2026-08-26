@@ -80,6 +80,7 @@ export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
   'cocos_asset_inspect',
   'cocos_hierarchy',
   'cocos_node_read',
+  'cocos_nodes_read',
   'cocos_prefab_open',
   'cocos_scene_open'
 ] as const;
@@ -88,6 +89,7 @@ export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_node_create',
   'cocos_node_rename',
   'cocos_node_set_transform',
+  'cocos_node_select',
   'cocos_node_reparent',
   'cocos_node_delete',
   'cocos_component_add',
@@ -112,6 +114,27 @@ interface NodeAddress {
   nodeUuid?: string;
   path?: string;
 }
+
+interface NodeReadInput extends NodeAddress {
+  componentType?: string;
+  includeRaw?: boolean;
+  fields?: string[];
+  propertyPaths?: string[];
+  summary?: boolean;
+  includeBounds?: boolean;
+  includeDescendantVisualUnion?: boolean;
+  relativeToPath?: string;
+}
+
+interface ResolvedNodeBoundsInput {
+  includeBounds: true;
+  includeDescendantVisualUnion?: boolean;
+  relativeToUuid?: string;
+  relativeToPath?: string;
+}
+
+const MAX_NODE_BATCH_ITEMS = 32;
+const DEFAULT_NODE_BATCH_OUTPUT_BYTES = 512 * 1024;
 
 /**
  * 直写场景工具服务：每个写工具映射为一到多个原子写操作，
@@ -158,6 +181,20 @@ export class CocosDirectToolService {
     summary?: boolean;
   }) {
     assertProjectionFieldsSafe(input.fields);
+    if (input.rootPath) {
+      const editor = await this.readonlyService.resolveEditor(input);
+      const root = await this.resolveNodeAddress(editor, { path: input.rootPath }, {
+        notFoundCode: 'HIERARCHY_ROOT_NOT_FOUND',
+        ambiguousCode: 'HIERARCHY_ROOT_AMBIGUOUS'
+      });
+      const result = await this.readonlyService.readHierarchy({
+        projectId: editor.projectId,
+        editorInstanceId: editor.editorInstanceId,
+        depth: input.depth ?? 50,
+        rootUuid: root.uuid
+      });
+      return projectHierarchyResult(result, input, root.path);
+    }
     const depth = input.depth ?? (input.rootPath || input.query ? 50 : undefined);
     const result = await this.readonlyService.readHierarchy({ ...input, ...(depth === undefined ? {} : { depth }) });
     if (!usesHierarchyProjection(input)) return result;
@@ -165,34 +202,153 @@ export class CocosDirectToolService {
   }
 
   /** 读取节点详情；提供 componentType 时返回该组件的完整属性 Schema（改属性前看现值）。 */
-  async readNode(input: ProjectSelector & {
-    nodeUuid?: string;
-    path?: string;
-    componentType?: string;
-    includeRaw?: boolean;
-    fields?: string[];
-    propertyPaths?: string[];
-    summary?: boolean;
-  }) {
+  async readNode(input: ProjectSelector & NodeReadInput) {
     assertProjectionFieldsSafe(input.fields);
     if (input.propertyPaths?.length && !input.componentType) {
       throw new Error('PROPERTY_PATHS_REQUIRE_COMPONENT_TYPE');
     }
     const editor = await this.readonlyService.resolveEditor(input);
     const nodeUuid = await this.resolveNodeUuid(editor, input);
-    const { node } = await this.readonlyService.readNode({ ...input, uuid: nodeUuid });
+    const bounds = await this.resolveNodeBoundsInput(editor, input);
+    return this.readResolvedNode(editor, nodeUuid, input, bounds, false);
+  }
+
+  /**
+   * 批量读取节点，保留输入顺序并隔离单项寻址、组件和投影错误。
+   *
+   * @param input 项目、UUID/路径数组、统一投影和输出预算。
+   * @returns 单一编辑器身份、逐项结果、计数和输出截断状态。
+   */
+  async readNodes(input: ProjectSelector & NodeReadInput & {
+    nodeUuids?: string[];
+    paths?: string[];
+    maxOutputBytes?: number;
+  }) {
+    assertProjectionFieldsSafe(input.fields);
+    if (input.propertyPaths?.length && !input.componentType) {
+      throw new Error('PROPERTY_PATHS_REQUIRE_COMPONENT_TYPE');
+    }
+    const addresses: NodeAddress[] = [
+      ...(input.nodeUuids ?? []).map((nodeUuid) => ({ nodeUuid })),
+      ...(input.paths ?? []).map((path) => ({ path }))
+    ];
+    if (addresses.length === 0) throw new Error('NODE_BATCH_REQUIRED');
+    if (addresses.length > MAX_NODE_BATCH_ITEMS) {
+      throw new Error(`NODE_BATCH_LIMIT_EXCEEDED:${addresses.length}:max=${MAX_NODE_BATCH_ITEMS}`);
+    }
+    const editor = await this.readonlyService.resolveEditor(input);
+    const bounds = await this.resolveNodeBoundsInput(editor, input);
+    const pathEntries = input.paths?.length
+      ? flattenHierarchy(readHierarchyRoot((await this.readonlyService.readHierarchy({
+          projectId: editor.projectId,
+          editorInstanceId: editor.editorInstanceId,
+          depth: 50
+        })).hierarchy))
+      : [];
+    const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_NODE_BATCH_OUTPUT_BYTES;
+    const items: Array<Record<string, unknown>> = [];
+    let truncated = false;
+    for (let requestIndex = 0; requestIndex < addresses.length; requestIndex += 1) {
+      const requested = addresses[requestIndex];
+      let item: Record<string, unknown>;
+      try {
+        const nodeUuid = requested.nodeUuid ?? resolveNodePathFromEntries(
+          pathEntries,
+          requested.path!,
+          'NODE_NOT_FOUND',
+          'NODE_PATH_AMBIGUOUS'
+        ).uuid;
+        const result = asRecord(await this.readResolvedNode(editor, nodeUuid, input, bounds, true));
+        const { editor: _editor, ...payload } = result;
+        item = { requestIndex, requested, nodeUuid, found: true, ...payload };
+      } catch (error) {
+        item = { requestIndex, requested, nodeUuid: requested.nodeUuid ?? null, found: false, error: toReadError(error) };
+      }
+      if (estimateToolTransportBytes({ editor, items: [...items, item] }) > maxOutputBytes) {
+        truncated = true;
+        break;
+      }
+      items.push(item);
+    }
+    const found = items.filter((item) => item.found === true).length;
+    return {
+      editor,
+      items,
+      count: {
+        requested: addresses.length,
+        returned: items.length,
+        found,
+        errors: items.length - found,
+        omitted: addresses.length - items.length
+      },
+      output: {
+        maxBytes: maxOutputBytes,
+        estimatedTransportBytes: estimateToolTransportBytes({ editor, items }),
+        truncated
+      }
+    };
+  }
+
+  private async readResolvedNode(
+    editor: EditorSession,
+    nodeUuid: string,
+    input: ProjectSelector & NodeReadInput,
+    bounds: ResolvedNodeBoundsInput | undefined,
+    forceProjection: boolean
+  ) {
+    const { node } = await this.readonlyService.readNode({
+      projectId: editor.projectId,
+      editorInstanceId: editor.editorInstanceId,
+      uuid: nodeUuid,
+      ...bounds
+    });
+    const nodeData = unwrapData(node);
+    const prefabInstance = nodeData.prefabInstance ?? null;
+    const nodeBounds = nodeData.bounds;
     if (!input.componentType) {
-      const result = { editor, node };
-      return usesNodeProjection(input) ? projectNodeResult(result, input) : result;
+      const result = {
+        editor,
+        node,
+        prefabInstance,
+        ...(nodeBounds !== undefined ? { bounds: nodeBounds } : {})
+      };
+      return forceProjection || usesNodeProjection(input) ? projectNodeResult(result, input) : result;
     }
     const componentUuid = this.resolveComponentUuid(node, input.componentType);
     const component = await this.readonlyService.readComponentSchema({
-      ...input,
+      projectId: editor.projectId,
+      editorInstanceId: editor.editorInstanceId,
       uuid: componentUuid,
       includeRaw: input.includeRaw
     });
-    const result = { editor, nodeUuid, componentUuid, component: component.schema, ...(component.raw !== undefined ? { raw: component.raw } : {}) };
-    return usesNodeProjection(input) ? projectNodeResult({ ...result, node }, input) : result;
+    const result = {
+      editor,
+      nodeUuid,
+      componentUuid,
+      component: component.schema,
+      prefabInstance,
+      ...(nodeBounds !== undefined ? { bounds: nodeBounds } : {}),
+      ...(component.raw !== undefined ? { raw: component.raw } : {})
+    };
+    return forceProjection || usesNodeProjection(input) ? projectNodeResult({ ...result, node }, input) : result;
+  }
+
+  private async resolveNodeBoundsInput(
+    editor: EditorSession,
+    input: NodeReadInput
+  ): Promise<ResolvedNodeBoundsInput | undefined> {
+    const includeBounds = input.includeBounds === true
+      || input.includeDescendantVisualUnion === true
+      || Boolean(input.relativeToPath);
+    if (!includeBounds) return undefined;
+    const relativeToUuid = input.relativeToPath
+      ? await this.resolveNodeUuid(editor, { path: input.relativeToPath }, 'relativeTo')
+      : undefined;
+    return {
+      includeBounds: true,
+      ...(input.includeDescendantVisualUnion === true ? { includeDescendantVisualUnion: true } : {}),
+      ...(relativeToUuid ? { relativeToUuid, relativeToPath: input.relativeToPath } : {})
+    };
   }
 
   /** 打开 Prefab 并等待编辑器当前文档身份切换到目标 UUID。 */
@@ -270,6 +426,15 @@ export class CocosDirectToolService {
       nodeUuid,
       localTransform: input.localTransform
     }]);
+  }
+
+  /** 选择当前文档中的唯一目标节点，不修改文档内容。 */
+  async selectNode(input: ProjectSelector & NodeAddress) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    const nodeUuid = await this.resolveNodeUuid(editor, input);
+    const result = asRecord(await this.readonlyService.requestBridge(editor, 'probe.nodeSelect', { uuid: nodeUuid }));
+    if (result.selected !== true) throw new Error(`NODE_SELECTION_VERIFY_FAILED:${nodeUuid}`);
+    return { editor, ...result };
   }
 
   async addComponent(input: ProjectSelector & NodeAddress & {
@@ -632,42 +797,32 @@ export class CocosDirectToolService {
     address: NodeAddress,
     fieldName = 'NODE_ADDRESS'
   ): Promise<string> {
-    assertExclusiveNodeAddress(address, fieldName);
-    if (address.nodeUuid) return address.nodeUuid;
+    return (await this.resolveNodeAddress(editor, address, { fieldName })).uuid;
+  }
+
+  private async resolveNodeAddress(
+    editor: EditorSession,
+    address: NodeAddress,
+    options: {
+      fieldName?: string;
+      notFoundCode?: string;
+      ambiguousCode?: string;
+    } = {}
+  ): Promise<{ uuid: string; path: string | null }> {
+    assertExclusiveNodeAddress(address, options.fieldName ?? 'NODE_ADDRESS');
+    if (address.nodeUuid) return { uuid: address.nodeUuid, path: null };
     if (!address.path) throw new Error('NODE_ADDRESS_REQUIRED');
-    const wanted = address.path.replace(/^\/+/, '');
     const { hierarchy } = await this.readonlyService.readHierarchy({
       projectId: editor.projectId,
       editorInstanceId: editor.editorInstanceId,
       depth: 50
     });
-    const matches: Array<{ uuid: string; path: string }> = [];
-    const visit = (node: unknown, parentPath: string): void => {
-      const record = node && typeof node === 'object' && !Array.isArray(node)
-        ? node as Record<string, unknown>
-        : {};
-      const identity = record.identity && typeof record.identity === 'object'
-        ? record.identity as Record<string, unknown>
-        : {};
-      const name = typeof record.name === 'string' ? record.name : '';
-      const fullPath = parentPath ? `${parentPath}/${name}` : name;
-      const declaredPath = typeof record.path === 'string' ? record.path.replace(/^\/+/, '') : '';
-      if (
-        (fullPath === wanted || declaredPath === wanted || fullPath.endsWith(`/${wanted}`))
-        && typeof identity.objectUuid === 'string'
-        && identity.objectUuid
-      ) {
-        matches.push({ uuid: identity.objectUuid, path: fullPath });
-      }
-      const children = Array.isArray(record.children) ? record.children : [];
-      for (const child of children) visit(child, fullPath);
-    };
-    visit(readHierarchyRoot(hierarchy), '');
-    if (matches.length === 0) throw new Error(`NODE_NOT_FOUND:${address.path}`);
-    if (matches.length > 1) {
-      throw new Error(`NODE_PATH_AMBIGUOUS:${JSON.stringify(matches.map((match) => match.path))}`);
-    }
-    return matches[0].uuid;
+    return resolveNodePathFromEntries(
+      flattenHierarchy(readHierarchyRoot(hierarchy)),
+      address.path,
+      options.notFoundCode ?? 'NODE_NOT_FOUND',
+      options.ambiguousCode ?? 'NODE_PATH_AMBIGUOUS'
+    );
   }
 
   /**
@@ -751,6 +906,19 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
+}
+
+function toReadError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const separator = message.indexOf(':');
+  return {
+    code: separator > 0 ? message.slice(0, separator) : message || 'NODE_READ_FAILED',
+    message
+  };
+}
+
+function estimateToolTransportBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8') * 2;
 }
 
 const RAW_VALUE_FIELDS = new Set(['currentValue', 'defaultValue', 'value', 'expectedOldValue']);
@@ -893,6 +1061,39 @@ function flattenHierarchy(root: unknown, parentPath = ''): FlatHierarchyNode[] {
   return output;
 }
 
+function resolveNodePathFromEntries(
+  entries: FlatHierarchyNode[],
+  path: string,
+  notFoundCode: string,
+  ambiguousCode: string
+): { uuid: string; path: string } {
+  const wanted = path.replace(/^\/+/, '');
+  const matches = entries.flatMap((entry) => {
+    const uuid = readNonEmptyString(asRecord(entry.node.identity).objectUuid);
+    return uuid && (entry.path === wanted || entry.path.endsWith(`/${wanted}`))
+      ? [{ uuid, path: entry.path }]
+      : [];
+  });
+  if (matches.length === 0) throw new Error(`${notFoundCode}:${path}`);
+  if (matches.length > 1) {
+    throw new Error(`${ambiguousCode}:${JSON.stringify(matches.map((match) => match.path))}`);
+  }
+  return matches[0];
+}
+
+function rebaseHierarchyPaths(entries: FlatHierarchyNode[], rootPath: string): FlatHierarchyNode[] {
+  const sourceRootPath = entries[0]?.path;
+  if (!rootPath || !sourceRootPath || sourceRootPath === rootPath) return entries;
+  return entries.map((entry) => ({
+    ...entry,
+    path: entry.path === sourceRootPath
+      ? rootPath
+      : entry.path.startsWith(`${sourceRootPath}/`)
+        ? `${rootPath}${entry.path.slice(sourceRootPath.length)}`
+        : entry.path
+  }));
+}
+
 function hierarchyNodeMatches(entry: FlatHierarchyNode, query: string): boolean {
   const wanted = query.trim().toLowerCase();
   if (!wanted) return true;
@@ -905,7 +1106,10 @@ function hierarchyNodeMatches(entry: FlatHierarchyNode, query: string): boolean 
 function compactHierarchyNode(entry: FlatHierarchyNode, fields?: string[]): Record<string, unknown> {
   const clean = asRecord(stripRawDeep(entry.node));
   clean.path = entry.path;
-  if (fields?.length) return pickFields(clean, fields, { path: entry.path });
+  if (fields?.length) return pickFields(clean, fields, {
+    path: entry.path,
+    ...(clean.truncated === true ? { truncated: true } : {})
+  });
   const components = Array.isArray(clean.components) ? clean.components : [];
   return {
     ...(clean.identity !== undefined ? { identity: clean.identity } : {}),
@@ -913,18 +1117,23 @@ function compactHierarchyNode(entry: FlatHierarchyNode, fields?: string[]): Reco
     path: entry.path,
     ...(clean.active !== undefined ? { active: clean.active } : {}),
     ...(clean.layer !== undefined ? { layer: clean.layer } : {}),
+    ...(clean.truncated === true ? { truncated: true } : {}),
     components: components.map(compactHierarchyComponent)
   };
 }
 
 function projectHierarchyResult(
   result: { editor: EditorSession; hierarchy: unknown },
-  input: HierarchyProjectionInput
+  input: HierarchyProjectionInput,
+  nativeRootPath?: string | null
 ) {
-  const allNodes = flattenHierarchy(readHierarchyRoot(result.hierarchy));
+  const allNodes = rebaseHierarchyPaths(
+    flattenHierarchy(readHierarchyRoot(result.hierarchy)),
+    nativeRootPath ?? ''
+  );
   let scopedNodes = allNodes;
-  let resolvedRootPath = allNodes[0]?.path || '';
-  if (input.rootPath) {
+  let resolvedRootPath = nativeRootPath ?? allNodes[0]?.path ?? '';
+  if (input.rootPath && !nativeRootPath) {
     const wanted = input.rootPath.replace(/^\/+/, '');
     const roots = allNodes.filter((entry) => entry.path === wanted || entry.path.endsWith(`/${wanted}`));
     if (roots.length === 0) {
@@ -947,6 +1156,7 @@ function projectHierarchyResult(
     rootPath: resolvedRootPath,
     query: input.query || null,
     fields: input.fields || null,
+    truncated: scopedNodes.some((entry) => entry.node.truncated === true),
     summary: {
       totalNodeCount: allNodes.length,
       scopedNodeCount: scopedNodes.length,
@@ -981,6 +1191,8 @@ function compactNodeData(node: Record<string, unknown>, fields?: string[]): Reco
     ...(clean.parentUuid !== undefined ? { parentUuid: clean.parentUuid } : {}),
     ...(clean.childUuids !== undefined ? { childUuids: clean.childUuids } : {}),
     ...(clean.transform !== undefined ? { transform: clean.transform } : {}),
+    ...(clean.prefabInstance !== undefined ? { prefabInstance: clean.prefabInstance } : {}),
+    ...(clean.bounds !== undefined ? { bounds: clean.bounds } : {}),
     components: components.map(compactHierarchyComponent),
     ...(clean.unresolved !== undefined ? { unresolved: clean.unresolved } : {})
   };
@@ -1035,6 +1247,8 @@ function projectNodeResult(
     nodeUuid?: string;
     componentUuid?: string;
     component?: unknown;
+    prefabInstance?: unknown;
+    bounds?: unknown;
     raw?: unknown;
   },
   input: NodeProjectionInput
@@ -1050,6 +1264,7 @@ function projectNodeResult(
     componentCount: components.length,
     componentTypes: components.map(componentLabel).filter(Boolean),
     unresolvedCount: Array.isArray(node.unresolved) ? node.unresolved.length : 0,
+    prefabInstance: result.prefabInstance ?? node.prefabInstance ?? null,
     ...(result.component !== undefined ? {
       selectedComponent: String(asRecord(result.component).className || asRecord(result.component).qualifiedName || ''),
       selectedPropertyCount: Array.isArray(asRecord(result.component).properties)
@@ -1062,6 +1277,8 @@ function projectNodeResult(
     editor: result.editor,
     nodeUuid: result.nodeUuid || asRecord(node.identity).objectUuid || null,
     ...(result.componentUuid ? { componentUuid: result.componentUuid } : {}),
+    prefabInstance: result.prefabInstance ?? node.prefabInstance ?? null,
+    ...(result.bounds !== undefined || node.bounds !== undefined ? { bounds: result.bounds ?? node.bounds } : {}),
     summary,
     ...(!summaryOnly ? { node: compactNodeData(node, input.fields) } : {}),
     ...(result.component !== undefined && !summaryOnly
@@ -1140,7 +1357,7 @@ export function registerCocosDirectReadonlyTools(
   }, async (input) => toToolResult(await service.inspectAsset(input)));
 
   server.registerTool('cocos_hierarchy', {
-    description: '读取当前文档节点树；缺省保持完整旧返回，rootPath/query/fields/summary 可启用紧凑投影。紧凑结果去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw。depth 默认 4，最大 50。',
+    description: '读取当前文档节点树；rootPath 会先解析 UUID，再由 Creator 原生读取目标子树并保留 truncated。query/fields/summary 可启用紧凑投影，去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw。',
     inputSchema: {
       ...ProjectSelectorInput,
       depth: z.number().int().min(1).max(50).optional(),
@@ -1162,11 +1379,33 @@ export function registerCocosDirectReadonlyTools(
       includeRaw: z.boolean().optional(),
       fields: z.array(z.string().min(1)).min(1).optional(),
       propertyPaths: z.array(z.string().min(1)).min(1).optional(),
-      summary: z.boolean().optional()
+      summary: z.boolean().optional(),
+      includeBounds: z.boolean().optional(),
+      includeDescendantVisualUnion: z.boolean().optional(),
+      relativeToPath: z.string().min(1).optional()
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(await service.readNode(input)));
+
+  server.registerTool('cocos_nodes_read', {
+    description: '批量读取最多 32 个节点；nodeUuids 后接 paths，逐项返回 found/error，并统一应用组件、字段和编辑态 bounds 投影。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      nodeUuids: z.array(z.string().min(1)).max(MAX_NODE_BATCH_ITEMS).optional(),
+      paths: z.array(z.string().min(1)).max(MAX_NODE_BATCH_ITEMS).optional(),
+      componentType: z.string().min(1).optional(),
+      fields: z.array(z.string().min(1)).min(1).optional(),
+      propertyPaths: z.array(z.string().min(1)).min(1).optional(),
+      summary: z.boolean().optional(),
+      includeBounds: z.boolean().optional(),
+      includeDescendantVisualUnion: z.boolean().optional(),
+      relativeToPath: z.string().min(1).optional(),
+      maxOutputBytes: z.number().int().min(16 * 1024).max(2 * 1024 * 1024).optional()
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.readNodes(input)));
 
   server.registerTool('cocos_prefab_open', {
     description: '通过 Creator 打开 Prefab 并等待文档身份就绪；PREFAB_OPEN_NOT_READY 时核对 UUID 后重试。',
@@ -1229,6 +1468,16 @@ export function registerCocosDirectWriteTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.setNodeTransform(input)));
+
+  server.registerTool('cocos_node_select', {
+    description: '按 nodeUuid 或 path 清空旧节点选择并选中唯一目标；不修改或保存文档。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      ...NodeAddressInput
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.selectNode(input)));
 
   server.registerTool('cocos_node_reparent', {
     description: '把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex。',

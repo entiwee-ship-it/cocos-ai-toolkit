@@ -91,9 +91,9 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（完整写模式 37 个）
+## MCP 工具面（完整写模式 39 个）
 
-### 编辑态只读 8 个（默认开放）
+### 编辑态只读 9 个（默认开放）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -101,18 +101,20 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_editor_state` | 读取当前文档 UUID、dirty、Scene/AssetDB ready、选择和 Preview 状态 |
 | `cocos_asset_search` | 在 AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），cursor 分页 |
 | `cocos_asset_inspect` | 按 UUID 读取资产详情、Meta、依赖和反向使用者，cursor 分页 |
-| `cocos_hierarchy` | 读取当前文档节点树；`rootPath/query/fields/summary` 可返回无重复 raw 的紧凑结果 |
-| `cocos_node_read` | 按 nodeUuid 或 path 读取节点详情；`fields/propertyPaths/summary` 可精确读取组件现值并缩小输出 |
+| `cocos_hierarchy` | 读取当前文档节点树；深层 `rootPath` 原生读取目标子树并保留 `truncated`，`query/fields/summary` 可紧凑投影 |
+| `cocos_node_read` | 读取单节点、`prefabInstance` 和可选编辑态 bounds；支持组件属性、后代并集及 `relativeToPath` |
+| `cocos_nodes_read` | 批量读取最多 32 个 UUID/path，逐项返回 found/error，统一组件投影并限制输出预算 |
 | `cocos_prefab_open` | 通过 Creator 打开 Prefab 并等待文档身份就绪 |
 | `cocos_scene_open` | 通过 Creator 打开 Scene 并等待文档身份就绪 |
 
-### 编辑态直写 16 个（`--enable-writes` 才注册；每次写入自动保存并逐项重读回显）
+### 编辑态动作与直写 17 个（`--enable-writes` 才注册；序列化写入自动保存并逐项重读回显）
 
 | 工具 | 用途 |
 | --- | --- |
 | `cocos_node_create` | 在父节点（parentUuid 或 parentPath）下创建节点 |
 | `cocos_node_rename` | 按 nodeUuid 或 path 重命名节点并保存回读 |
 | `cocos_node_set_transform` | 按 nodeUuid 或 path 修改局部 position/rotation/scale，未提供的分量保持不变 |
+| `cocos_node_select` | 清空旧节点选择并单选目标；只改变编辑器选择状态，不保存文档 |
 | `cocos_node_reparent` | 把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex |
 | `cocos_node_delete` | 按 nodeUuid 或 path 删除节点及子树，不可回滚 |
 | `cocos_component_add` | 在节点上挂载组件；自定义脚本组件必须提供 scriptUuid |

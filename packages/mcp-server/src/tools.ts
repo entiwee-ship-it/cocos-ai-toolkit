@@ -505,6 +505,7 @@ export class CocosReadonlyToolService {
     projectId: string;
     editorInstanceId?: string;
     depth?: number;
+    rootUuid?: string;
   }) {
     const editor = await this.resolveEditor(input);
     assertCapability(editor, 'probe.hierarchy');
@@ -512,7 +513,10 @@ export class CocosReadonlyToolService {
       editor,
       hierarchy: await this.options.probeClient.request('probe.hierarchy', {
         selector: toSelector(editor),
-        params: typeof input.depth === 'number' ? { depth: input.depth } : {}
+        params: {
+          ...(typeof input.depth === 'number' ? { depth: input.depth } : {}),
+          ...(input.rootUuid ? { rootUuid: input.rootUuid } : {})
+        }
       })
     };
   }
@@ -527,6 +531,10 @@ export class CocosReadonlyToolService {
     projectId: string;
     editorInstanceId?: string;
     uuid: string;
+    includeBounds?: boolean;
+    includeDescendantVisualUnion?: boolean;
+    relativeToUuid?: string;
+    relativeToPath?: string;
   }) {
     const editor = await this.resolveEditor(input);
     assertCapability(editor, 'probe.node');
@@ -534,7 +542,13 @@ export class CocosReadonlyToolService {
       editor,
       node: await this.options.probeClient.request('probe.node', {
         selector: toSelector(editor),
-        params: { uuid: input.uuid }
+        params: {
+          uuid: input.uuid,
+          ...(input.includeBounds === true ? { includeBounds: true } : {}),
+          ...(input.includeDescendantVisualUnion === true ? { includeDescendantVisualUnion: true } : {}),
+          ...(input.relativeToUuid ? { relativeToUuid: input.relativeToUuid } : {}),
+          ...(input.relativeToPath ? { relativeToPath: input.relativeToPath } : {})
+        }
       })
     };
   }

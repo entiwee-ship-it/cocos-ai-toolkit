@@ -21,7 +21,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 2. `cocos_editor_state` 确认当前文档 UUID、dirty 和 Scene/AssetDB ready。
 3. `cocos_asset_search` 按名称/路径找 Prefab、Scene 或脚本 UUID；`cocos_asset_inspect` 看类型、URL、依赖和 users。
 4. `cocos_prefab_open` / `cocos_scene_open` 打开目标文档，等待身份就绪。
-5. `cocos_hierarchy` 读节点树寻址；`cocos_node_read` 看节点和组件属性现值。
+5. `cocos_hierarchy` 读节点树寻址；`cocos_node_read` 看单节点、Prefab 实例摘要和可选编辑态 bounds；多节点统一投影用 `cocos_nodes_read`。
 6. 写入：每步自动保存并逐项重读回显，响应里的 `verification.items` 就是生效证据。
 7. 手工修改后显式落盘用 `cocos_document_save`。
 8. 需要视觉确认时：`cocos_preview_launch` 启动预览 → `cocos_runtime_capture` 截图 → `cocos_preview_stop` 收尾。
@@ -33,6 +33,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | 创建节点 | `cocos_node_create`（parentUuid 或 parentPath，二选一） |
 | 重命名节点 | `cocos_node_rename`（nodeUuid 或 path 二选一） |
 | 修改节点局部变换 | `cocos_node_set_transform`（nodeUuid 或 path 二选一；position/rotation/scale 至少一项） |
+| 选择节点 | `cocos_node_select`（nodeUuid 或 path 二选一；清空旧选择后单选目标，不保存文档） |
 | 删除节点及子树 | `cocos_node_delete` |
 | 迁移节点 | `cocos_node_reparent`（源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex） |
 | 挂载组件 | `cocos_component_add`（自定义脚本组件必须给 scriptUuid，用 asset_search 查） |
@@ -48,6 +49,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | 一次直发多项写操作 | `cocos_batch_write`（仅接受 `node.*` 与 `component.*`；`asset.*` / `prefab.*` 会以 `BATCH_WRITE_OPERATION_NOT_ALLOWED` 拒绝；只减少往返，不是事务、无回滚，失败时已执行项可能已生效） |
 
 节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件类型兼容 `cc.` 前缀（`Label` = `cc.Label`）。
+`cocos_node_read` 的 `prefabInstance` 直接给出实例根、源 UUID、instanceFileId、state 和 sourceUrl；`includeBounds` 可返回 local/world rect 与 anchor，按需追加后代并集和 `relativeToPath` 坐标。`cocos_nodes_read` 最多 32 项，单项失败不会丢失其它结果。
 
 ## 写入纪律
 

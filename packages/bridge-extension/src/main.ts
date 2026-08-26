@@ -1,6 +1,6 @@
 import { BridgeClient, type BridgeLifecycleEvent } from './bridge-client';
 import { readBridgeBuildId } from './bridge-build-info';
-import { buildBridgeHello, probeEditorState } from './bridge-state';
+import { buildBridgeHello, probeEditorState, selectEditorNode } from './bridge-state';
 import type { CreatorDocumentIdentity } from './creator-document-identity';
 import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
 import { ProbeError } from './probe-errors';
@@ -9,7 +9,7 @@ import { probeAssetIndex } from './asset-index';
 import { importAsset } from './import-asset';
 import { createProbeServerBootstrap, type ProbeBootstrapResult } from './probe-bootstrap';
 
-const BRIDGE_VERSION = '0.4.0';
+const BRIDGE_VERSION = '0.5.0';
 const BRIDGE_BUILD_ID = readBridgeBuildId(__dirname);
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
@@ -48,6 +48,13 @@ export function load(): void {
       'probe.assets': (payload) => probeAssets(payload),
       'probe.assetIndex': () => probeAssetIndexWithScriptCache(),
       'probe.component': (payload) => probeComponent(payload),
+      'probe.nodeSelect': (payload) => {
+        const request = payload as { uuid?: unknown };
+        if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');
+        const result = selectEditorNode(request.uuid);
+        if (!result.selected) throw new ProbeError('NODE_SELECTION_VERIFY_FAILED', result);
+        return Promise.resolve(result);
+      },
       'probe.openAsset': async (payload) => {
         const request = payload as { uuid?: unknown };
         if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');

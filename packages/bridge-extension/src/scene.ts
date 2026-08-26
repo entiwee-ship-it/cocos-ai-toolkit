@@ -16,8 +16,12 @@ import {
   buildWriteVerifierDependencies
 } from './write-creator-deps';
 import type { WriteOperation } from './write-types';
+import { readNodeBounds } from './scene-bounds';
 
-const { director } = require('cc') as { director: { getScene(): unknown } };
+const { director, Vec3 } = require('cc') as {
+  director: { getScene(): unknown };
+  Vec3: new (x?: number, y?: number, z?: number) => { x: number; y: number; z: number };
+};
 
 function notImplemented(): never {
   throw new ProbeError('NOT_IMPLEMENTED');
@@ -32,9 +36,45 @@ async function probeHierarchy(request: unknown): Promise<unknown> {
 }
 
 async function probeNode(request: unknown): Promise<unknown> {
-  const uuid = requireUuid(unwrapRequest(request));
+  const input = readObject(unwrapRequest(request));
+  const uuid = requireUuid(input);
   const raw = await Editor.Message.request('scene', 'query-node', uuid);
-  return { data: normalizeNodeDump(raw), raw, source: 'message-api' };
+  const normalized = normalizeNodeDump(raw);
+  const sourceUrl = normalized.prefabInstance.prefabAssetUuid
+    ? await readPrefabSourceUrl(normalized.prefabInstance.prefabAssetUuid)
+    : null;
+  let data: Record<string, unknown> = {
+    ...normalized,
+    prefabInstance: { ...normalized.prefabInstance, sourceUrl }
+  };
+  if (input.includeBounds === true) {
+    const scene = readObject(director.getScene());
+    const runtimeNode = findRuntimeNodeByUuid(scene, uuid);
+    if (!runtimeNode) throw new ProbeError('NODE_NOT_FOUND', { nodeUuid: uuid });
+    const relativeToUuid = typeof input.relativeToUuid === 'string' ? input.relativeToUuid : null;
+    const relativeNode = relativeToUuid ? findRuntimeNodeByUuid(scene, relativeToUuid) : null;
+    if (relativeToUuid && !relativeNode) {
+      throw new ProbeError('RELATIVE_NODE_NOT_FOUND', { nodeUuid: relativeToUuid });
+    }
+    data = {
+      ...data,
+      bounds: readNodeBounds(runtimeNode, {
+        includeDescendantVisualUnion: input.includeDescendantVisualUnion === true,
+        relativeNode,
+        relativeToPath: typeof input.relativeToPath === 'string' ? input.relativeToPath : undefined
+      }, (x, y, z) => new Vec3(x, y, z))
+    };
+  }
+  return { data, raw, source: 'message-api' };
+}
+
+async function readPrefabSourceUrl(prefabAssetUuid: string): Promise<string | null> {
+  try {
+    const asset = readObject(await Editor.Message.request('asset-db', 'query-asset-info', prefabAssetUuid));
+    return typeof asset.url === 'string' && asset.url ? asset.url : null;
+  } catch {
+    return null;
+  }
 }
 
 async function probeComponent(request: unknown): Promise<unknown> {

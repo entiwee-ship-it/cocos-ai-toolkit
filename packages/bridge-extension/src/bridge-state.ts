@@ -8,6 +8,7 @@ export const BRIDGE_CAPABILITIES = [
   'probe.openAsset',
   'probe.hierarchy',
   'probe.node',
+  'probe.nodeSelect',
   'probe.component',
   'probe.prefab',
   'probe.directWrite',
@@ -20,6 +21,23 @@ export const BRIDGE_CAPABILITIES = [
   'probe.previewStatus',
   'probe.previewReload'
 ] as const;
+
+/**
+ * 清空当前节点选择并选中唯一目标节点。
+ *
+ * @param nodeUuid 当前文档中的节点运行时 UUID。
+ * @returns Creator 回读的节点选择和目标是否成为唯一选中项。
+ */
+export function selectEditorNode(nodeUuid: string) {
+  Editor.Selection.clear('node');
+  Editor.Selection.select('node', nodeUuid);
+  const selection = Editor.Selection.getSelected('node');
+  return {
+    nodeUuid,
+    selected: selection.length === 1 && selection[0] === nodeUuid,
+    selection
+  };
+}
 
 export interface BridgeEditorState {
   processId: number;

@@ -33,8 +33,31 @@ export function normalizeNodeDump(rawValue: unknown, siblingIndex: number | null
       scale: readDumpValue(raw.scale) ?? null
     },
     components,
+    prefabInstance: normalizePrefabInstanceSummary(raw),
     unresolved: [],
     raw
+  };
+}
+
+/**
+ * 从 query-node Dump 提取紧凑 Prefab 实例身份。
+ *
+ * @param rawValue Creator 返回的节点 Dump。
+ * @returns 实例根标记、源资产 UUID、实例 FileID、状态和待补齐的源 URL。
+ */
+export function normalizePrefabInstanceSummary(rawValue: unknown) {
+  const raw = readObject(rawValue);
+  const prefab = readObject(raw.__prefab__);
+  const instance = readObject(readDumpValue(prefab.instance));
+  const nodeUuid = readString(readDumpValue(raw.uuid));
+  const rootUuid = readString(prefab.rootUuid);
+  const instanceFileId = readString(readDumpValue(instance.fileId));
+  return {
+    isInstanceRoot: Boolean(nodeUuid && rootUuid === nodeUuid && instanceFileId),
+    prefabAssetUuid: readString(prefab.uuid),
+    instanceFileId,
+    state: readNumber(readObject(prefab.prefabStateInfo).state),
+    sourceUrl: null
   };
 }
 
@@ -90,7 +113,8 @@ export function readComponentFileId(rawValue: unknown): string | null {
 export function normalizeHierarchyTree(treeValue: unknown, depth: number): unknown {
   const visit = (value: unknown, level: number, siblingIndex: number): unknown => {
     const tree = readObject(value);
-    const children = level < depth && Array.isArray(tree.children) ? tree.children : [];
+    const sourceChildren = Array.isArray(tree.children) ? tree.children : [];
+    const children = level < depth ? sourceChildren : [];
     return {
       identity: { objectUuid: readString(tree.uuid), fileId: null },
       name: readString(tree.name),
@@ -102,6 +126,7 @@ export function normalizeHierarchyTree(treeValue: unknown, depth: number): unkno
       path: readString(tree.path),
       prefab: tree.prefab ?? null,
       components: Array.isArray(tree.components) ? tree.components : [],
+      truncated: readBoolean(tree.truncated) === true || (level >= depth && sourceChildren.length > 0),
       children: children.map((child, index) => visit(child, level + 1, index)),
       raw: tree
     };
