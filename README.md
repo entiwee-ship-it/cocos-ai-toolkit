@@ -60,6 +60,18 @@ Bridge 使用 Junction 指向运行时 Worktree 的 `packages/bridge-extension`�
 
 默认只监听 `127.0.0.1:32188`。Bridge 会自动连接和重连；CLI/MCP 通过同一 WebSocket Server 选择目标编辑器实例。不要把 Probe Server 暴露到外网。
 
+避免每次重启电脑后手工启动 Probe，可以为当前 Windows 用户注册登录自启任务：
+
+```powershell
+& scripts/install-probe-autostart.ps1
+```
+
+任务直接运行固定运行时 Worktree 的 `start-probe-server.ps1 -SkipBuild`，失败会自动重试三次，不会自动打开 Creator。移除自启任务：
+
+```powershell
+& scripts/remove-probe-autostart.ps1
+```
+
 ## 启动 AI 正式入口 MCP Server
 
 先启动 Probe Server，并确保目标 Creator 3.8.8 已加载 Bridge。MCP Server 使用 stdio 与 AI 客户端通信：
