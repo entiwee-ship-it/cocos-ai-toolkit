@@ -74,6 +74,7 @@ describe('write-creator-deps Creator 3.8.8 Prefab Override 兼容', () => {
   const originalEditor = (globalThis as Record<string, unknown>).Editor;
   const originalCce = (globalThis as Record<string, unknown>).cce;
   const resetOrder: string[] = [];
+  const editorRequest = vi.fn();
   const resetProperty = vi.fn(async () => {
     resetOrder.push('reset');
     targetNode.string = instance.propertyOverrides.length === 0 ? 'Source' : 'Override Applied';
@@ -99,7 +100,7 @@ describe('write-creator-deps Creator 3.8.8 Prefab Override 兼容', () => {
     (globalThis as Record<string, unknown>).Editor = {
       Selection: { select: vi.fn() },
       log: vi.fn(),
-      Message: { request: vi.fn() }
+      Message: { request: editorRequest }
     };
     (globalThis as Record<string, unknown>).cce = {
       Node: { resetProperty },
@@ -131,6 +132,26 @@ describe('write-creator-deps Creator 3.8.8 Prefab Override 兼容', () => {
     resetOrder.length = 0;
     resetProperty.mockClear();
     softReloadScene.mockClear();
+    editorRequest.mockReset();
+  });
+
+  it('实例化 Prefab 必须向 scene/create-node 传递 cc.Prefab 类型', async () => {
+    editorRequest.mockResolvedValueOnce('created-prefab-node');
+    const dependencies = buildPrefabWriterDependencies();
+
+    const nodeUuid = await dependencies.instantiatePrefab(
+      'parent-node',
+      'prefab-asset',
+      'Avatar'
+    );
+
+    expect(nodeUuid).toBe('created-prefab-node');
+    expect(editorRequest).toHaveBeenCalledWith('scene', 'create-node', {
+      parent: 'parent-node',
+      assetUuid: 'prefab-asset',
+      name: 'Avatar',
+      type: 'cc.Prefab'
+    });
   });
 
   it('Prefab 是 class 时仍从静态 _utils 创建并回查新的属性覆盖', async () => {
