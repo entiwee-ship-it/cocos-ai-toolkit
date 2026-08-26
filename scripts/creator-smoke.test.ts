@@ -18,10 +18,12 @@ describe('Creator 3.8.8 smoke 合同', () => {
     expect(smoke).toContain("name: 'cocos_component_add'");
     expect(smoke).toContain("componentType: 'cc.UITransform'");
     expect(smoke).toContain("name: 'cocos_prefab_instantiate'");
+    expect(smoke).toContain("name: 'cocos_prefab_unpack'");
     expect(smoke).toContain("name: 'cocos_prefab_open'");
     expect(smoke).toContain("name: 'cocos_node_delete'");
     expect(smoke).toContain('prefab-instantiate-reopen');
     expect(smoke).toContain('prefab-instantiate-cleanup');
+    expect(smoke).toContain('prefab-unpack-${options.unpackMode}');
     expect(smoke).toContain("'status', '--porcelain=v2', '--branch'");
     expect(smoke).toContain("'diff', '--binary', '--no-ext-diff'");
     expect(smoke).toContain("'diff', '--cached', '--binary', '--no-ext-diff'");

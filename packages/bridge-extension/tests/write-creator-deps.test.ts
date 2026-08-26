@@ -154,6 +154,21 @@ describe('write-creator-deps Creator 3.8.8 Prefab Override 兼容', () => {
     });
   });
 
+  it('Prefab 解包把 removeNested 原样传给 SceneFacadeManager.unlinkPrefab', async () => {
+    const unlinkPrefab = vi.fn();
+    (globalThis as Record<string, unknown>).cce = {
+      Node: { resetProperty },
+      SceneFacadeManager: { softReloadScene, unlinkPrefab }
+    };
+    const dependencies = buildPrefabWriterDependencies();
+
+    await dependencies.unlinkPrefabInstance('instance-root', false);
+    await dependencies.unlinkPrefabInstance('instance-root', true);
+
+    expect(unlinkPrefab).toHaveBeenNthCalledWith(1, 'instance-root', false);
+    expect(unlinkPrefab).toHaveBeenNthCalledWith(2, 'instance-root', true);
+  });
+
   it('Prefab 是 class 时仍从静态 _utils 创建并回查新的属性覆盖', async () => {
     const dependencies = buildPrefabWriterDependencies();
 

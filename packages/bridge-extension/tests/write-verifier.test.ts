@@ -662,6 +662,94 @@ describe('saveAndVerifyDirectWrite', () => {
     expect(report.items[0].actual).toBe('组件仍存在');
   });
 
+  it('prefab.unlink_instance current 保留子树、组件和嵌套 Prefab', async () => {
+    const dependencies = createDependencies();
+    dependencies.getPrefabInstanceInfo = async () => prefabInfo({
+      nodeUuid: 'instance-new',
+      prefabAssetUuid: null,
+      instanceFileId: null
+    });
+    dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'instance-new' });
+    dependencies.getPrefabSubtreeSnapshot = async () => unpackSnapshot({ currentUnlinked: true });
+
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [{
+      operation: {
+        type: 'prefab.unlink_instance',
+        instanceRootUuid: 'instance-old',
+        removeNested: false,
+        expectedPrefabAssetUuid: 'asset-panel',
+        resultNodeStablePath: '/Scene~0/Panel~0',
+        resultPrefabBeforeSubtree: unpackSnapshot()
+      },
+      nodeUuid: 'instance-old', assetUuid: null,
+      before: prefabInfo(), after: prefabInfo({ prefabAssetUuid: null, instanceFileId: null })
+    } as never], dependencies);
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0].actual).toMatchObject({
+      subtreePreserved: true,
+      componentsPreserved: true,
+      oldAssociationRemoved: true,
+      nestedAssociationsPreserved: true
+    });
+  });
+
+  it('prefab.unlink_instance complete 清除子树内全部 Prefab 关联', async () => {
+    const dependencies = createDependencies();
+    dependencies.getPrefabInstanceInfo = async () => prefabInfo({
+      nodeUuid: 'instance-new',
+      prefabAssetUuid: null,
+      instanceFileId: null
+    });
+    dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'instance-new' });
+    dependencies.getPrefabSubtreeSnapshot = async () => unpackSnapshot({ completeUnlinked: true });
+
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [{
+      operation: {
+        type: 'prefab.unlink_instance',
+        instanceRootUuid: 'instance-old',
+        removeNested: true,
+        expectedPrefabAssetUuid: 'asset-panel',
+        resultNodeStablePath: '/Scene~0/Panel~0',
+        resultPrefabBeforeSubtree: unpackSnapshot()
+      },
+      nodeUuid: 'instance-old', assetUuid: null,
+      before: prefabInfo(), after: prefabInfo({ prefabAssetUuid: null, instanceFileId: null })
+    } as never], dependencies);
+
+    expect(report.passed).toBe(true);
+    expect(report.items[0].actual).toMatchObject({
+      subtreePreserved: true,
+      componentsPreserved: true,
+      allAssociationsRemoved: true
+    });
+  });
+
+  it('prefab.unlink_instance 组件丢失时验证失败', async () => {
+    const dependencies = createDependencies();
+    dependencies.getPrefabInstanceInfo = async () => prefabInfo({
+      nodeUuid: 'instance-new', prefabAssetUuid: null, instanceFileId: null
+    });
+    dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'instance-new' });
+    dependencies.getPrefabSubtreeSnapshot = async () => unpackSnapshot({
+      currentUnlinked: true,
+      rootComponentTypes: []
+    });
+
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [{
+      operation: {
+        type: 'prefab.unlink_instance', instanceRootUuid: 'instance-old',
+        removeNested: false, expectedPrefabAssetUuid: 'asset-panel',
+        resultNodeStablePath: '/Scene~0/Panel~0', resultPrefabBeforeSubtree: unpackSnapshot()
+      },
+      nodeUuid: 'instance-old', assetUuid: null,
+      before: prefabInfo(), after: prefabInfo({ prefabAssetUuid: null, instanceFileId: null })
+    } as never], dependencies);
+
+    expect(report.passed).toBe(false);
+    expect(report.items[0].actual).toMatchObject({ componentsPreserved: false });
+  });
+
   it('save 为 false 时不保存不重开，直接对编辑器现状重读验证', async () => {
     const dependencies = createDependencies();
     const report = await saveAndVerifyDirectWrite(
@@ -745,6 +833,7 @@ function createDependencies(options: {
       overridePaths: [],
       overrideTargets: []
     }),
+    getPrefabSubtreeSnapshot: async () => unpackSnapshot(),
     queryAssetInfo: async () => null,
     readAssetMeta: async () => ({}),
     readAssetContent: async () => ''
@@ -769,5 +858,31 @@ function prefabInfo(overrides: Record<string, unknown> = {}) {
     overridePaths: [],
     overrideTargets: [],
     ...overrides
+  } as never;
+}
+
+function unpackSnapshot(options: {
+  currentUnlinked?: boolean;
+  completeUnlinked?: boolean;
+  rootComponentTypes?: string[];
+} = {}) {
+  return {
+    rootStablePath: '/Scene~0/Panel~0',
+    nodes: [
+      {
+        relativePath: '',
+        name: 'Panel',
+        componentTypes: options.rootComponentTypes ?? ['cc.UITransform'],
+        prefabAssetUuid: options.currentUnlinked || options.completeUnlinked ? null : 'asset-panel',
+        instanceFileId: options.currentUnlinked || options.completeUnlinked ? null : 'instance-file-id'
+      },
+      {
+        relativePath: '0',
+        name: 'Nested',
+        componentTypes: ['cc.Sprite'],
+        prefabAssetUuid: options.completeUnlinked ? null : 'asset-nested',
+        instanceFileId: options.completeUnlinked ? null : 'nested-instance-file-id'
+      }
+    ]
   } as never;
 }

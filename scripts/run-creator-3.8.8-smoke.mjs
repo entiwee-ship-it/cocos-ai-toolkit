@@ -16,8 +16,15 @@ const probeUrl = args.probeUrl ?? 'ws://127.0.0.1:32188';
 const targetPrefabUuid = args.targetPrefabUuid ?? null;
 const instantiatePrefabUuid = args.instantiatePrefabUuid ?? null;
 const instanceName = args.instanceName ?? 'CocosAiPrefabSmoke';
+const unpackMode = args.unpackMode ?? null;
 if (Boolean(targetPrefabUuid) !== Boolean(instantiatePrefabUuid)) {
   throw new Error('PREFAB_SMOKE_UUID_PAIR_REQUIRED');
+}
+if (unpackMode !== null && unpackMode !== 'current' && unpackMode !== 'complete') {
+  throw new Error(`PREFAB_UNPACK_MODE_INVALID:${unpackMode}`);
+}
+if (unpackMode && (!targetPrefabUuid || !instantiatePrefabUuid)) {
+  throw new Error('PREFAB_UNPACK_REQUIRES_INSTANTIATE_FIXTURE');
 }
 const mcpEntry = join(repoRoot, 'packages', 'mcp-server', 'dist', 'run.js');
 const toolkitVersion = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).version;
@@ -98,7 +105,8 @@ try {
     result.prefabInstantiate = await runPrefabInstantiateSmoke(client, editor, {
       targetPrefabUuid,
       instantiatePrefabUuid,
-      instanceName
+      instanceName,
+      unpackMode
     });
   }
 
@@ -196,13 +204,68 @@ async function runPrefabInstantiateSmoke(targetClient, editor, options) {
     if (!persisted || readPrefabAssetUuid(persisted) !== options.instantiatePrefabUuid) {
       throw new Error(`PREFAB_INSTANTIATE_REOPEN_VERIFY_FAILED:${instancePath}`);
     }
+    let unpack = null;
+    if (options.unpackMode) {
+      const unpacked = await callTool(targetClient, {
+        name: 'cocos_prefab_unpack',
+        arguments: {
+          projectId: editor.projectId,
+          editorInstanceId: editor.editorInstanceId,
+          path: instancePath,
+          mode: options.unpackMode,
+          expectedPrefabAssetUuid: options.instantiatePrefabUuid
+        }
+      });
+      result.steps.push(`prefab-unpack-${options.unpackMode}`);
+      const actual = unpacked.verification?.items?.[0]?.actual ?? {};
+      const modePassed = options.unpackMode === 'complete'
+        ? actual.allAssociationsRemoved === true
+        : actual.nestedAssociationsPreserved === true;
+      if (
+        unpacked.mode !== options.unpackMode
+        || unpacked.verification?.passed !== true
+        || actual.subtreePreserved !== true
+        || actual.componentsPreserved !== true
+        || !modePassed
+      ) {
+        throw new Error(`PREFAB_UNPACK_SMOKE_FAILED:${JSON.stringify(unpacked)}`);
+      }
+      await callTool(targetClient, {
+        name: 'cocos_prefab_open',
+        arguments: {
+          projectId: editor.projectId,
+          editorInstanceId: editor.editorInstanceId,
+          uuid: options.targetPrefabUuid
+        }
+      });
+      const unpackedHierarchy = unwrapHierarchy((await callTool(targetClient, {
+        name: 'cocos_hierarchy',
+        arguments: {
+          projectId: editor.projectId,
+          editorInstanceId: editor.editorInstanceId,
+          depth: 50
+        }
+      })).hierarchy);
+      const unpackedNode = findNodeByPath(unpackedHierarchy, instancePath);
+      if (!unpackedNode || readPrefabAssetUuid(unpackedNode) === options.instantiatePrefabUuid) {
+        throw new Error(`PREFAB_UNPACK_REOPEN_VERIFY_FAILED:${instancePath}`);
+      }
+      unpack = {
+        mode: options.unpackMode,
+        oldNodeUuid: unpacked.oldNodeUuid,
+        nodeUuid: unpacked.nodeUuid,
+        stablePath: unpacked.stablePath,
+        verification: actual
+      };
+    }
     return {
       nodeUuid: instantiated.nodeUuid,
       prefabAssetUuid: instantiated.prefabAssetUuid,
       instanceFileId: instantiated.instanceFileId,
       stablePath: instantiated.stablePath,
       reopenedNodeUuid: readNodeUuid(persisted),
-      reopenedPath: readNodePath(persisted)
+      reopenedPath: readNodePath(persisted),
+      ...(unpack ? { unpack } : {})
     };
   } finally {
     if (instancePath) {

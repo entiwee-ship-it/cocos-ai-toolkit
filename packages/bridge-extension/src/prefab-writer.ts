@@ -33,6 +33,17 @@ export interface PrefabInstanceInfo {
   }>;
 }
 
+export interface PrefabSubtreeSnapshot {
+  rootStablePath: string;
+  nodes: Array<{
+    relativePath: string;
+    name: string;
+    componentTypes: string[];
+    prefabAssetUuid: string | null;
+    instanceFileId: string | null;
+  }>;
+}
+
 /** 资产预检结果（query-asset-info 的最小必要字段）。 */
 export interface PrefabAssetInfo {
   uuid: string;
@@ -45,6 +56,7 @@ export interface PrefabAssetInfo {
  */
 export interface PrefabWriterDependencies {
   getPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceInfo | null>;
+  getPrefabSubtreeSnapshot(nodeUuid: string): Promise<PrefabSubtreeSnapshot | null>;
   /** 按资产 UUID 或 db:// URL 预检资产；不存在返回 null。 */
   queryAssetInfo(uuidOrUrl: string): Promise<PrefabAssetInfo | null>;
   /** 经 scene/create-node 消息实例化（type='cc.Prefab'），返回新节点 UUID。 */
@@ -60,7 +72,7 @@ export interface PrefabWriterDependencies {
   deleteAsset(assetUrl: string): Promise<void>;
   revertPrefabInstance(instanceRootUuid: string): Promise<void>;
   applyPrefabInstance(instanceRootUuid: string): Promise<void>;
-  unlinkPrefabInstance(instanceRootUuid: string): Promise<void>;
+  unlinkPrefabInstance(instanceRootUuid: string, removeNested: boolean): Promise<void>;
   linkPrefabInstance(nodeUuid: string, prefabAssetUuid: string): Promise<void>;
   /** 按属性路径重置实例节点属性为源值（Inspector 单属性还原同款路径）。 */
   resetNodeProperty(nodeUuid: string, propertyPath: string): Promise<void>;
@@ -93,6 +105,8 @@ export interface PrefabWriteOpResult {
   assetUuid: string | null;
   before: Partial<PrefabInstanceInfo> | Record<string, unknown> | null;
   after: Partial<PrefabInstanceInfo> | Record<string, unknown> | null;
+  beforeSubtree?: PrefabSubtreeSnapshot | null;
+  afterSubtree?: PrefabSubtreeSnapshot | null;
   targetLocalIds?: string[];
   /** 精确覆盖写入/还原前的覆盖值；重载后验证源值恢复时使用。 */
   previousOverride?: { value: unknown } | null;
@@ -161,7 +175,11 @@ type PrefabRevertOverrideOperation = WriteOperation & {
   propertyPath?: string;
 };
 type PrefabApplyToSourceOperation = WriteOperation & { instanceRootUuid: string };
-type PrefabInstanceOperation = WriteOperation & { instanceRootUuid: string };
+type PrefabInstanceOperation = WriteOperation & {
+  instanceRootUuid: string;
+  removeNested: boolean;
+  expectedPrefabAssetUuid: string;
+};
 type PrefabLinkOperation = WriteOperation & { nodeUuid: string; prefabAssetUuid: string };
 type PrefabReplaceOperation = WriteOperation & { instanceRootUuid: string; newPrefabAssetUuid: string };
 type AssetCreateOperation = WriteOperation & {
@@ -191,13 +209,27 @@ async function unlinkInstance(
     await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid),
     operation.instanceRootUuid
   );
-  await dependencies.unlinkPrefabInstance(operation.instanceRootUuid);
+  if (before.prefabAssetUuid !== operation.expectedPrefabAssetUuid) {
+    throw new ProbeError('PREFAB_IDENTITY_MISMATCH', {
+      nodeUuid: operation.instanceRootUuid,
+      expectedPrefabAssetUuid: operation.expectedPrefabAssetUuid,
+      actualPrefabAssetUuid: before.prefabAssetUuid
+    });
+  }
+  const beforeSubtree = await dependencies.getPrefabSubtreeSnapshot(operation.instanceRootUuid);
+  if (!beforeSubtree) {
+    throw new ProbeError('NODE_NOT_FOUND', { nodeUuid: operation.instanceRootUuid });
+  }
+  await dependencies.unlinkPrefabInstance(operation.instanceRootUuid, operation.removeNested);
   const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
+  const afterSubtree = await dependencies.getPrefabSubtreeSnapshot(operation.instanceRootUuid);
   return {
     nodeUuid: operation.instanceRootUuid,
     assetUuid: null,
     before,
-    after
+    after,
+    beforeSubtree,
+    afterSubtree
   };
 }
 

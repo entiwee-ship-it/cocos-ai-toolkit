@@ -93,6 +93,7 @@ export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_component_add',
   'cocos_component_set_property',
   'cocos_prefab_instantiate',
+  'cocos_prefab_unpack',
   'cocos_prefab_create',
   'cocos_prefab_rename',
   'cocos_document_save',
@@ -355,6 +356,48 @@ export class CocosDirectToolService {
       prefabAssetUuid,
       instanceFileId,
       stablePath,
+      verification
+    };
+  }
+
+  /** 移除当前或完整 Prefab 关联，并返回保存重开后的节点身份。 */
+  async unpackPrefab(input: ProjectSelector & NodeAddress & {
+    mode: 'current' | 'complete';
+    expectedPrefabAssetUuid: string;
+  }) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    const oldNodeUuid = await this.resolveNodeUuid(editor, input);
+    const result = await this.directWrite(editor, [{
+      type: 'prefab.unlink_instance' as const,
+      instanceRootUuid: oldNodeUuid,
+      removeNested: input.mode === 'complete',
+      expectedPrefabAssetUuid: input.expectedPrefabAssetUuid
+    }]);
+    const verification = result.outcome.verification;
+    const verificationItem = verification?.items.find((item) => item.operationIndex === 0);
+    const actual = asRecord(verificationItem?.actual);
+    const evidence = Array.isArray(result.outcome.evidence)
+      ? asRecord(result.outcome.evidence[0])
+      : {};
+    const enrichedOperation = asRecord(evidence.operation);
+    const nodeUuid = readNonEmptyString(actual.nodeUuid) ?? oldNodeUuid;
+    const stablePath = readNonEmptyString(actual.stablePath)
+      ?? readNonEmptyString(enrichedOperation.resultNodeStablePath);
+    if (!nodeUuid || !stablePath || !verification) {
+      throw new Error(`PREFAB_UNPACK_RESULT_INVALID:${JSON.stringify({
+        oldNodeUuid,
+        nodeUuid,
+        stablePath,
+        verification: verification ?? null
+      })}`);
+    }
+    return {
+      ...result,
+      oldNodeUuid,
+      nodeUuid,
+      uuidChanged: nodeUuid !== oldNodeUuid,
+      stablePath,
+      mode: input.mode,
       verification
     };
   }
@@ -1248,6 +1291,18 @@ export function registerCocosDirectWriteTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.instantiatePrefab(input)));
+
+  server.registerTool('cocos_prefab_unpack', {
+    description: '按 nodeUuid 或 path 移除 Prefab 关联；current 仅移除当前关联，complete 递归移除嵌套关联，expectedPrefabAssetUuid 用于锁定源资产。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      ...NodeAddressInput,
+      mode: z.enum(['current', 'complete']),
+      expectedPrefabAssetUuid: z.string().min(1)
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.unpackPrefab(input)));
 
   server.registerTool('cocos_prefab_create', {
     description: '把当前文档中的节点生成为 Prefab 资产；ASSET_ALREADY_EXISTS 时换 URL。',

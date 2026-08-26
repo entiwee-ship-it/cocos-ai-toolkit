@@ -9,7 +9,11 @@ import type {
   WriteVerificationReport
 } from './write-types';
 
-import type { PrefabAssetInfo, PrefabInstanceInfo } from './prefab-writer';
+import type {
+  PrefabAssetInfo,
+  PrefabInstanceInfo,
+  PrefabSubtreeSnapshot
+} from './prefab-writer';
 
 /** 已执行完成、等待重读验证的写操作（原始操作 + 执行证据）。 */
 export type VerifiedOperation = (NodeWriteOpResult | ComponentWriteOpResult | PrefabWriteOpResult) & {
@@ -35,6 +39,7 @@ export interface WriteVerifierDependencies {
   ): Promise<Record<string, unknown> | null>;
   getComponentProperty(componentUuid: string, propertyPath: string): Promise<unknown>;
   getPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceInfo | null>;
+  getPrefabSubtreeSnapshot(nodeUuid: string): Promise<PrefabSubtreeSnapshot | null>;
   getPrefabTargetProperty?(
     instanceRootUuid: string,
     targetLocalIds: string[],
@@ -371,13 +376,34 @@ async function verifyOperationUnsafe(
       return build('实例关系未损坏', actual ? { prefabAssetUuid: actual.prefabAssetUuid, instanceFileId: actual.instanceFileId } : null, intact);
     }
     case 'prefab.unlink_instance': {
-      const actual = (await resolvePrefabInstance(
+      const resolved = await resolvePrefabInstance(
         operation,
         operation.instanceRootUuid as string,
         dependencies
-      ))?.info ?? null;
-      const unlinked = actual !== null && actual.prefabAssetUuid === null;
-      return build('关联已解除', actual?.prefabAssetUuid ?? null, unlinked);
+      );
+      const beforeSubtree = readPrefabSubtreeSnapshot(
+        (operation as WriteOperation & { resultPrefabBeforeSubtree?: unknown }).resultPrefabBeforeSubtree
+      );
+      const actualSubtree = resolved
+        ? await dependencies.getPrefabSubtreeSnapshot(resolved.nodeUuid)
+        : null;
+      const analysis = analyzePrefabUnpack(
+        beforeSubtree,
+        actualSubtree,
+        operation.expectedPrefabAssetUuid as string,
+        operation.removeNested === true
+      );
+      const actual = {
+        nodeUuid: resolved?.nodeUuid ?? null,
+        stablePath: resolved?.info.stablePath ?? actualSubtree?.rootStablePath ?? null,
+        prefabAssetUuid: resolved?.info.prefabAssetUuid ?? null,
+        ...analysis.actual
+      };
+      return build(
+        analysis.expected,
+        actual,
+        resolved !== null && resolved.info.prefabAssetUuid === null && analysis.passed
+      );
     }
     case 'prefab.link_instance': {
       const actual = (await resolvePrefabInstance(
@@ -517,6 +543,84 @@ async function resolvePrefabInstance(
 
 function readOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
+}
+
+function readPrefabSubtreeSnapshot(value: unknown): PrefabSubtreeSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.rootStablePath !== 'string' || !Array.isArray(record.nodes)) return null;
+  const nodes: PrefabSubtreeSnapshot['nodes'] = [];
+  for (const node of record.nodes) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
+    const entry = node as Record<string, unknown>;
+    if (
+      typeof entry.relativePath !== 'string'
+      || typeof entry.name !== 'string'
+      || !Array.isArray(entry.componentTypes)
+      || !entry.componentTypes.every((type) => typeof type === 'string')
+    ) return null;
+    nodes.push({
+      relativePath: entry.relativePath,
+      name: entry.name,
+      componentTypes: entry.componentTypes as string[],
+      prefabAssetUuid: readOptionalString(entry.prefabAssetUuid),
+      instanceFileId: readOptionalString(entry.instanceFileId)
+    });
+  }
+  return { rootStablePath: record.rootStablePath, nodes };
+}
+
+function analyzePrefabUnpack(
+  before: PrefabSubtreeSnapshot | null,
+  actual: PrefabSubtreeSnapshot | null,
+  expectedPrefabAssetUuid: string,
+  removeNested: boolean
+) {
+  const beforeNodes = before?.nodes ?? [];
+  const actualNodes = actual?.nodes ?? [];
+  const actualByPath = new Map(actualNodes.map((node) => [node.relativePath, node]));
+  const subtreePreserved = before !== null
+    && actual !== null
+    && beforeNodes.length === actualNodes.length
+    && beforeNodes.every((node) => actualByPath.get(node.relativePath)?.name === node.name);
+  const componentsPreserved = subtreePreserved && beforeNodes.every((node) => {
+    const current = actualByPath.get(node.relativePath);
+    return Boolean(current && arraysEqual(node.componentTypes, current.componentTypes));
+  });
+  const oldAssociationRemoved = actual !== null
+    && actualNodes.every((node) => node.prefabAssetUuid !== expectedPrefabAssetUuid);
+  const nestedAssociations = beforeNodes.filter((node) => (
+    node.prefabAssetUuid !== null && node.prefabAssetUuid !== expectedPrefabAssetUuid
+  ));
+  const nestedAssociationsPreserved = actual !== null && nestedAssociations.every((node) => (
+    actualByPath.get(node.relativePath)?.prefabAssetUuid === node.prefabAssetUuid
+  ));
+  const allAssociationsRemoved = actual !== null
+    && actualNodes.every((node) => node.prefabAssetUuid === null);
+  return {
+    expected: {
+      mode: removeNested ? 'complete' : 'current',
+      oldPrefabAssetUuid: expectedPrefabAssetUuid,
+      subtreeNodeCount: beforeNodes.length,
+      preserveComponents: true,
+      nestedAssociations: nestedAssociations.map((node) => ({
+        relativePath: node.relativePath,
+        prefabAssetUuid: node.prefabAssetUuid
+      }))
+    },
+    actual: {
+      subtreeNodeCount: actualNodes.length,
+      subtreePreserved,
+      componentsPreserved,
+      oldAssociationRemoved,
+      nestedAssociationsPreserved,
+      allAssociationsRemoved
+    },
+    passed: subtreePreserved
+      && componentsPreserved
+      && oldAssociationRemoved
+      && (removeNested ? allAssociationsRemoved : nestedAssociationsPreserved)
+  };
 }
 
 function readResultAssetUuid(operation: WriteOperation): string | null {

@@ -27,6 +27,7 @@ const EXPECTED_TOOL_NAMES = [
   'cocos_prefab_instantiate',
   'cocos_prefab_open',
   'cocos_prefab_rename',
+  'cocos_prefab_unpack',
   'cocos_preview_launch',
   'cocos_preview_sessions',
   'cocos_preview_stop',
@@ -44,7 +45,7 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 describe('Cocos AI Toolkit 技能契约', () => {
-  it('教授直写档全部三十六个工具，且不含已移除的旧工具', async () => {
+  it('教授直写档全部三十七个工具，且不含已移除的旧工具', async () => {
     const skill = await readFile(skillPath, 'utf8');
     const names = [...new Set(skill.match(/\bcocos_[a-z0-9_]+\b/g) ?? [])].sort();
     expect(names).toEqual(EXPECTED_TOOL_NAMES);

@@ -308,6 +308,7 @@ describe('直写档工具注册', () => {
       'cocos_component_add',
       'cocos_component_set_property',
       'cocos_prefab_instantiate',
+      'cocos_prefab_unpack',
       'cocos_prefab_create',
       'cocos_prefab_rename',
       'cocos_document_save',
@@ -352,6 +353,7 @@ describe('直写档工具注册', () => {
       'cocos_component_add',
       'cocos_component_set_property',
       'cocos_prefab_instantiate',
+      'cocos_prefab_unpack',
       'cocos_prefab_create',
       'cocos_prefab_rename',
       'cocos_document_save',
@@ -894,6 +896,99 @@ describe('直写档写工具', () => {
     }
   });
 
+  it('cocos_prefab_unpack 按 path 直写 complete 并返回重开后的节点身份', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.directWrite': {
+        kind: 'success',
+        executedOps: 1,
+        verification: {
+          passed: true,
+          verifiedAt: '2026-08-26T00:00:00.000Z',
+          items: [{
+            operationIndex: 0,
+            description: '完全移除 Prefab 关联',
+            expected: { mode: 'complete' },
+            actual: {
+              nodeUuid: 'panel-reloaded',
+              stablePath: '/Root~0/Panel~0',
+              prefabAssetUuid: null,
+              subtreePreserved: true,
+              componentsPreserved: true,
+              allAssociationsRemoved: true
+            },
+            passed: true
+          }]
+        },
+        evidence: [{
+          operation: {
+            type: 'prefab.unlink_instance',
+            instanceRootUuid: 'panel-uuid',
+            removeNested: true,
+            expectedPrefabAssetUuid: 'panel-prefab',
+            resultNodeStablePath: '/Root~0/Panel~0'
+          }
+        }]
+      }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_unpack',
+      arguments: {
+        projectId: 'proj1',
+        path: 'Root/Panel',
+        mode: 'complete',
+        expectedPrefabAssetUuid: 'panel-prefab'
+      }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      oldNodeUuid: 'panel-uuid',
+      nodeUuid: 'panel-reloaded',
+      uuidChanged: true,
+      stablePath: '/Root~0/Panel~0',
+      mode: 'complete',
+      verification: { passed: true }
+    });
+    const write = probeClient.requests.at(-1);
+    const payload = write?.payload as { params: { operations: unknown[]; save: boolean } };
+    expect(payload.params).toEqual({
+      operations: [{
+        type: 'prefab.unlink_instance',
+        instanceRootUuid: 'panel-uuid',
+        removeNested: true,
+        expectedPrefabAssetUuid: 'panel-prefab'
+      }],
+      save: true
+    });
+  });
+
+  it('cocos_prefab_unpack 保留源 Prefab 身份锁错误', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.directWrite': {
+        kind: 'operation-failed',
+        executedOps: 0,
+        failure: {
+          code: 'PREFAB_IDENTITY_MISMATCH',
+          message: 'PREFAB_IDENTITY_MISMATCH',
+          operationIndex: 0
+        }
+      }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_unpack',
+      arguments: {
+        projectId: 'proj1', nodeUuid: 'panel-uuid', mode: 'current',
+        expectedPrefabAssetUuid: 'other-prefab'
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('PREFAB_IDENTITY_MISMATCH');
+  });
+
   it('cocos_node_delete 直写 node.delete', async () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const { client } = await createHarness(probeClient, { enableWrites: true });
@@ -972,6 +1067,13 @@ describe('直写档写工具', () => {
         name: 'cocos_prefab_instantiate',
         arguments: {
           prefabUuid: 'avatar-prefab', parentUuid: 'root-uuid', parentPath: 'Root', name: 'Avatar'
+        }
+      },
+      {
+        name: 'cocos_prefab_unpack',
+        arguments: {
+          nodeUuid: 'panel-uuid', path: 'Root/Panel', mode: 'current',
+          expectedPrefabAssetUuid: 'panel-prefab'
         }
       },
       {

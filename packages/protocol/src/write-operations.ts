@@ -226,7 +226,9 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('prefab.unlink_instance'),
-    instanceRootUuid: z.string().min(1)
+    instanceRootUuid: z.string().min(1),
+    removeNested: z.boolean(),
+    expectedPrefabAssetUuid: z.string().min(1)
   }),
   z.object({
     type: z.literal('prefab.link_instance'),

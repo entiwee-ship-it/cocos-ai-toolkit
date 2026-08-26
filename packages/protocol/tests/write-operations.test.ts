@@ -142,6 +142,23 @@ describe('WriteOperationSchema', () => {
     })).toBeTruthy();
   });
 
+  it('Prefab 解包要求递归模式和源资产乐观锁', () => {
+    const operation = WriteOperationSchema.parse({
+      type: 'prefab.unlink_instance',
+      instanceRootUuid: 'instance-root',
+      removeNested: false,
+      expectedPrefabAssetUuid: 'prefab-asset'
+    });
+    expect(operation).toMatchObject({
+      removeNested: false,
+      expectedPrefabAssetUuid: 'prefab-asset'
+    });
+    expect(() => WriteOperationSchema.parse({
+      type: 'prefab.unlink_instance',
+      instanceRootUuid: 'instance-root'
+    })).toThrow();
+  });
+
   it('拒绝未知操作类型', () => {
     expect(() => WriteOperationSchema.parse({ type: 'node.explode', nodeUuid: 'n1' })).toThrow();
   });

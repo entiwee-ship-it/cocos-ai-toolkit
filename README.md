@@ -91,7 +91,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（完整写模式 36 个）
+## MCP 工具面（完整写模式 37 个）
 
 ### 编辑态只读 8 个（默认开放）
 
@@ -106,7 +106,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_prefab_open` | 通过 Creator 打开 Prefab 并等待文档身份就绪 |
 | `cocos_scene_open` | 通过 Creator 打开 Scene 并等待文档身份就绪 |
 
-### 编辑态直写 15 个（`--enable-writes` 才注册；每次写入自动保存并逐项重读回显）
+### 编辑态直写 16 个（`--enable-writes` 才注册；每次写入自动保存并逐项重读回显）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -118,6 +118,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_component_add` | 在节点上挂载组件；自定义脚本组件必须提供 scriptUuid |
 | `cocos_component_set_property` | 修改组件属性值；propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致时拒绝写入 |
 | `cocos_prefab_instantiate` | 在父节点下实例化 Prefab；支持 parentUuid/parentPath，保存重开后返回稳定实例身份 |
+| `cocos_prefab_unpack` | 按节点移除 Prefab 关联；current 仅移除当前关联，complete 递归移除嵌套关联，源资产 UUID 必须精确匹配 |
 | `cocos_prefab_create` | 把当前文档中的节点生成为 Prefab 资产 |
 | `cocos_prefab_rename` | 按 UUID 在原目录内重命名 Prefab，通过 Creator AssetDB 保持 UUID 并拒绝覆盖 |
 | `cocos_document_save` | 保存当前 Prefab 或 Scene 文档（手工修改后的落盘入口） |
@@ -161,6 +162,8 @@ npm run smoke:creator -- `
   --instantiate-prefab-uuid <待实例化的 Prefab UUID> `
   --instance-name CocosAiPrefabSmoke
 ```
+
+在上述命令末尾追加 `--unpack-mode current` 或 `--unpack-mode complete`，可分别验证“仅移除当前关联”和“递归移除嵌套关联”；两种模式应分开运行并保留各自报告。
 
 ## 安装 AI 使用技能
 

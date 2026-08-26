@@ -9,7 +9,11 @@ import {
 import { buildComponentTypeSchema } from './component-schema';
 import { readDumpValueAtPath } from './write-scene-channel';
 import type { WriteVerifierDependencies } from './write-verifier';
-import type { PrefabInstanceInfo, PrefabWriterDependencies } from './prefab-writer';
+import type {
+  PrefabInstanceInfo,
+  PrefabSubtreeSnapshot,
+  PrefabWriterDependencies
+} from './prefab-writer';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
 import {
   readRuntimeWriteClassAttributes,
@@ -456,6 +460,7 @@ export function buildWriteVerifierDependencies(): WriteVerifierDependencies {
       return readDumpValueAtPath(raw, parsePropertyPath(propertyPath));
     },
     getPrefabInstanceInfo: async (nodeUuid) => readPrefabInstanceInfo(nodeUuid),
+    getPrefabSubtreeSnapshot: async (nodeUuid) => readPrefabSubtreeSnapshot(nodeUuid),
     getPrefabTargetProperty: async (instanceRootUuid, targetLocalIds, propertyPath) => {
       return readRuntimePrefabTargetProperty(instanceRootUuid, targetLocalIds, propertyPath);
     },
@@ -528,6 +533,51 @@ async function readPrefabInstanceInfo(nodeUuid: string): Promise<PrefabInstanceI
   };
 }
 
+/** 读取节点子树结构、组件类型和 Prefab 关联，供解包后保存重开验证。 */
+async function readPrefabSubtreeSnapshot(nodeUuid: string): Promise<PrefabSubtreeSnapshot | null> {
+  const rawTree = await Editor.Message.request('scene', 'query-node-tree').catch(() => null);
+  const root = rawTree ? findHierarchySubtreeByUuid(readObject(rawTree), nodeUuid) : null;
+  const runtimeRoot = findRuntimeNode(nodeUuid);
+  if (!root || !runtimeRoot) return null;
+  const nodes: PrefabSubtreeSnapshot['nodes'] = [];
+  const visit = (node: Record<string, unknown>, indexes: number[]): void => {
+    const prefab = readObject(node.prefab);
+    const componentTypes = (Array.isArray(node.components) ? node.components : [])
+      .map((component) => readObject(component).type)
+      .filter((type): type is string => typeof type === 'string' && type.length > 0);
+    nodes.push({
+      relativePath: indexes.join('/'),
+      name: typeof node.name === 'string' ? node.name : '',
+      componentTypes,
+      prefabAssetUuid: typeof prefab.assetUuid === 'string' && prefab.assetUuid
+        ? prefab.assetUuid
+        : null,
+      instanceFileId: typeof prefab.instanceFileId === 'string' && prefab.instanceFileId
+        ? prefab.instanceFileId
+        : null
+    });
+    const children = Array.isArray(node.children) ? node.children : [];
+    children.forEach((child, index) => visit(readObject(child), [...indexes, index]));
+  };
+  visit(root, []);
+  return {
+    rootStablePath: buildRuntimeNodeStablePath(runtimeRoot),
+    nodes
+  };
+}
+
+function findHierarchySubtreeByUuid(
+  node: Record<string, unknown>,
+  nodeUuid: string
+): Record<string, unknown> | null {
+  if (node.uuid === nodeUuid) return node;
+  for (const child of Array.isArray(node.children) ? node.children : []) {
+    const found = findHierarchySubtreeByUuid(readObject(child), nodeUuid);
+    if (found) return found;
+  }
+  return null;
+}
+
 /** 资产预检：按 UUID 或 db:// URL 查询资产信息，不存在返回 null。 */
 async function queryPrefabAssetInfo(uuidOrUrl: string): Promise<{ uuid: string; type: string | null } | null> {
   const info = await Editor.Message.request('asset-db', 'query-asset-info', uuidOrUrl).catch(() => null);
@@ -561,6 +611,7 @@ async function callFacadePrefabMethod(method: string, args: unknown[], unavailab
 export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
   return {
     getPrefabInstanceInfo: async (nodeUuid) => readPrefabInstanceInfo(nodeUuid),
+    getPrefabSubtreeSnapshot: async (nodeUuid) => readPrefabSubtreeSnapshot(nodeUuid),
     queryAssetInfo: async (uuidOrUrl) => queryPrefabAssetInfo(uuidOrUrl),
     instantiatePrefab: async (parentNodeUuid, prefabAssetUuid, name) => {
       // 实测路径：scene/create-node 消息 + type='cc.Prefab'（不带 type 会被剥掉实例信息）。
@@ -623,8 +674,12 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
     applyPrefabInstance: async (instanceRootUuid) => {
       await callFacadePrefabMethod('applyPrefab', [instanceRootUuid], 'CREATOR_APPLY_PREFAB_UNAVAILABLE');
     },
-    unlinkPrefabInstance: async (instanceRootUuid) => {
-      await callFacadePrefabMethod('unlinkPrefab', [instanceRootUuid], 'CREATOR_UNLINK_PREFAB_UNAVAILABLE');
+    unlinkPrefabInstance: async (instanceRootUuid, removeNested) => {
+      await callFacadePrefabMethod(
+        'unlinkPrefab',
+        [instanceRootUuid, removeNested],
+        'CREATOR_UNLINK_PREFAB_UNAVAILABLE'
+      );
     },
     linkPrefabInstance: async (nodeUuid, prefabAssetUuid) => {
       await callFacadePrefabMethod('linkPrefab', [nodeUuid, prefabAssetUuid], 'CREATOR_LINK_PREFAB_UNAVAILABLE');

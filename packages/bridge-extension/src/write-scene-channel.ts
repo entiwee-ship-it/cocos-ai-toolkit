@@ -84,6 +84,9 @@ export async function executeWriteSceneOperations(
       const resultPrefabInstanceFileId = typeof stableResult?.instanceFileId === 'string' && stableResult.instanceFileId
         ? stableResult.instanceFileId
         : null;
+      const resultPrefabBeforeSubtree = 'beforeSubtree' in result
+        ? result.beforeSubtree
+        : null;
       const resultPreviousOverride = 'previousOverride' in result ? result.previousOverride : undefined;
       const resultHadPreviousOverride = resultPreviousOverride === undefined
         ? null
@@ -101,6 +104,7 @@ export async function executeWriteSceneOperations(
         ...(resultTargetLocalIds ? { resultTargetLocalIds } : {}),
         ...(resultPrefabAssetUuid ? { resultPrefabAssetUuid } : {}),
         ...(resultPrefabInstanceFileId ? { resultPrefabInstanceFileId } : {}),
+        ...(resultPrefabBeforeSubtree ? { resultPrefabBeforeSubtree } : {}),
         ...(resultHadPreviousOverride === null ? {} : { resultHadPreviousOverride }),
         ...(resultPreviousOverride && 'value' in resultPreviousOverride
           ? { resultPreviousOverrideValue: resultPreviousOverride.value }

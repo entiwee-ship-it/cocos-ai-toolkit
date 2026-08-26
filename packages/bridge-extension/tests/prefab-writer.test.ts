@@ -30,10 +30,34 @@ function createInstanceInfo(overrides: Partial<PrefabInstanceInfo> = {}): Prefab
   };
 }
 
+function createSubtreeSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    rootStablePath: '/Scene~0/Instance~0',
+    nodes: [
+      {
+        relativePath: '',
+        name: 'Instance',
+        componentTypes: ['cc.UITransform'],
+        prefabAssetUuid: 'asset-1',
+        instanceFileId: 'inst-1'
+      },
+      {
+        relativePath: '0',
+        name: 'Nested',
+        componentTypes: ['cc.Sprite'],
+        prefabAssetUuid: 'asset-nested',
+        instanceFileId: 'inst-nested'
+      }
+    ],
+    ...overrides
+  };
+}
+
 /** 构造全部默认成功的预制体写依赖，单测按需覆盖。 */
 function createDependencies(overrides: Partial<PrefabWriterDependencies> = {}): PrefabWriterDependencies {
   return {
     getPrefabInstanceInfo: async () => createInstanceInfo(),
+    getPrefabSubtreeSnapshot: async () => createSubtreeSnapshot(),
     queryAssetInfo: async () => ({ uuid: 'asset-1', type: 'cc.Prefab' }),
     instantiatePrefab: async () => 'n-new',
     createPrefabFromNode: async () => 'asset-new',
@@ -457,19 +481,101 @@ describe('executePrefabWriteOperation', () => {
     expect(result.before?.prefabAssetUuid).toBe('asset-1');
   });
 
-  it('prefab.unlink_instance 成功：解除关联并返回前后证据', async () => {
-    let unlinked: string | null = null;
+  it('prefab.unlink_instance current 只解除当前关联并保留嵌套证据', async () => {
+    let unlinked: { uuid: string; removeNested: boolean } | null = null;
+    let infoReadCount = 0;
+    let subtreeReadCount = 0;
+    const afterSubtree = createSubtreeSnapshot({
+      nodes: [
+        {
+          relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
+          prefabAssetUuid: null, instanceFileId: null
+        },
+        {
+          relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
+          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested'
+        }
+      ]
+    });
     const dependencies = createDependencies({
-      unlinkPrefabInstance: async (uuid) => {
-        unlinked = uuid;
+      getPrefabInstanceInfo: async () => infoReadCount++ === 0
+        ? createInstanceInfo()
+        : createInstanceInfo({ prefabAssetUuid: null, instanceFileId: null }),
+      getPrefabSubtreeSnapshot: async () => subtreeReadCount++ === 0
+        ? createSubtreeSnapshot()
+        : afterSubtree,
+      unlinkPrefabInstance: async (uuid, removeNested) => {
+        unlinked = { uuid, removeNested };
       }
     });
-    const result = await executePrefabWriteOperation(
-      { type: 'prefab.unlink_instance', instanceRootUuid: 'n1' } as WriteOperation,
-      dependencies
-    );
+    const result = await executePrefabWriteOperation({
+      type: 'prefab.unlink_instance',
+      instanceRootUuid: 'n1',
+      removeNested: false,
+      expectedPrefabAssetUuid: 'asset-1'
+    } as WriteOperation, dependencies);
 
-    expect(unlinked).toBe('n1');
+    expect(unlinked).toEqual({ uuid: 'n1', removeNested: false });
+    expect(result.beforeSubtree?.nodes[0]?.prefabAssetUuid).toBe('asset-1');
+    expect(result.afterSubtree).toEqual(afterSubtree);
+  });
+
+  it('prefab.unlink_instance complete 递归解除嵌套关联', async () => {
+    let removeNested: boolean | null = null;
+    let infoReadCount = 0;
+    let subtreeReadCount = 0;
+    const afterSubtree = createSubtreeSnapshot({
+      nodes: [
+        {
+          relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
+          prefabAssetUuid: null, instanceFileId: null
+        },
+        {
+          relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
+          prefabAssetUuid: null, instanceFileId: null
+        }
+      ]
+    });
+    const dependencies = createDependencies({
+      getPrefabInstanceInfo: async () => infoReadCount++ === 0
+        ? createInstanceInfo()
+        : createInstanceInfo({ prefabAssetUuid: null, instanceFileId: null }),
+      getPrefabSubtreeSnapshot: async () => subtreeReadCount++ === 0
+        ? createSubtreeSnapshot()
+        : afterSubtree,
+      unlinkPrefabInstance: async (_uuid, recursive) => {
+        removeNested = recursive;
+      }
+    });
+
+    const result = await executePrefabWriteOperation({
+      type: 'prefab.unlink_instance',
+      instanceRootUuid: 'n1',
+      removeNested: true,
+      expectedPrefabAssetUuid: 'asset-1'
+    } as WriteOperation, dependencies);
+
+    expect(removeNested).toBe(true);
+    expect(result.afterSubtree).toEqual(afterSubtree);
+  });
+
+  it('prefab.unlink_instance 源资产乐观锁不一致时拒绝解包', async () => {
+    let unlinkCalled = false;
+    const dependencies = createDependencies({
+      unlinkPrefabInstance: async () => {
+        unlinkCalled = true;
+      }
+    });
+
+    const error = await executePrefabWriteOperation({
+      type: 'prefab.unlink_instance',
+      instanceRootUuid: 'n1',
+      removeNested: false,
+      expectedPrefabAssetUuid: 'other-asset'
+    } as WriteOperation, dependencies).catch((caught: unknown) => caught);
+
+    expect((error as ProbeError).code).toBe('PREFAB_IDENTITY_MISMATCH');
+    expect(unlinkCalled).toBe(false);
   });
 
   it('prefab.link_instance 成功：关联后实例信息指向目标资产', async () => {
