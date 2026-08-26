@@ -1,9 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { dirname, join } from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const TOOLKIT_VERSION = '0.3.1';
+const TOOLKIT_VERSION = '0.4.0';
 const entry = process.env.COCOS_AI_MCP_ENTRY;
 if (!entry) throw new Error('COCOS_AI_MCP_ENTRY_REQUIRED');
 const sourceCommit = process.env.COCOS_AI_SOURCE_COMMIT;
@@ -12,6 +13,11 @@ const enableWrites = process.env.COCOS_AI_MCP_ENABLE_WRITES !== 'false';
 const distDir = dirname(entry);
 const directModule = await import(pathToFileURL(join(distDir, 'direct-tools.js')).href);
 const runtimeModule = await import(pathToFileURL(join(distDir, 'runtime-tools.js')).href);
+const bridgeDistDir = resolve(distDir, '..', '..', 'bridge-extension', 'dist');
+const bridgeModule = await import(pathToFileURL(join(bridgeDistDir, 'editor-state.js')).href);
+const bridgeBuildInfo = JSON.parse(await readFile(join(bridgeDistDir, 'build-info.json'), 'utf8'));
+const expectedBridgeBuildId = bridgeBuildInfo.buildId;
+const expectedBridgeCapabilities = [...bridgeModule.BRIDGE_CAPABILITIES].sort();
 const EXPECTED_READONLY = [
   ...directModule.COCOS_DIRECT_READONLY_TOOL_NAMES,
   ...runtimeModule.COCOS_RUNTIME_READONLY_TOOL_NAMES
@@ -70,6 +76,7 @@ try {
   const editors = Array.isArray(editorResult.structuredContent?.editors)
     ? editorResult.structuredContent.editors
     : [];
+  if (editors.length === 0) throw new Error('COCOS_EDITOR_NOT_CONNECTED');
   const bridgeVersions = [...new Set(editors.map((editor) => editor.bridgeVersion))];
   if (bridgeVersions.some((version) => version !== TOOLKIT_VERSION)) {
     throw new Error(`BRIDGE_VERSION_MISMATCH:${JSON.stringify({
@@ -77,12 +84,40 @@ try {
       actual: bridgeVersions
     })}`);
   }
+  const bridgeBuildIds = [...new Set(editors.map((editor) => editor.bridgeBuildId ?? null))];
+  if (bridgeBuildIds.some((buildId) => buildId !== expectedBridgeBuildId)) {
+    throw new Error(`BRIDGE_BUILD_ID_MISMATCH:${JSON.stringify({
+      expected: expectedBridgeBuildId,
+      actual: bridgeBuildIds
+    })}`);
+  }
+  const capabilityMismatches = editors.flatMap((editor) => {
+    const actual = [...editor.capabilities].sort();
+    return JSON.stringify(actual) === JSON.stringify(expectedBridgeCapabilities)
+      ? []
+      : [{ editorInstanceId: editor.editorInstanceId, expected: expectedBridgeCapabilities, actual }];
+  });
+  if (capabilityMismatches.length) {
+    throw new Error(`BRIDGE_CAPABILITIES_MISMATCH:${JSON.stringify(capabilityMismatches)}`);
+  }
+  const expectedBridgeRoot = resolve(bridgeDistDir, '..');
+  for (const editor of editors) {
+    const installedBridgeRoot = await realpath(join(editor.projectPath, 'extensions', 'cocos-ai-bridge'));
+    if (resolve(installedBridgeRoot).toLowerCase() !== expectedBridgeRoot.toLowerCase()) {
+      throw new Error(`BRIDGE_RUNTIME_MISMATCH:${JSON.stringify({
+        editorInstanceId: editor.editorInstanceId,
+        expected: expectedBridgeRoot,
+        actual: installedBridgeRoot
+      })}`);
+    }
+  }
   process.stdout.write(JSON.stringify({
     ok: true,
     toolkitVersion: TOOLKIT_VERSION,
     sourceCommit,
     serverVersion: client.getServerVersion(),
     bridgeVersions,
+    bridgeBuildIds,
     writeEnabled: enableWrites,
     toolCount: names.length,
     editors: editorResult.structuredContent ?? null

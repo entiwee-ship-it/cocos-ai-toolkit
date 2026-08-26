@@ -11,13 +11,22 @@ const sessionToken = process.env.COCOS_AI_SESSION_TOKEN || undefined;
 // 截图落盘根固定在工具仓库 reports 下（dist/run.js 上溯三级），不随启动 cwd 漂移。
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const captureRoot = process.env.COCOS_AI_CAPTURE_ROOT ?? join(repoRoot, 'reports', 'runtime-captures');
+const captureFilesPerSession = Number(process.env.COCOS_AI_CAPTURE_FILES_PER_SESSION ?? '100');
 
 // 阶段五：装配运行态页面驱动（playwright-core + 系统 Chrome/Edge）。
 const runtimeDriver = new RuntimeDriver({
   launcher: launchPlaywrightBrowser
 });
 
-const server = new ProbeServer({ host, port, requestTimeoutMs, runtimeDriver, captureRoot, sessionToken });
+const server = new ProbeServer({
+  host,
+  port,
+  requestTimeoutMs,
+  runtimeDriver,
+  captureRoot,
+  captureFilesPerSession,
+  sessionToken
+});
 const address = await server.start();
 console.log(JSON.stringify({ type: 'probe-server.ready', url: `ws://${address.host}:${address.port}` }));
 

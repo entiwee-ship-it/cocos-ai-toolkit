@@ -30,12 +30,12 @@ export type WriteSceneExecutionOutcome = WriteExecutionOutcome & {
  * 在事务上下文内按序执行混合写操作，并保留逐操作证据（含逆操作）。
  * 失败即停：返回 operation-failed，已执行操作的证据照常带回，供回滚编排。
  *
- * @param input 写操作序列、保存开关和 Undo 组名。
+ * @param input 写操作序列和保存开关。
  * @param dependencies Scene 侧写通道依赖。
  * @returns 执行器契约结果 + 证据。
  */
 export async function executeWriteSceneOperations(
-  input: { operations: WriteOperation[]; save: boolean; undoGroup: string },
+  input: { operations: WriteOperation[]; save: boolean },
   dependencies: WriteSceneChannelDependencies
 ): Promise<WriteSceneExecutionOutcome> {
   const executed: VerifiedOperation[] = [];

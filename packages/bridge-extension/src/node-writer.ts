@@ -43,16 +43,10 @@ export interface NodeWriteOpResult {
   nodeUuid: string;
   before: Partial<NodeInfo> | null;
   after: Partial<NodeInfo> | null;
-  /**
-   * 显式逆操作序列，供 step-undo-with-inverse 回滚路径使用。
-   * 空数组表示该操作无法用逆操作还原（如 delete 丢子树），回滚必须依赖编辑器 Undo。
-   */
-  inverse: WriteOperation[];
 }
 
 /**
- * 执行单个节点原子写操作，返回 before/after 证据和显式逆操作。
- * 只允许在事务上下文内由写执行器调用；非法目标抛稳定错误码，不留下半成品。
+ * 执行单个节点原子写操作并返回 before/after 证据。
  *
  * @param operation 节点写操作（node.* 八类之一）。
  * @param dependencies Scene 侧真实能力。
@@ -84,36 +78,6 @@ export async function executeNodeWriteOperation(
   }
 }
 
-/**
- * 按事务内顺序执行多个节点写操作。任一操作失败即停止，错误 details 携带
- * operationIndex 和已完成操作的逆操作（completedInverse），供执行器构造回滚计划。
- *
- * @param operations 节点写操作序列。
- * @param dependencies Scene 侧真实能力。
- * @returns 每个操作的证据，顺序与输入一致。
- */
-export async function executeNodeWriteOperations(
-  operations: WriteOperation[],
-  dependencies: NodeWriterDependencies
-): Promise<NodeWriteOpResult[]> {
-  const results: NodeWriteOpResult[] = [];
-  for (let index = 0; index < operations.length; index += 1) {
-    try {
-      results.push(await executeNodeWriteOperation(operations[index], dependencies));
-    } catch (error) {
-      const probeError = error instanceof ProbeError
-        ? error
-        : new ProbeError(readReason(error));
-      throw new ProbeError(probeError.code, {
-        ...probeError.details,
-        operationIndex: index,
-        completedInverse: results.map((result) => result.inverse)
-      });
-    }
-  }
-  return results;
-}
-
 async function createNode(
   operation: WriteOperation,
   dependencies: NodeWriterDependencies
@@ -140,8 +104,7 @@ async function createNode(
   return {
     nodeUuid,
     before: null,
-    after: await requireNodeInfo(dependencies, nodeUuid),
-    inverse: [{ type: 'node.delete', nodeUuid }]
+    after: await requireNodeInfo(dependencies, nodeUuid)
   };
 }
 
@@ -152,7 +115,7 @@ async function deleteNode(
   const nodeUuid = operation.nodeUuid as string;
   const before = await requireNodeInfo(dependencies, nodeUuid);
   await dependencies.removeNode(nodeUuid);
-  return { nodeUuid, before, after: null, inverse: [] };
+  return { nodeUuid, before, after: null };
 }
 
 async function renameNode(
@@ -168,8 +131,7 @@ async function renameNode(
   return {
     nodeUuid,
     before: { uuid: nodeUuid, name: before.name },
-    after: { uuid: nodeUuid, name: after.name },
-    inverse: [{ type: 'node.rename', nodeUuid, name: before.name }]
+    after: { uuid: nodeUuid, name: after.name }
   };
 }
 
@@ -204,8 +166,7 @@ async function reparentNode(
       uuid: nodeUuid,
       parentUuid: after.parentUuid,
       ...(after.stablePath ? { stablePath: after.stablePath } : {})
-    },
-    inverse: [{ type: 'node.reparent', nodeUuid, newParentUuid: before.parentUuid as string }]
+    }
   };
 }
 
@@ -234,8 +195,7 @@ async function duplicateNode(
   return {
     nodeUuid: duplicatedUuid,
     before: null,
-    after: await requireNodeInfo(dependencies, duplicatedUuid),
-    inverse: [{ type: 'node.delete', nodeUuid: duplicatedUuid }]
+    after: await requireNodeInfo(dependencies, duplicatedUuid)
   };
 }
 
@@ -250,8 +210,7 @@ async function setNodeActive(
   return {
     nodeUuid,
     before: { uuid: nodeUuid, active: before.active },
-    after: { uuid: nodeUuid, active: after.active },
-    inverse: [{ type: 'node.set_active', nodeUuid, active: before.active }]
+    after: { uuid: nodeUuid, active: after.active }
   };
 }
 
@@ -266,8 +225,7 @@ async function setNodeLayer(
   return {
     nodeUuid,
     before: { uuid: nodeUuid, layer: before.layer },
-    after: { uuid: nodeUuid, layer: after.layer },
-    inverse: [{ type: 'node.set_layer', nodeUuid, layer: before.layer }]
+    after: { uuid: nodeUuid, layer: after.layer }
   };
 }
 
@@ -283,17 +241,7 @@ async function setNodeTransform(
   return {
     nodeUuid,
     before: pickTransform(before),
-    after: pickTransform(after),
-    // 逆操作恢复完整旧变换，避免只回滚本次修改的分量而留下偏移。
-    inverse: [{
-      type: 'node.set_transform',
-      nodeUuid,
-      localTransform: {
-        position: before.position,
-        rotation: before.rotation,
-        scale: before.scale
-      }
-    }]
+    after: pickTransform(after)
   };
 }
 
@@ -315,8 +263,4 @@ async function requireNodeInfo(
     throw new ProbeError('NODE_NOT_FOUND', { nodeUuid });
   }
   return info;
-}
-
-function readReason(error: unknown): string {
-  return error instanceof Error ? error.message : 'NODE_WRITE_FAILED';
 }

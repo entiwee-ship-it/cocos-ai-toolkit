@@ -48,7 +48,7 @@ npm run build
   -ToolkitPath 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0'
 ```
 
-Bridge 使用 Junction 指向运行时 Worktree 的 `packages/bridge-extension`，不会复制代码到业务仓库，也不会安装到真实业务检出。安装后用 Creator 3.8.8 打开隔离项目，或在 Creator 中刷新扩展。
+Bridge 使用 Junction 指向运行时 Worktree 的 `packages/bridge-extension`，不会复制代码。默认只允许隔离 Worktree；已经明确授权保存项目时才传 `-AllowSavedProject`。安装后用 Creator 3.8.8 打开目标项目，或在 Creator 中刷新扩展。
 
 ## 启动 Probe Server
 
@@ -89,19 +89,22 @@ node packages/mcp-server/dist/run.js --enable-writes
 & scripts/check-codex-mcp.ps1 -Readonly
 ```
 
-安装脚本会先备份 `%USERPROFILE%/.codex/config.toml`，只替换名为 `cocos_ai` 的条目。健康检查会核对安装模式、精确工具集合、Toolkit/MCP/Bridge 版本和源码提交，再调用 `cocos_editor_list`。修改 MCP 配置后需要重启 Codex 或新建会话。
+安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（完整写模式 32 个）
+## MCP 工具面（完整写模式 35 个）
 
-### 编辑态只读 5 个（默认开放）
+### 编辑态只读 8 个（默认开放）
 
 | 工具 | 用途 |
 | --- | --- |
 | `cocos_editor_list` | 列出当前连接 Probe Server 的 Creator；唯一不要求 `projectId` 的全局入口 |
+| `cocos_editor_state` | 读取当前文档 UUID、dirty、Scene/AssetDB ready、选择和 Preview 状态 |
 | `cocos_asset_search` | 在 AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），cursor 分页 |
+| `cocos_asset_inspect` | 按 UUID 读取资产详情、Meta、依赖和反向使用者，cursor 分页 |
 | `cocos_hierarchy` | 读取当前文档节点树；`rootPath/query/fields/summary` 可返回无重复 raw 的紧凑结果 |
 | `cocos_node_read` | 按 nodeUuid 或 path 读取节点详情；`fields/propertyPaths/summary` 可精确读取组件现值并缩小输出 |
 | `cocos_prefab_open` | 通过 Creator 打开 Prefab 并等待文档身份就绪 |
+| `cocos_scene_open` | 通过 Creator 打开 Scene 并等待文档身份就绪 |
 
 ### 编辑态直写 14 个（`--enable-writes` 才注册；每次写入自动保存并逐项重读回显）
 
@@ -116,19 +119,19 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_component_set_property` | 修改组件属性值；propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致时拒绝写入 |
 | `cocos_prefab_create` | 把当前文档中的节点生成为 Prefab 资产 |
 | `cocos_prefab_rename` | 按 UUID 在原目录内重命名 Prefab，通过 Creator AssetDB 保持 UUID 并拒绝覆盖 |
-| `cocos_prefab_save` | 保存当前文档（手工修改后的落盘入口） |
+| `cocos_document_save` | 保存当前 Prefab 或 Scene 文档（手工修改后的落盘入口） |
 | `cocos_prefab_delete` | 按 UUID 删除 Prefab 资产；不可回滚，必须精确确认 URL，存在反向引用时需二次确认 |
 | `cocos_asset_import` | 把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入 |
 | `cocos_asset_refresh` | 重新导入资产并尝试触发 TypeScript 编译 |
 | `cocos_batch_write` | 一次直发多项 `node.*` / `component.*` 操作；不接受 `asset.*` / `prefab.*`，只减少 MCP 往返，不是事务且无回滚，失败时 `executedOps` 之前的修改可能已生效 |
 
-节点寻址同时接受 `nodeUuid` 或 `path`（如 `Root/Panel/Button`）；组件按类型解析，兼容 `cc.` 前缀（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。`DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已经执行但保存或验证结局未知，必须先重读状态，确认前禁止重试。
+节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件按类型解析，兼容 `cc.` 前缀（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。`DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已经执行但保存或验证结局未知，必须先重读状态，确认前禁止重试。直写不提供事务、Revision 前置、Undo 编排或回滚。
 
 ### 运行态 13 个（只读组默认开放，动作组需 `--enable-writes`）
 
 `cocos_preview_launch/stop/sessions`、`cocos_runtime_get_hierarchy/inspect_component/get_console/watch_property/capture/invoke_method/sample_window/dispatch_input/instantiate_prefab/run_scenario`：启动 Preview 页面、读取运行时节点树/组件/Console、监听属性变化、Game 视图截图（多分辨率/裁剪/节点边界叠加）、调用组件方法、派发输入和运行时实例化 Prefab。Scenario 支持 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；`stop(always:true)` 会在前序步骤默认中止后仍执行清理。视觉结果仅作辅助证据。
 
-典型编辑流程：`cocos_asset_search` 找 UUID → `cocos_prefab_open` 打开 → `cocos_hierarchy` 寻址 → `cocos_node_read` 看现值 → `cocos_component_set_property` / `cocos_node_create` / `cocos_component_add` 修改（自动保存+回显）→ 需要视觉确认时 `cocos_preview_launch` + `cocos_runtime_capture`。
+典型编辑流程：`cocos_editor_state` 确认当前文档 → `cocos_asset_search` 找 UUID → `cocos_asset_inspect` 看类型/引用 → `cocos_prefab_open` / `cocos_scene_open` 打开 → `cocos_hierarchy` 寻址 → `cocos_node_read` 看现值 → 写工具修改（自动保存+回显）→ 需要视觉确认时 `cocos_preview_launch` + `cocos_runtime_capture`。
 
 ## 更新运行时到最新代码
 
@@ -194,6 +197,7 @@ CLI 只允许预定义命令，不提供任意 JavaScript 执行入口，写操�
 
 - Bridge 仅连接 `127.0.0.1`。
 - 不允许执行任意 JavaScript。
+- 正式 Bridge 不注册任意 `Editor.Message` 或 cce 门面调试入口；阶段探针不属于运行时能力。
 - 裸启动只暴露只读工具；写工具仅当显式 `--enable-writes` 启动时注册。
 - **直写不提供事务和回滚**：每个写操作执行 + 自动保存 + 逐项重读即结束；失败即停，已生效的修改保留在文档中。误操作的还原手段是 git。
 - 写后逐项重读是唯一生效性防线：Creator 对部分写入会静默不生效（如预制体编辑模式下嵌套实例内部），重读不符会显式报错。

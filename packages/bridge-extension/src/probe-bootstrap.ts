@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs';
-import { connect } from 'node:net';
 import { join, resolve } from 'node:path';
+import WebSocket from 'ws';
 
 export type ProbeBootstrapResult = 'already-running' | 'started' | 'unsupported-url';
 
@@ -94,22 +94,36 @@ function readLoopbackTarget(url: string): { host: string; port: number } | null 
     : null;
 }
 
-const nodeDependencies: ProbeServerBootstrapDependencies = {
-  isReachable: async (url) => {
-    const target = readLoopbackTarget(url);
-    if (!target) return false;
-    return new Promise<boolean>((resolveReachable) => {
-      const socket = connect(target);
-      const finish = (reachable: boolean) => {
-        socket.destroy();
-        resolveReachable(reachable);
-      };
-      socket.setTimeout(500);
-      socket.once('connect', () => finish(true));
-      socket.once('timeout', () => finish(false));
-      socket.once('error', () => finish(false));
+export async function isProbeServerReachable(url: string, token = process.env.COCOS_AI_SESSION_TOKEN): Promise<boolean> {
+  if (!readLoopbackTarget(url)) return false;
+  return new Promise<boolean>((resolveReachable) => {
+    const socket = new WebSocket(url, token ? { headers: { authorization: `Bearer ${token}` } } : undefined);
+    let finished = false;
+    const finish = (reachable: boolean) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      socket.terminate();
+      resolveReachable(reachable);
+    };
+    const timer = setTimeout(() => finish(false), 1_000);
+    socket.once('open', () => {
+      socket.send(JSON.stringify({ method: 'client.hello', payload: { clientName: 'cocos-ai-bridge-bootstrap' } }));
     });
-  },
+    socket.once('message', (raw) => {
+      try {
+        const response = JSON.parse(raw.toString()) as { correlationId?: unknown; ok?: unknown };
+        finish(response.correlationId === 'client.hello' && response.ok === true);
+      } catch {
+        finish(false);
+      }
+    });
+    socket.once('error', () => finish(false));
+  });
+}
+
+const nodeDependencies: ProbeServerBootstrapDependencies = {
+  isReachable: isProbeServerReachable,
   startProbe: async (input) => {
     if (!existsSync(input.probeEntry)) {
       throw new Error(`PROBE_ENTRY_NOT_FOUND:${input.probeEntry}`);

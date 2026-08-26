@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   DocumentWriteOperationSchema,
@@ -76,10 +75,13 @@ const DELETE_ANNOTATIONS = {
 
 export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
   'cocos_editor_list',
+  'cocos_editor_state',
   'cocos_asset_search',
+  'cocos_asset_inspect',
   'cocos_hierarchy',
   'cocos_node_read',
-  'cocos_prefab_open'
+  'cocos_prefab_open',
+  'cocos_scene_open'
 ] as const;
 
 export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
@@ -92,7 +94,7 @@ export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_component_set_property',
   'cocos_prefab_create',
   'cocos_prefab_rename',
-  'cocos_prefab_save',
+  'cocos_document_save',
   'cocos_prefab_delete',
   'cocos_asset_import',
   'cocos_asset_refresh',
@@ -124,6 +126,10 @@ export class CocosDirectToolService {
     return { editors: await this.readonlyService.listEditors() };
   }
 
+  async readEditorState(input: ProjectSelector) {
+    return this.readonlyService.readEditorState(input);
+  }
+
   async searchAssets(input: ProjectSelector & {
     pattern: string;
     pageSize?: number;
@@ -131,6 +137,15 @@ export class CocosDirectToolService {
     includeRaw?: boolean;
   }) {
     return this.readonlyService.searchAssets(input);
+  }
+
+  async inspectAsset(input: ProjectSelector & {
+    uuid: string;
+    pageSize?: number;
+    cursor?: string;
+    includeRaw?: boolean;
+  }) {
+    return this.readonlyService.inspectAsset(input);
   }
 
   async readHierarchy(input: ProjectSelector & {
@@ -180,9 +195,23 @@ export class CocosDirectToolService {
 
   /** 打开 Prefab 并等待编辑器当前文档身份切换到目标 UUID。 */
   async openPrefab(input: ProjectSelector & { uuid: string }) {
+    return this.openDocument(input, 'cc.Prefab', 'ASSET_NOT_PREFAB', 'PREFAB_OPEN_NOT_READY');
+  }
+
+  /** 打开 Scene 并等待编辑器当前文档身份切换到目标 UUID。 */
+  async openScene(input: ProjectSelector & { uuid: string }) {
+    return this.openDocument(input, 'cc.SceneAsset', 'ASSET_NOT_SCENE', 'SCENE_OPEN_NOT_READY');
+  }
+
+  private async openDocument(
+    input: ProjectSelector & { uuid: string },
+    expectedType: 'cc.Prefab' | 'cc.SceneAsset',
+    typeError: string,
+    readinessError: string
+  ) {
     const opened = await this.readonlyService.openAsset(input);
-    if (opened.asset.type !== 'cc.Prefab') {
-      throw new Error(`ASSET_NOT_PREFAB:${input.uuid}`);
+    if (opened.asset.type !== expectedType) {
+      throw new Error(`${typeError}:${input.uuid}`);
     }
     const deadline = Date.now() + 5_000;
     do {
@@ -192,7 +221,7 @@ export class CocosDirectToolService {
       }
       if (Date.now() < deadline) await new Promise<void>((resolve) => setTimeout(resolve, 100));
     } while (Date.now() < deadline);
-    throw new Error(`PREFAB_OPEN_NOT_READY:${input.uuid}`);
+    throw new Error(`${readinessError}:${input.uuid}`);
   }
 
   async createNode(input: ProjectSelector & {
@@ -203,7 +232,11 @@ export class CocosDirectToolService {
     layer?: number;
   }) {
     const editor = await this.readonlyService.resolveEditor(input);
-    const parentNodeUuid = await this.resolveNodeUuid(editor, { nodeUuid: input.parentUuid, path: input.parentPath });
+    const parentNodeUuid = await this.resolveNodeUuid(
+      editor,
+      { nodeUuid: input.parentUuid, path: input.parentPath },
+      'parent'
+    );
     const operation = {
       type: 'node.create' as const,
       parentNodeUuid,
@@ -211,32 +244,30 @@ export class CocosDirectToolService {
       ...(input.active !== undefined ? { active: input.active } : {}),
       ...(input.layer !== undefined ? { layer: input.layer } : {})
     };
-    return this.directWrite(editor, [operation], 'node-create');
+    return this.directWrite(editor, [operation]);
   }
 
   async renameNode(input: ProjectSelector & NodeAddress & { name: string }) {
     const editor = await this.readonlyService.resolveEditor(input);
-    assertExclusiveNodeAddress(input);
     const nodeUuid = await this.resolveNodeUuid(editor, input);
-    return this.directWrite(editor, [{ type: 'node.rename' as const, nodeUuid, name: input.name }], 'node-rename');
+    return this.directWrite(editor, [{ type: 'node.rename' as const, nodeUuid, name: input.name }]);
   }
 
   async deleteNode(input: ProjectSelector & NodeAddress) {
     const editor = await this.readonlyService.resolveEditor(input);
     const nodeUuid = await this.resolveNodeUuid(editor, input);
-    return this.directWrite(editor, [{ type: 'node.delete' as const, nodeUuid }], 'node-delete');
+    return this.directWrite(editor, [{ type: 'node.delete' as const, nodeUuid }]);
   }
 
   /** 修改节点局部位置、旋转或缩放；未提供的分量保持原值。 */
   async setNodeTransform(input: ProjectSelector & NodeAddress & { localTransform: LocalTransform }) {
     const editor = await this.readonlyService.resolveEditor(input);
-    assertExclusiveNodeAddress(input);
     const nodeUuid = await this.resolveNodeUuid(editor, input);
     return this.directWrite(editor, [{
       type: 'node.set_transform' as const,
       nodeUuid,
       localTransform: input.localTransform
-    }], 'node-set-transform');
+    }]);
   }
 
   async addComponent(input: ProjectSelector & NodeAddress & {
@@ -251,7 +282,7 @@ export class CocosDirectToolService {
       componentType: input.componentType,
       scriptUuid: input.scriptUuid ?? null
     };
-    return this.directWrite(editor, [operation], 'component-add');
+    return this.directWrite(editor, [operation]);
   }
 
   async setComponentProperty(input: ProjectSelector & NodeAddress & {
@@ -271,7 +302,7 @@ export class CocosDirectToolService {
       value: input.value,
       ...(input.expectedOldValue !== undefined ? { expectedOldValue: input.expectedOldValue } : {})
     };
-    return this.directWrite(editor, [operation], 'component-set-property');
+    return this.directWrite(editor, [operation]);
   }
 
   /** 将现有节点迁移到新父节点，保留节点 UUID，可选指定兄弟顺序。 */
@@ -281,13 +312,11 @@ export class CocosDirectToolService {
     siblingIndex?: number;
   }) {
     const editor = await this.readonlyService.resolveEditor(input);
-    assertExclusiveNodeAddress(input);
     const nodeUuid = await this.resolveNodeUuid(editor, input);
-    assertExclusiveNodeAddress({ nodeUuid: input.newParentUuid, path: input.newParentPath }, 'newParent');
     const newParentUuid = await this.resolveNodeUuid(editor, {
       nodeUuid: input.newParentUuid,
       path: input.newParentPath
-    });
+    }, 'newParent');
     if (nodeUuid === newParentUuid) {
       throw new Error('REPARENT_CYCLE:self');
     }
@@ -297,7 +326,7 @@ export class CocosDirectToolService {
       newParentUuid,
       ...(input.siblingIndex === undefined ? {} : { siblingIndex: input.siblingIndex })
     };
-    return this.directWrite(editor, [operation], 'node-reparent');
+    return this.directWrite(editor, [operation]);
   }
 
   /** 从当前文档节点生成 Prefab 资产。 */
@@ -308,7 +337,11 @@ export class CocosDirectToolService {
   }) {
     assertAssetUrl(input.assetUrl, '.prefab');
     const editor = await this.readonlyService.resolveEditor(input);
-    const nodeUuid = await this.resolveNodeUuid(editor, { nodeUuid: input.sourceNodeUuid, path: input.sourcePath });
+    const nodeUuid = await this.resolveNodeUuid(
+      editor,
+      { nodeUuid: input.sourceNodeUuid, path: input.sourcePath },
+      'sourceNode'
+    );
     const result = await this.readonlyService.requestBridge(editor, 'probe.createPrefab', {
       nodeUuid,
       assetUrl: input.assetUrl
@@ -333,12 +366,12 @@ export class CocosDirectToolService {
       sourceUrl,
       targetUrl,
       expectedAssetUuid: input.uuid
-    }], 'prefab-rename');
+    }]);
     return { ...result, assetUuid: input.uuid, sourceUrl, targetUrl };
   }
 
   /** 保存当前文档。 */
-  async savePrefab(input: ProjectSelector) {
+  async saveDocument(input: ProjectSelector) {
     const editor = await this.readonlyService.resolveEditor(input);
     const result = await this.readonlyService.requestBridge(editor, 'probe.saveDocument', {});
     return { editor, result };
@@ -430,7 +463,7 @@ export class CocosDirectToolService {
       throw new Error(`BATCH_WRITE_OPERATION_NOT_ALLOWED:${JSON.stringify(blockedTypes)}`);
     }
     const editor = await this.readonlyService.resolveEditor(input);
-    return this.directWrite(editor, input.operations, 'batch-write');
+    return this.directWrite(editor, input.operations);
   }
 
   /**
@@ -439,13 +472,11 @@ export class CocosDirectToolService {
    */
   private async directWrite(
     editor: EditorSession,
-    operations: WriteOperation[],
-    undoLabel: string
+    operations: WriteOperation[]
   ) {
     const raw = await this.readonlyService.requestBridge(editor, 'probe.directWrite', {
       operations,
-      save: true,
-      undoGroup: `mcp-direct-${undoLabel}-${randomUUID()}`
+      save: true
     });
     const parsed = DirectWriteOutcomeSchema.safeParse(raw);
     if (!parsed.success) {
@@ -499,7 +530,12 @@ export class CocosDirectToolService {
    * 解析节点寻址：优先直接使用会话 UUID；否则按路径在当前文档层级树中查找。
    * 路径支持 Root/A/B 与 /Root/A/B 形式；多个匹配或零匹配都抛错并给出候选。
    */
-  private async resolveNodeUuid(editor: EditorSession, address: NodeAddress): Promise<string> {
+  private async resolveNodeUuid(
+    editor: EditorSession,
+    address: NodeAddress,
+    fieldName = 'NODE_ADDRESS'
+  ): Promise<string> {
+    assertExclusiveNodeAddress(address, fieldName);
     if (address.nodeUuid) return address.nodeUuid;
     if (!address.path) throw new Error('NODE_ADDRESS_REQUIRED');
     const wanted = address.path.replace(/^\/+/, '');
@@ -969,6 +1005,13 @@ export function registerCocosDirectReadonlyTools(
     annotations: READONLY_ANNOTATIONS
   }, async () => toToolResult(await service.listEditors()));
 
+  server.registerTool('cocos_editor_state', {
+    description: '读取目标 Creator 当前文档 UUID、dirty、Scene/AssetDB 就绪状态、选择与 Preview 状态。',
+    inputSchema: ProjectSelectorInput,
+    outputSchema: ToolOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.readEditorState(input)));
+
   server.registerTool('cocos_asset_search', {
     description: '在 Creator AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），按 cursor 分页。',
     inputSchema: {
@@ -981,6 +1024,19 @@ export function registerCocosDirectReadonlyTools(
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(await service.searchAssets(input)));
+
+  server.registerTool('cocos_asset_inspect', {
+    description: '按 UUID 读取资产详情、可选原始 Meta、依赖和反向使用者，关系按 cursor 分页。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      uuid: z.string().min(1),
+      pageSize: z.number().int().min(1).max(500).optional(),
+      cursor: z.string().min(1).optional(),
+      includeRaw: z.boolean().optional()
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.inspectAsset(input)));
 
   server.registerTool('cocos_hierarchy', {
     description: '读取当前文档节点树；缺省保持完整旧返回，rootPath/query/fields/summary 可启用紧凑投影。紧凑结果去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw。depth 默认 4，最大 50。',
@@ -1020,6 +1076,16 @@ export function registerCocosDirectReadonlyTools(
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(await service.openPrefab(input)));
+
+  server.registerTool('cocos_scene_open', {
+    description: '通过 Creator 打开 Scene 并等待文档身份就绪；ASSET_NOT_SCENE 时核对 UUID。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      uuid: z.string().min(1)
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(await service.openScene(input)));
 }
 
 /** 注册直写档写工具（仅显式 --enable-writes 时可见；每次写入自动保存并逐项重读回显）。 */
@@ -1135,12 +1201,12 @@ export function registerCocosDirectWriteTools(
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.renamePrefab(input)));
 
-  server.registerTool('cocos_prefab_save', {
+  server.registerTool('cocos_document_save', {
     description: '保存当前文档（直写工具已自动保存，此入口用于手工修改后的落盘）。',
     inputSchema: ProjectSelectorInput,
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.savePrefab(input)));
+  }, async (input) => toToolResult(await service.saveDocument(input)));
 
   server.registerTool('cocos_prefab_delete', {
     description: '按 UUID 删除 Prefab 资产；不可回滚。必须传精确 confirmAssetUrl；存在引用时还需 confirmReferenced=true。',

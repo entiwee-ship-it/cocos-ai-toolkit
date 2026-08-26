@@ -1,7 +1,11 @@
 import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import { WebSocketServer } from 'ws';
 import {
   createProbeServerBootstrap,
+  isProbeServerReachable,
   resolveProbeRuntimePaths,
   type ProbeServerBootstrapDependencies
 } from '../src/probe-bootstrap';
@@ -48,6 +52,32 @@ describe('Probe Server bootstrap', () => {
       probeEntry: 'E:\\toolkit\\packages\\probe-server\\dist\\run.js',
       reportRoot: 'E:\\toolkit\\reports'
     });
+  });
+
+  it('只有完成 Probe client.hello 握手才判定服务可达', async () => {
+    const tcp = createServer();
+    const tcpSockets = new Set<Socket>();
+    tcp.on('connection', (socket) => {
+      tcpSockets.add(socket);
+      socket.once('close', () => tcpSockets.delete(socket));
+    });
+    await new Promise<void>((resolve) => tcp.listen(0, '127.0.0.1', resolve));
+    const tcpPort = (tcp.address() as AddressInfo).port;
+    await expect(isProbeServerReachable(`ws://127.0.0.1:${tcpPort}`)).resolves.toBe(false);
+    for (const socket of tcpSockets) socket.destroy();
+    await new Promise<void>((resolve, reject) => tcp.close((error) => error ? reject(error) : resolve()));
+
+    const websocket = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve) => websocket.once('listening', resolve));
+    websocket.on('connection', (socket) => {
+      socket.once('message', () => {
+        socket.send(JSON.stringify({ type: 'response', correlationId: 'client.hello', ok: true, payload: {} }));
+      });
+    });
+    const wsPort = (websocket.address() as AddressInfo).port;
+    await expect(isProbeServerReachable(`ws://127.0.0.1:${wsPort}`)).resolves.toBe(true);
+    for (const client of websocket.clients) client.terminate();
+    await new Promise<void>((resolve, reject) => websocket.close((error) => error ? reject(error) : resolve()));
   });
 
   it('Bridge 加载前自检，断线后再次触发自恢复', async () => {

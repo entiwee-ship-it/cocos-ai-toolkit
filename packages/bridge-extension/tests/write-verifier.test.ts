@@ -3,14 +3,14 @@ import { createHash } from 'node:crypto';
 import type { ComponentWriteOpResult } from '../src/component-writer.js';
 import type { NodeWriteOpResult } from '../src/node-writer.js';
 import {
-  saveAndVerifyWriteTransaction,
+  saveAndVerifyDirectWrite,
   type WriteVerifierDependencies
 } from '../src/write-verifier.js';
 
-describe('saveAndVerifyWriteTransaction', () => {
+describe('saveAndVerifyDirectWrite', () => {
   it('保存后重读验证每个写操作的最终生效值，全部一致才 passed', async () => {
     const dependencies = createDependencies();
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [
         nodeResult({ nodeUuid: 'node-1', after: { uuid: 'node-1', name: 'Renamed' } }, { type: 'node.rename', nodeUuid: 'node-1', name: 'Renamed' }),
@@ -27,7 +27,7 @@ describe('saveAndVerifyWriteTransaction', () => {
 
   it('任一项重读不符时 passed 为 false 并保留 expected/actual 明细', async () => {
     const dependencies = createDependencies({ actualNodeName: 'UnexpectedName' });
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [nodeResult({ nodeUuid: 'node-1', after: { uuid: 'node-1', name: 'Renamed' } }, { type: 'node.rename', nodeUuid: 'node-1', name: 'Renamed' })],
       dependencies
@@ -47,14 +47,13 @@ describe('saveAndVerifyWriteTransaction', () => {
     dependencies.getNodeInfo = async (nodeUuid) => nodeUuid === 'created-1'
       ? { uuid: 'created-1', name: 'New' }
       : null;
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [{
         operation: { type: 'node.create', parentNodeUuid: 'p', name: 'New', resultNodeUuid: 'created-1' },
         nodeUuid: 'created-1',
         before: null,
         after: { uuid: 'created-1', name: 'New' },
-        inverse: [{ type: 'node.delete', nodeUuid: 'created-1' }]
       }],
       dependencies
     );
@@ -71,7 +70,7 @@ describe('saveAndVerifyWriteTransaction', () => {
     }).getNodeInfoByStablePath = async (path) => path === '/FriendsRoomView/CocosAiValidationView/Title'
       ? { uuid: 'rebuilt-title', name: 'Title' }
       : null;
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [{
         operation: {
@@ -84,7 +83,6 @@ describe('saveAndVerifyWriteTransaction', () => {
         nodeUuid: 'stale-title',
         before: null,
         after: { uuid: 'stale-title', name: 'Title' },
-        inverse: [{ type: 'node.delete', nodeUuid: 'stale-title' }]
       }],
       dependencies
     );
@@ -95,7 +93,7 @@ describe('saveAndVerifyWriteTransaction', () => {
 
   it('component.add 复用现有组件时作为 no-op 验证且不触发保存', async () => {
     const dependencies = createDependencies();
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [{
         operation: {
@@ -107,7 +105,6 @@ describe('saveAndVerifyWriteTransaction', () => {
         componentUuid: 'comp-ui-transform',
         before: { uuid: 'comp-ui-transform', type: 'cc.UITransform', enabled: true },
         after: { uuid: 'comp-ui-transform', type: 'cc.UITransform', enabled: true },
-        inverse: [],
         changed: false
       } as never],
       dependencies
@@ -134,7 +131,7 @@ describe('saveAndVerifyWriteTransaction', () => {
         ? { uuid: 'rebuilt-ui-transform', type: componentType, enabled: true }
         : null
     );
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [{
         operation: {
@@ -149,7 +146,6 @@ describe('saveAndVerifyWriteTransaction', () => {
         componentUuid: 'stale-ui-transform',
         before: null,
         after: { uuid: 'stale-ui-transform', type: 'cc.UITransform', enabled: true },
-        inverse: [{ type: 'component.remove', componentUuid: 'stale-ui-transform' }]
       } as never],
       dependencies
     );
@@ -160,7 +156,7 @@ describe('saveAndVerifyWriteTransaction', () => {
 
   it('node.delete 后节点仍可读到时验证失败', async () => {
     const dependencies = createDependencies({ nodeStillExists: true });
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [nodeResult({ nodeUuid: 'node-1', after: null }, { type: 'node.delete', nodeUuid: 'node-1' })],
       dependencies
@@ -172,7 +168,7 @@ describe('saveAndVerifyWriteTransaction', () => {
 
   it('component.resize_array 重读数组长度', async () => {
     const dependencies = createDependencies();
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [componentResult(
         { componentUuid: 'comp-1', after: { uuid: 'comp-1', propertyPath: 'items', length: 3 } },
@@ -188,14 +184,13 @@ describe('saveAndVerifyWriteTransaction', () => {
   it('clear_reference 按 Dump 空 UUID 判定已清空', async () => {
     const dependencies = createDependencies();
     dependencies.getComponentProperty = async () => ({ uuid: '' });
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [{
         operation: { type: 'component.clear_reference', componentUuid: 'comp-1', propertyPath: 'target' },
         componentUuid: 'comp-1',
         before: { reference: { uuid: 'node-9' } },
         after: { reference: { uuid: '' } },
-        inverse: []
       }],
       dependencies
     );
@@ -207,7 +202,7 @@ describe('saveAndVerifyWriteTransaction', () => {
   it('set_reference 按归一化 UUID 比对 Dump 形态', async () => {
     const dependencies = createDependencies();
     dependencies.getComponentProperty = async () => ({ uuid: 'node-9' });
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [{
         operation: {
@@ -219,7 +214,6 @@ describe('saveAndVerifyWriteTransaction', () => {
         componentUuid: 'comp-1',
         before: null,
         after: { reference: { uuid: 'node-9' } },
-        inverse: []
       }],
       dependencies
     );
@@ -234,7 +228,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       { uuid: 'frame-a' },
       { uuid: 'frame-b' }
     ];
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [{
         operation: {
@@ -246,7 +240,7 @@ describe('saveAndVerifyWriteTransaction', () => {
             { kind: 'asset', assetUuid: 'texture-b', subAssetUuid: 'frame-b', assetType: 'cc.SpriteFrame', path: null, available: true }
           ]
         },
-        componentUuid: 'comp-1', before: null, after: null, inverse: []
+        componentUuid: 'comp-1', before: null, after: null
       }],
       dependencies
     );
@@ -267,7 +261,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       { mode: 2, target: { kind: 'node', objectUuid: 'node-a', fileId: null, nodePath: null, available: true } },
       { mode: 3, target: { kind: 'asset', assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true } }
     ];
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [componentResult(
         { componentUuid: 'comp-custom' },
@@ -286,7 +280,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       ? { uuid: 'asset-a', type: 'cc.Script' }
       : null;
     dependencies.readAssetMeta = async () => ({ userData: { priority: 1 } });
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [
         {
@@ -294,14 +288,14 @@ describe('saveAndVerifyWriteTransaction', () => {
             type: 'asset.move', sourceUrl: 'db://assets/a.ts', targetUrl: 'db://assets/b.ts',
             expectedAssetUuid: 'asset-a'
           },
-          nodeUuid: null, assetUuid: 'asset-a', before: null, after: null, inverse: []
+          nodeUuid: null, assetUuid: 'asset-a', before: null, after: null
         },
         {
           operation: {
             type: 'asset.write_meta', assetUrl: 'db://assets/b.ts', expectedAssetUuid: 'asset-a',
             meta: { userData: { priority: 1 } }
           },
-          nodeUuid: null, assetUuid: 'asset-a', before: null, after: null, inverse: []
+          nodeUuid: null, assetUuid: 'asset-a', before: null, after: null
         }
       ],
       dependencies
@@ -314,40 +308,12 @@ describe('saveAndVerifyWriteTransaction', () => {
     ]));
   });
 
-  it('asset.restore_content 按 UUID 与目标内容 SHA256 独立重读验证', async () => {
-    const dependencies = createDependencies();
-    dependencies.queryAssetInfo = async () => ({ uuid: 'asset-a', type: 'cc.Prefab' });
-    dependencies.readAssetContent = async () => 'safe-backup';
-    const report = await saveAndVerifyWriteTransaction(
-      writeRequest({ save: false }),
-      [{
-        operation: {
-          type: 'asset.restore_content',
-          assetUrl: 'db://assets/ui/Dialog.prefab',
-          expectedAssetUuid: 'asset-a',
-          expectedCurrentSha256: 'a'.repeat(64),
-          content: 'safe-backup',
-          targetSha256: '25a62950a83df5994d4dd91b312e983dfe2a154bd541a5fbf2b76d3541db1092'
-        },
-        nodeUuid: null, assetUuid: 'asset-a', before: null, after: null, inverse: []
-      }],
-      dependencies
-    );
-
-    expect(report.passed).toBe(true);
-    expect(report.items[0]).toMatchObject({
-      expected: { assetUuid: 'asset-a', sha256: '25a62950a83df5994d4dd91b312e983dfe2a154bd541a5fbf2b76d3541db1092' },
-      actual: { assetUuid: 'asset-a', sha256: '25a62950a83df5994d4dd91b312e983dfe2a154bd541a5fbf2b76d3541db1092' },
-      passed: true
-    });
-  });
-
   it('asset.update_text 按执行结果目标 SHA256 独立重读验证', async () => {
     const content = 'export enum UIID {\n  Lobby,\n  CocosAiValidation,\n}\n';
     const dependencies = createDependencies();
     dependencies.queryAssetInfo = async () => ({ uuid: 'game-ui-config', type: 'cc.Script' });
     dependencies.readAssetContent = async () => content;
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest({ save: false }),
       [{
         operation: {
@@ -358,7 +324,7 @@ describe('saveAndVerifyWriteTransaction', () => {
           newText: '  Lobby,\n  CocosAiValidation,',
           resultTargetSha256: createHash('sha256').update(content).digest('hex')
         },
-        nodeUuid: null, assetUuid: 'game-ui-config', before: null, after: null, inverse: []
+        nodeUuid: null, assetUuid: 'game-ui-config', before: null, after: null
       }],
       dependencies
     );
@@ -392,7 +358,7 @@ describe('saveAndVerifyWriteTransaction', () => {
         targetLocalIds: ['nested-instance', 'label-component']
       }]
     });
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest(),
       [{
         operation: {
@@ -401,7 +367,7 @@ describe('saveAndVerifyWriteTransaction', () => {
           resultTargetLocalIds: ['nested-instance', 'label-component']
         },
         nodeUuid: 'instance-root', assetUuid: null,
-        before: null, after: null, inverse: [],
+        before: null, after: null,
         targetLocalIds: ['nested-instance', 'label-component']
       }],
       dependencies
@@ -440,7 +406,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       ): Promise<unknown>;
     }).getPrefabTargetProperty = getPrefabTargetProperty;
 
-    const report = await saveAndVerifyWriteTransaction(writeRequest(), [{
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [{
       operation: {
         type: 'prefab.instance_override',
         instanceRootUuid: 'instance-old',
@@ -453,7 +419,7 @@ describe('saveAndVerifyWriteTransaction', () => {
         resultTargetLocalIds: ['nested-instance', 'label-component']
       },
       nodeUuid: 'instance-old', assetUuid: null,
-      before: null, after: null, inverse: [],
+      before: null, after: null,
       targetLocalIds: ['nested-instance', 'label-component']
     }], dependencies);
 
@@ -488,7 +454,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       ): Promise<unknown>;
     }).getPrefabTargetProperty = getPrefabTargetProperty;
 
-    const report = await saveAndVerifyWriteTransaction(writeRequest(), [{
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [{
       operation: {
         type: 'prefab.revert_override',
         instanceRootUuid: 'instance-old',
@@ -502,7 +468,7 @@ describe('saveAndVerifyWriteTransaction', () => {
         resultPreviousOverrideValue: 'Override Applied'
       },
       nodeUuid: 'instance-old', assetUuid: null,
-      before: null, after: null, inverse: [],
+      before: null, after: null,
       targetLocalIds: ['nested-instance', 'label-component']
     }], dependencies);
 
@@ -520,7 +486,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       ? { uuid: 'node-new', name: 'Renamed' }
       : null;
 
-    const report = await saveAndVerifyWriteTransaction(writeRequest(), [nodeResult({
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [nodeResult({
       nodeUuid: 'node-old',
       after: { uuid: 'node-old', name: 'Renamed', stablePath: '/Scene~0/Renamed~0' }
     }, {
@@ -541,7 +507,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       stablePath: '/Scene~0/WrongParent~0/Panel~0'
     });
 
-    const report = await saveAndVerifyWriteTransaction(writeRequest(), [nodeResult({
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [nodeResult({
       nodeUuid: 'node-old',
       after: { uuid: 'node-old', parentUuid: 'parent-new', stablePath: '/Scene~0/NewParent~0/Panel~0' }
     }, {
@@ -563,7 +529,7 @@ describe('saveAndVerifyWriteTransaction', () => {
     const dependencies = createDependencies();
     dependencies.getNodeInfo = async () => ({ uuid: 'node-old', parentUuid: 'parent-new' });
 
-    const report = await saveAndVerifyWriteTransaction(writeRequest(), [nodeResult({
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [nodeResult({
       nodeUuid: 'node-old',
       after: { uuid: 'node-old', parentUuid: 'parent-new', stablePath: '/Scene~0/NewParent~0/Panel~0' }
     }, {
@@ -582,7 +548,7 @@ describe('saveAndVerifyWriteTransaction', () => {
     dependencies.getNodeInfo = async () => null;
     dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'node-new', name: 'StillHere' });
 
-    const report = await saveAndVerifyWriteTransaction(writeRequest(), [nodeResult({
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [nodeResult({
       nodeUuid: 'node-old',
       before: { uuid: 'node-old', name: 'StillHere', stablePath: '/Scene~0/StillHere~0' },
       after: null
@@ -606,7 +572,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       ? 'Saved Value'
       : undefined;
 
-    const report = await saveAndVerifyWriteTransaction(writeRequest(), [componentResult({
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [componentResult({
       componentUuid: 'component-old',
       after: null
     }, {
@@ -629,7 +595,7 @@ describe('saveAndVerifyWriteTransaction', () => {
       uuid: 'component-new', type: 'cc.Label', enabled: true
     });
 
-    const report = await saveAndVerifyWriteTransaction(writeRequest(), [componentResult({
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [componentResult({
       componentUuid: 'component-old',
       before: null,
       after: null
@@ -647,7 +613,7 @@ describe('saveAndVerifyWriteTransaction', () => {
 
   it('save 为 false 时不保存不重开，直接对编辑器现状重读验证', async () => {
     const dependencies = createDependencies();
-    const report = await saveAndVerifyWriteTransaction(
+    const report = await saveAndVerifyDirectWrite(
       writeRequest({ save: false }),
       [nodeResult({ nodeUuid: 'node-1', after: { uuid: 'node-1', name: 'Renamed' } }, { type: 'node.rename', nodeUuid: 'node-1', name: 'Renamed' })],
       dependencies
@@ -670,7 +636,6 @@ function nodeResult(
     nodeUuid: 'node-1',
     before: null,
     after: null,
-    inverse: [],
     ...overrides,
     operation
   };
@@ -684,7 +649,6 @@ function componentResult(
     componentUuid: 'comp-1',
     before: null,
     after: null,
-    inverse: [],
     ...overrides,
     operation
   };

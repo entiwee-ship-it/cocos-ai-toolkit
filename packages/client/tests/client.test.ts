@@ -252,7 +252,7 @@ describe('ProbeClient shared behavior', () => {
 
     try {
       await client.connect();
-      const error = await client.request('probe.writeConfirm', {}).catch((caught: unknown) => caught);
+      const error = await client.request('probe.directWrite', {}).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(ProbeClientError);
       expect(error).toMatchObject({
         code: payload.code,

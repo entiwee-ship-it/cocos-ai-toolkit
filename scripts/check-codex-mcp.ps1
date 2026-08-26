@@ -1,13 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$ToolkitPath = '',
+    [string]$ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0',
     [string]$ProbeUrl = 'ws://127.0.0.1:32188',
     [string]$ReportRoot = '',
     [switch]$Readonly
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $ToolkitPath) { $ToolkitPath = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path }
+if (-not $ToolkitPath) { $ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0' }
 $ToolkitPath = [IO.Path]::GetFullPath($ToolkitPath)
 $entry = Join-Path $ToolkitPath 'packages/mcp-server/dist/run.js'
 if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
@@ -17,6 +17,11 @@ $codex = (Get-Command codex -ErrorAction Stop).Source
 $config = & $codex mcp get cocos_ai 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Codex 未配置 cocos_ai: $config" }
 $configText = $config | Out-String
+$normalizedEntry = $entry.Replace('\', '/')
+$normalizedConfig = $configText.Replace('\', '/')
+if ($normalizedConfig.IndexOf($normalizedEntry, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+    throw "Codex cocos_ai 未指向固定运行时: $entry"
+}
 if (-not $Readonly -and $configText -notmatch '--enable-writes') {
     throw 'Codex cocos_ai 未启用写工具；如需只读检查请显式传 -Readonly'
 }

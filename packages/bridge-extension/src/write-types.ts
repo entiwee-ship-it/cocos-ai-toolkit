@@ -47,6 +47,6 @@ export interface WriteFailure {
  * evidence 为逐操作执行证据，随响应带回供调用方核对。
  */
 export type WriteExecutionOutcome =
-  | { kind: 'success'; executedOps: number; verification: WriteVerificationReport | null; undoGroupId?: string | null; evidence?: unknown }
-  | { kind: 'operation-failed'; executedOps: number; failure: WriteFailure; undoGroupId?: string | null; evidence?: unknown }
-  | { kind: 'unknown'; executedOps: number; failure: WriteFailure; undoGroupId?: string | null; evidence?: unknown };
+  | { kind: 'success'; executedOps: number; verification: WriteVerificationReport | null; evidence?: unknown }
+  | { kind: 'operation-failed'; executedOps: number; failure: WriteFailure; evidence?: unknown }
+  | { kind: 'unknown'; executedOps: number; failure: WriteFailure; evidence?: unknown };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PNG } from 'pngjs';
 import WebSocket from 'ws';
 import { RuntimeDriver, type RuntimeBrowser, type RuntimeBrowserPage } from '@cocos-ai/core';
@@ -277,7 +277,9 @@ describe('ProbeServer 运行态方法', () => {
     const stopped = await callServer(url, 'server.previewStop', { sessionId });
     expect(stopped.ok).toBe(true);
     expect(pages[0].state.closed).toBe(true);
-    expect((await callServer(url, 'server.previewSession', { sessionId })).payload).toMatchObject({ state: 'closed' });
+    const closed = await callServer(url, 'server.previewSession', { sessionId });
+    expect(closed.ok).toBe(false);
+    expect(closed.payload).toMatchObject({ code: 'PREVIEW_SESSION_NOT_FOUND' });
 
     bridge.close();
     await server.stop();
@@ -514,7 +516,10 @@ describe('ProbeServer 运行态方法', () => {
   it('runtimeCapture 截图落盘并返回协议化产物（单张与多分辨率）', async () => {
     const captureRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-captures-'));
     const { driver, pages } = createFakeDriver();
-    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver, captureRoot });
+    const server = new ProbeServer({
+      host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver, captureRoot,
+      captureFilesPerSession: 2
+    });
     const address = await server.start();
     const url = `ws://127.0.0.1:${address.port}`;
     const bridge = await connectFakeBridge({ url });
@@ -538,6 +543,7 @@ describe('ProbeServer 运行态方法', () => {
     const multiResult = multi.payload as { files: Array<{ requestedResolution?: { width: number }; actualResolution?: { width: number } }> };
     expect(multiResult.files).toHaveLength(2);
     expect(multiResult.files[0].requestedResolution).toEqual({ width: 720, height: 1280 });
+    expect(await readdir(dirname(singleResult.files[0].path))).toHaveLength(2);
     expect(pages[0].state.screenshots).toBe(3);
     expect(pages[0].state.viewport).toEqual({ width: 1480, height: 920 });
 
@@ -605,7 +611,13 @@ describe('ProbeServer 运行态方法', () => {
   it('runtimeRunScenario 可实例化 Prefab，并在失败后通过 stop(always=true) 清理会话', async () => {
     const captureRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-scenario-cleanup-'));
     const { driver, pages } = createFakeDriver();
-    const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_000, runtimeDriver: driver, captureRoot });
+    const server = new ProbeServer({
+      host: '127.0.0.1',
+      port: 0,
+      requestTimeoutMs: 2_000,
+      runtimeDriver: driver,
+      captureRoot
+    });
     const address = await server.start();
     const url = `ws://127.0.0.1:${address.port}`;
     const bridge = await connectFakeBridge({ url });

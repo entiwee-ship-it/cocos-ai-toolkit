@@ -20,6 +20,7 @@ describe('Codex MCP 安装入口', () => {
     expect(checker).toContain('[switch]$Readonly');
     expect(checker).toContain('--enable-writes');
     expect(checker).toContain('COCOS_AI_MCP_ENABLE_WRITES');
+    expect(checker).toContain('E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0');
   });
 
   it('安装和健康检查使用直写单一工具档，旧 profile 机制已移除', async () => {
@@ -36,5 +37,8 @@ describe('Codex MCP 安装入口', () => {
     expect(checkerRuntime).toContain('COCOS_DIRECT_READONLY_TOOL_NAMES');
     expect(checkerRuntime).toContain('COCOS_DIRECT_WRITE_TOOL_NAMES');
     expect(checkerRuntime).toContain('COCOS_RUNTIME_GATED_TOOL_NAMES');
+    expect(checkerRuntime).toContain('BRIDGE_BUILD_ID_MISMATCH');
+    expect(checkerRuntime).toContain('BRIDGE_CAPABILITIES_MISMATCH');
+    expect(checkerRuntime).toContain('COCOS_EDITOR_NOT_CONNECTED');
   });
 });

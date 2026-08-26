@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ProjectPath,
     [string]$ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0',
-    [string]$WorktreeRoot = 'E:/xile-workspace/worktrees'
+    [string]$WorktreeRoot = 'E:/xile-workspace/worktrees',
+    [switch]$AllowSavedProject
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,7 +11,7 @@ $sourceProject = (Resolve-Path -LiteralPath $ProjectPath).Path
 $toolkit = (Resolve-Path -LiteralPath $ToolkitPath).Path
 $worktreeRoot = [IO.Path]::GetFullPath($WorktreeRoot)
 
-if (-not $sourceProject.StartsWith($worktreeRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+if (-not $AllowSavedProject -and -not $sourceProject.StartsWith($worktreeRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw "项目必须位于隔离 Worktree 根目录: $worktreeRoot"
 }
 if ((git -C $sourceProject rev-parse --is-inside-work-tree) -ne 'true') {

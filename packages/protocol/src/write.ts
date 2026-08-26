@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { WriteOperationSchema } from './transaction.js';
+import { WriteOperationSchema } from './write-operations.js';
 
 /**
  * 重读验证的逐项明细。
@@ -54,13 +54,12 @@ export const WriteFailureSchema = z.object({
 });
 
 /**
- * 直写请求（probe.directWrite 载荷）：一批原子写操作 + 保存开关 + Undo 组名。
+ * 直写请求（probe.directWrite 载荷）：一批原子写操作和保存开关。
  * 无事务身份、幂等键和 Revision 前置；失败即停，已执行操作保留在文档中。
  */
 export const DirectWriteRequestSchema = z.object({
   operations: z.array(WriteOperationSchema).min(1),
-  save: z.boolean(),
-  undoGroup: z.string().min(1)
+  save: z.boolean()
 });
 
 /**
@@ -73,7 +72,6 @@ export const DirectWriteOutcomeSchema = z.object({
   executedOps: z.number().int().nonnegative(),
   verification: WriteVerificationReportSchema.nullable().optional(),
   failure: WriteFailureSchema.optional(),
-  undoGroupId: z.string().min(1).nullable().optional(),
   evidence: z.unknown().optional()
 });
 

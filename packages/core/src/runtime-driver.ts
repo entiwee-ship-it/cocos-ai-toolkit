@@ -97,6 +97,7 @@ interface ManagedSession {
   browser: RuntimeBrowser;
   page: RuntimeBrowserPage;
   consoleBuffer: ConsoleBuffer;
+  cleanupStarted: boolean;
 }
 
 /** console 环形缓冲：容量有限，seq 全局单调递增，支持游标增量与级别过滤。 */
@@ -242,7 +243,8 @@ export class RuntimeDriver {
         }),
         browser,
         page,
-        consoleBuffer
+        consoleBuffer,
+        cleanupStarted: false
       };
       this.sessions.set(sessionId, managed);
       registered = true;
@@ -293,6 +295,7 @@ export class RuntimeDriver {
         throw new Error(`PREVIEW_CLOSE_FAILED:${JSON.stringify(errors)}`);
       }
       managed.session.state = 'closed';
+      this.sessions.delete(sessionId);
     }
     return { closed: true };
   }
@@ -300,15 +303,15 @@ export class RuntimeDriver {
   /** 读取会话当前状态；页面被外部关闭时标记 lost。 */
   get(sessionId: string): PreviewSession {
     const managed = this.requireSession(sessionId);
-    this.syncLostState(managed);
+    this.syncLostState(sessionId, managed);
     return { ...managed.session };
   }
 
   /** 列出会话，可按项目过滤。 */
   list(projectId?: string): PreviewSession[] {
     const sessions: PreviewSession[] = [];
-    for (const managed of this.sessions.values()) {
-      this.syncLostState(managed);
+    for (const [sessionId, managed] of this.sessions.entries()) {
+      this.syncLostState(sessionId, managed);
       if (projectId && managed.session.projectId !== projectId) continue;
       sessions.push({ ...managed.session });
     }
@@ -328,7 +331,7 @@ export class RuntimeDriver {
     if (managed.session.state === 'closed') {
       throw new Error('PREVIEW_SESSION_CLOSED');
     }
-    if (this.syncLostState(managed)) {
+    if (this.syncLostState(sessionId, managed)) {
       throw new Error('PREVIEW_SESSION_LOST');
     }
     try {
@@ -362,7 +365,7 @@ export class RuntimeDriver {
     if (managed.session.state === 'closed') {
       throw new Error('PREVIEW_SESSION_CLOSED');
     }
-    if (this.syncLostState(managed)) {
+    if (this.syncLostState(sessionId, managed)) {
       throw new Error('PREVIEW_SESSION_LOST');
     }
     if (input.inputType === 'key') {
@@ -397,7 +400,7 @@ export class RuntimeDriver {
     if (managed.session.state === 'closed') {
       throw new Error('PREVIEW_SESSION_CLOSED');
     }
-    if (this.syncLostState(managed)) {
+    if (this.syncLostState(sessionId, managed)) {
       throw new Error('PREVIEW_SESSION_LOST');
     }
     const { buildRuntimeScript } = await import('./runtime-inject.js');
@@ -494,9 +497,15 @@ export class RuntimeDriver {
   }
 
   /** 页面被外部关闭时同步 lost 状态；返回是否 lost。 */
-  private syncLostState(managed: ManagedSession): boolean {
+  private syncLostState(sessionId: string, managed: ManagedSession): boolean {
     if (managed.session.state !== 'closed' && managed.page.isClosed()) {
       managed.session.state = 'lost';
+      if (!managed.cleanupStarted) {
+        managed.cleanupStarted = true;
+        void managed.browser.close().catch(() => undefined).finally(() => {
+          if (this.sessions.get(sessionId) === managed) this.sessions.delete(sessionId);
+        });
+      }
     }
     return managed.session.state === 'lost';
   }

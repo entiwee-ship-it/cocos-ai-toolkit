@@ -47,7 +47,7 @@ export class RequestRouter {
           message: `等待 Bridge 响应超过 ${timeoutMs}ms`,
           details: { timeoutMs },
           stage: 'unknown',
-          nextAction: '查询事务状态；确认结局前禁止重试写入'
+          nextAction: '先重读当前文档状态；确认结局前禁止重试写入'
         }));
       }, timeoutMs);
 

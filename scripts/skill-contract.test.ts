@@ -6,12 +6,15 @@ const readmePath = new URL('../README.md', import.meta.url);
 
 const EXPECTED_TOOL_NAMES = [
   'cocos_asset_import',
+  'cocos_asset_inspect',
   'cocos_asset_refresh',
   'cocos_asset_search',
   'cocos_batch_write',
   'cocos_component_add',
   'cocos_component_set_property',
+  'cocos_document_save',
   'cocos_editor_list',
+  'cocos_editor_state',
   'cocos_hierarchy',
   'cocos_node_create',
   'cocos_node_delete',
@@ -23,7 +26,6 @@ const EXPECTED_TOOL_NAMES = [
   'cocos_prefab_delete',
   'cocos_prefab_open',
   'cocos_prefab_rename',
-  'cocos_prefab_save',
   'cocos_preview_launch',
   'cocos_preview_sessions',
   'cocos_preview_stop',
@@ -36,11 +38,12 @@ const EXPECTED_TOOL_NAMES = [
   'cocos_runtime_invoke_method',
   'cocos_runtime_run_scenario',
   'cocos_runtime_sample_window',
-  'cocos_runtime_watch_property'
+  'cocos_runtime_watch_property',
+  'cocos_scene_open'
 ];
 
 describe('Cocos AI Toolkit 技能契约', () => {
-  it('教授直写档全部三十二个工具，且不含已移除的旧工具', async () => {
+  it('教授直写档全部三十五个工具，且不含已移除的旧工具', async () => {
     const skill = await readFile(skillPath, 'utf8');
     const names = [...new Set(skill.match(/\bcocos_[a-z0-9_]+\b/g) ?? [])].sort();
     expect(names).toEqual(EXPECTED_TOOL_NAMES);
@@ -54,7 +57,8 @@ describe('Cocos AI Toolkit 技能契约', () => {
       'cocos_asset_write_meta',
       'cocos_asset_delete',
       'cocos_write_prepare',
-      'cocos_design_apply'
+      'cocos_design_apply',
+      'cocos_prefab_save'
     ]) {
       expect(names).not.toContain(removed);
     }

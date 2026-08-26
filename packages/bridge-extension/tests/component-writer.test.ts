@@ -33,7 +33,6 @@ describe('component.add / remove / enable', () => {
     expect(result.componentUuid).toBe('comp-new-1');
     expect(result.before).toBeNull();
     expect(result.after).toMatchObject({ type: 'cc.Button', enabled: true });
-    expect(result.inverse).toEqual([{ type: 'component.remove', componentUuid: 'comp-new-1' }]);
     expect(dependencies.calls).toContain('addComponent:node-1:cc.Button');
   });
 
@@ -51,7 +50,6 @@ describe('component.add / remove / enable', () => {
       enabled: true
     });
     expect(result.after).toEqual(result.before);
-    expect(result.inverse).toEqual([]);
     expect((result as { changed?: boolean }).changed).toBe(false);
     expect(dependencies.calls).not.toContain('addComponent:node-2:cc.UITransform');
   });
@@ -65,12 +63,6 @@ describe('component.add / remove / enable', () => {
 
     expect(result.before).toMatchObject({ type: 'cc.Label', enabled: true });
     expect(result.after).toBeNull();
-    expect(result.inverse).toEqual([{
-      type: 'component.add',
-      nodeUuid: 'node-1',
-      componentType: 'cc.Label',
-      scriptUuid: null
-    }]);
   });
 
   it('移除不存在的组件返回稳定错误码', async () => {
@@ -81,7 +73,7 @@ describe('component.add / remove / enable', () => {
     )).rejects.toThrow('COMPONENT_NOT_FOUND');
   });
 
-  it('component.enable 返回 before/after 和逆操作', async () => {
+  it('component.enable 返回 before/after', async () => {
     const dependencies = createDependencies();
     const result = await executeComponentWriteOperation(
       { type: 'component.enable', componentUuid: 'comp-1', enabled: false },
@@ -90,7 +82,6 @@ describe('component.add / remove / enable', () => {
 
     expect(result.before).toMatchObject({ enabled: true });
     expect(result.after).toMatchObject({ enabled: false });
-    expect(result.inverse).toEqual([{ type: 'component.enable', componentUuid: 'comp-1', enabled: true }]);
   });
 });
 
@@ -104,12 +95,6 @@ describe('component.set_property', () => {
 
     expect(result.before).toMatchObject({ value: 'old-2' });
     expect(result.after).toMatchObject({ value: 'c' });
-    expect(result.inverse).toEqual([{
-      type: 'component.set_property',
-      componentUuid: 'comp-1',
-      propertyPath: 'items[2]',
-      value: 'old-2'
-    }]);
     expect(dependencies.calls).toContain('setComponentProperty:comp-1:items[2]:"c"');
   });
 
@@ -180,14 +165,9 @@ describe('component.set_reference / clear_reference', () => {
     );
 
     expect(result.after).toMatchObject({ reference: { kind: 'node', objectUuid: 'node-9' } });
-    expect(result.inverse).toEqual([{
-      type: 'component.clear_reference',
-      componentUuid: 'comp-1',
-      propertyPath: 'clickEvents[0].target'
-    }]);
   });
 
-  it('引用数组逐项校验、整体写入并生成数组逆操作', async () => {
+  it('引用数组逐项校验并整体写入', async () => {
     const dependencies = createDependencies();
     const references = [
       { kind: 'asset', assetUuid: 'texture-a', subAssetUuid: 'frame-a', assetType: 'cc.SpriteFrame', path: null, available: true },
@@ -201,15 +181,6 @@ describe('component.set_reference / clear_reference', () => {
     }, dependencies);
 
     expect(result.after).toMatchObject({ reference: references });
-    expect(result.inverse).toEqual([{
-      type: 'component.set_reference',
-      componentUuid: 'comp-4',
-      propertyPath: 'textureFrames',
-      reference: [
-        { kind: 'asset', assetUuid: 'old-frame-a', subAssetUuid: null, assetType: 'cc.SpriteFrame[]', path: null, available: true },
-        { kind: 'asset', assetUuid: 'old-frame-b', subAssetUuid: null, assetType: 'cc.SpriteFrame[]', path: null, available: true }
-      ]
-    }]);
     expect(dependencies.calls.filter((call) => call.startsWith('resolveReference:'))).toHaveLength(2);
   });
 
@@ -249,7 +220,7 @@ describe('component.set_reference / clear_reference', () => {
     )).rejects.toThrow('REFERENCE_TARGET_NOT_FOUND');
   });
 
-  it('clear_reference 置空并保留旧引用作逆操作', async () => {
+  it('clear_reference 置空并保留旧引用证据', async () => {
     const dependencies = createDependencies();
     const result = await executeComponentWriteOperation(
       { type: 'component.clear_reference', componentUuid: 'comp-2', propertyPath: 'spriteFrame' },
@@ -258,67 +229,6 @@ describe('component.set_reference / clear_reference', () => {
 
     expect(result.before).toMatchObject({ reference: { kind: 'asset', assetUuid: 'asset-1' } });
     expect(result.after).toMatchObject({ reference: null });
-    expect(result.inverse).toEqual([{
-      type: 'component.set_reference',
-      componentUuid: 'comp-2',
-      propertyPath: 'spriteFrame',
-      reference: { kind: 'asset', assetUuid: 'asset-1', subAssetUuid: null, assetType: 'cc.SpriteFrame', path: null, available: true }
-    }]);
-  });
-
-  it('set_reference 逆操作按旧 Dump 引用归一化为 set_reference（阶段二回滚未干净复现修复）', async () => {
-    const dependencies = createDependencies();
-    const result = await executeComponentWriteOperation(
-      {
-        type: 'component.set_reference',
-        componentUuid: 'comp-3',
-        propertyPath: 'targetNode',
-        reference: { kind: 'node', objectUuid: 'node-new', fileId: null, nodePath: null, available: true }
-      },
-      dependencies
-    );
-
-    // 旧值为 Dump 形态 { uuid: 'node-9' }：逆操作必须是 set_reference 的归一化引用，
-    // 而不是阶段二的 set_property + 原始 Dump（运行时会把 {uuid} 当普通对象赋值，回滚后验证不通过）。
-    expect(result.inverse).toEqual([{
-      type: 'component.set_reference',
-      componentUuid: 'comp-3',
-      propertyPath: 'targetNode',
-      reference: { kind: 'node', objectUuid: 'node-9', fileId: null, nodePath: null, available: true }
-    }]);
-  });
-
-  it('set_reference 旧值为空或空引用时逆操作为 clear_reference', async () => {
-    const dependencies = createDependencies();
-    const nullCase = await executeComponentWriteOperation(
-      {
-        type: 'component.set_reference',
-        componentUuid: 'comp-1',
-        propertyPath: 'clickEvents[0].target',
-        reference: { kind: 'node', objectUuid: 'node-9', fileId: null, nodePath: null, available: true }
-      },
-      dependencies
-    );
-    expect(nullCase.inverse).toEqual([{
-      type: 'component.clear_reference',
-      componentUuid: 'comp-1',
-      propertyPath: 'clickEvents[0].target'
-    }]);
-
-    const emptyDumpCase = await executeComponentWriteOperation(
-      {
-        type: 'component.set_reference',
-        componentUuid: 'comp-3',
-        propertyPath: 'emptyRef',
-        reference: { kind: 'node', objectUuid: 'node-new', fileId: null, nodePath: null, available: true }
-      },
-      dependencies
-    );
-    expect(emptyDumpCase.inverse).toEqual([{
-      type: 'component.clear_reference',
-      componentUuid: 'comp-3',
-      propertyPath: 'emptyRef'
-    }]);
   });
 });
 
@@ -332,12 +242,6 @@ describe('component.resize_array', () => {
 
     expect(result.before).toMatchObject({ length: 3 });
     expect(result.after).toMatchObject({ length: 5 });
-    expect(result.inverse).toEqual([{
-      type: 'component.resize_array',
-      componentUuid: 'comp-1',
-      propertyPath: 'items',
-      length: 3
-    }]);
   });
 
   it('非数组属性拒绝 resize', async () => {

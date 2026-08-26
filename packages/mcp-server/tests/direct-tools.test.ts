@@ -33,6 +33,7 @@ const ONLINE_EDITOR = {
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
   bridgeVersion: '0.3.0',
+  bridgeBuildId: 'sha256:bridge-build',
   capabilities: [
     'probe.editorState',
     'probe.assetIndex',
@@ -74,6 +75,19 @@ const PREFAB_ASSET = {
   path: 'assets/ui/Test.prefab',
   available: true,
   raw: {}
+};
+
+const SCENE_ASSET = {
+  ...PREFAB_ASSET,
+  assetUuid: 'scene-uuid-1',
+  url: 'db://assets/main.scene',
+  filePath: 'E:/project/assets/main.scene',
+  type: 'cc.SceneAsset',
+  importer: 'scene',
+  name: 'main',
+  displayName: 'main',
+  source: 'assets/main.scene',
+  path: 'assets/main.scene'
 };
 
 const HIERARCHY_TREE = {
@@ -275,10 +289,13 @@ describe('直写档工具注册', () => {
     const names = readonlyTools.map((tool) => tool.name);
     for (const expected of [
       'cocos_editor_list',
+      'cocos_editor_state',
       'cocos_asset_search',
+      'cocos_asset_inspect',
       'cocos_hierarchy',
       'cocos_node_read',
-      'cocos_prefab_open'
+      'cocos_prefab_open',
+      'cocos_scene_open'
     ]) {
       expect(names).toContain(expected);
     }
@@ -292,7 +309,7 @@ describe('直写档工具注册', () => {
       'cocos_component_set_property',
       'cocos_prefab_create',
       'cocos_prefab_rename',
-      'cocos_prefab_save',
+      'cocos_document_save',
       'cocos_prefab_delete',
       'cocos_asset_import',
       'cocos_asset_refresh',
@@ -335,7 +352,7 @@ describe('直写档工具注册', () => {
       'cocos_component_set_property',
       'cocos_prefab_create',
       'cocos_prefab_rename',
-      'cocos_prefab_save',
+      'cocos_document_save',
       'cocos_prefab_delete',
       'cocos_asset_import',
       'cocos_asset_refresh',
@@ -357,6 +374,7 @@ describe('直写档工具注册', () => {
     expect(batchSchema).toContain('component.set_property');
     const transformTool = writeTools.find((tool) => tool.name === 'cocos_node_set_transform');
     expect(transformTool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    expect(writeNames).not.toContain('cocos_prefab_save');
   });
 });
 
@@ -368,6 +386,64 @@ describe('直写档只读工具', () => {
     const result = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
     expect(result.structuredContent).toMatchObject({
       editors: [{ projectId: 'proj1', editorInstanceId: 'proj1:1234' }]
+    });
+  });
+
+  it('cocos_editor_state 返回当前文档、就绪和 dirty 状态', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_editor_state',
+      arguments: { projectId: 'proj1' }
+    });
+    expect(result.structuredContent).toMatchObject({
+      editor: { projectId: 'proj1' },
+      state: {
+        document: { assetUuid: 'prefab-uuid-1', dirty: false },
+        ready: { scene: true, assetDatabase: true }
+      }
+    });
+    expect(probeClient.requests.at(-1)?.method).toBe('probe.editorState');
+  });
+
+  it('cocos_asset_inspect 返回资产详情和引用关系', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.assets': { ...INSPECT_ASSET_RESPONSE, dependencies: ['script-uuid-1'], users: ['scene-uuid-1'] }
+    }));
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_asset_inspect',
+      arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1' }
+    });
+    expect(result.structuredContent).toMatchObject({
+      asset: { uuid: 'prefab-uuid-1', type: 'cc.Prefab' },
+      page: {
+        total: 2,
+        items: expect.arrayContaining([
+          { kind: 'dependency', assetUuid: 'script-uuid-1' },
+          { kind: 'user', assetUuid: 'scene-uuid-1' }
+        ])
+      }
+    });
+  });
+
+  it('cocos_scene_open 打开 Scene 并等待文档身份就绪', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.assetIndex': { assets: [SCENE_ASSET], scripts: [], documents: [], unresolved: [] },
+      'probe.openAsset': { opened: true, uuid: 'scene-uuid-1' },
+      'probe.editorState': { ...EDITOR_STATE, document: { assetUuid: 'scene-uuid-1', dirty: false } }
+    }));
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_scene_open',
+      arguments: { projectId: 'proj1', uuid: 'scene-uuid-1' }
+    });
+    expect(result.structuredContent).toMatchObject({
+      opened: true,
+      asset: { assetUuid: 'scene-uuid-1', type: 'cc.SceneAsset' }
     });
   });
 
@@ -654,10 +730,9 @@ describe('直写档写工具', () => {
     const write = probeClient.requests.at(-1);
     expect(write?.method).toBe('probe.directWrite');
     const payload = write?.payload as {
-      params: { operations: Array<Record<string, unknown>>; save: boolean; undoGroup: string }
+      params: { operations: Array<Record<string, unknown>>; save: boolean }
     };
     expect(payload.params.save).toBe(true);
-    expect(payload.params.undoGroup).toContain('node-create');
     expect(payload.params.operations).toEqual([{
       type: 'node.create',
       parentNodeUuid: 'panel-uuid',
@@ -704,11 +779,10 @@ describe('直写档写工具', () => {
     });
     const write = probeClient.requests.at(-1);
     const payload = write?.payload as {
-      params: { operations: Array<Record<string, unknown>>; save: boolean; undoGroup: string }
+      params: { operations: Array<Record<string, unknown>>; save: boolean }
     };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.save).toBe(true);
-    expect(payload.params.undoGroup).toContain('node-rename');
     expect(payload.params.operations).toEqual([{
       type: 'node.rename',
       nodeUuid: 'panel-uuid',
@@ -732,6 +806,45 @@ describe('直写档写工具', () => {
       expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
     }
     expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+  });
+
+  it('所有节点寻址入口都拒绝同时提供 UUID 和路径', async () => {
+    const cases = [
+      { name: 'cocos_node_read', arguments: { nodeUuid: 'panel-uuid', path: 'Root/Panel' } },
+      { name: 'cocos_node_delete', arguments: { nodeUuid: 'panel-uuid', path: 'Root/Panel' } },
+      {
+        name: 'cocos_component_add',
+        arguments: { nodeUuid: 'panel-uuid', path: 'Root/Panel', componentType: 'cc.Button' }
+      },
+      {
+        name: 'cocos_component_set_property',
+        arguments: {
+          nodeUuid: 'panel-uuid', path: 'Root/Panel', componentType: 'cc.Label', propertyPath: 'string', value: 'x'
+        }
+      },
+      {
+        name: 'cocos_node_create',
+        arguments: { parentUuid: 'root-uuid', parentPath: 'Root', name: 'Child' }
+      },
+      {
+        name: 'cocos_prefab_create',
+        arguments: {
+          assetUrl: 'db://assets/ui/New.prefab', sourceNodeUuid: 'panel-uuid', sourcePath: 'Root/Panel'
+        }
+      }
+    ];
+    for (const testCase of cases) {
+      const probeClient = new RecordingProbeClient(createRespond());
+      const { client } = await createHarness(probeClient, { enableWrites: true });
+      const result = await client.callTool({
+        name: testCase.name,
+        arguments: { projectId: 'proj1', ...testCase.arguments }
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
+      expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+      expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.createPrefab');
+    }
   });
 
   it('cocos_node_set_transform 按 path 直写 node.set_transform', async () => {
@@ -794,10 +907,9 @@ describe('直写档写工具', () => {
       outcome: { kind: 'success', executedOps: 1 }
     });
     const write = probeClient.requests.at(-1);
-    const payload = write?.payload as { params: { operations: Array<Record<string, unknown>>; save: boolean; undoGroup: string } };
+    const payload = write?.payload as { params: { operations: Array<Record<string, unknown>>; save: boolean } };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.save).toBe(true);
-    expect(payload.params.undoGroup).toContain('node-reparent');
     expect(payload.params.operations).toEqual([{
       type: 'node.reparent',
       nodeUuid: 'panel-uuid',
@@ -1055,9 +1167,8 @@ describe('直写档写工具', () => {
     });
     expect(result.structuredContent).toMatchObject({ outcome: { executedOps: 2 } });
     const write = probeClient.requests.at(-1);
-    const payload = write?.payload as { params: { operations: unknown[]; undoGroup: string } };
+    const payload = write?.payload as { params: { operations: unknown[] } };
     expect(payload.params.operations).toEqual(operations);
-    expect(payload.params.undoGroup).toContain('batch-write');
   });
 
   it('cocos_batch_write 的公开 Schema 拒绝 asset.* 与 prefab.* 且不调用直写通道', async () => {
@@ -1161,11 +1272,10 @@ describe('直写档写工具', () => {
     });
     const write = probeClient.requests.at(-1);
     const payload = write?.payload as {
-      params: { operations: Array<Record<string, unknown>>; save: boolean; undoGroup: string }
+      params: { operations: Array<Record<string, unknown>>; save: boolean }
     };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.save).toBe(true);
-    expect(payload.params.undoGroup).toContain('prefab-rename');
     expect(payload.params.operations).toEqual([{
       type: 'asset.move',
       sourceUrl: 'db://assets/ui/Test.prefab',
@@ -1302,12 +1412,12 @@ describe('直写档写工具', () => {
     expect(probeClient.requests.at(-1)?.method).toBe('probe.deleteAsset');
   });
 
-  it('cocos_prefab_save 转发 probe.saveDocument', async () => {
+  it('cocos_document_save 转发 probe.saveDocument', async () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const { client } = await createHarness(probeClient, { enableWrites: true });
 
     const result = await client.callTool({
-      name: 'cocos_prefab_save',
+      name: 'cocos_document_save',
       arguments: { projectId: 'proj1' }
     });
     expect(result.structuredContent).toMatchObject({ result: { saved: true } });

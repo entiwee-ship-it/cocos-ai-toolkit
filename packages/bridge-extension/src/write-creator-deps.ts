@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { ProbeError } from './probe-errors';
 import type { NodeInfo, NodeWriterDependencies } from './node-writer';
@@ -9,7 +8,7 @@ import {
 } from './component-writer';
 import { buildComponentTypeSchema } from './component-schema';
 import { readDumpValueAtPath } from './write-scene-channel';
-import { saveAndVerifyWriteTransaction, type WriteVerifierDependencies } from './write-verifier';
+import type { WriteVerifierDependencies } from './write-verifier';
 import type { PrefabInstanceInfo, PrefabWriterDependencies } from './prefab-writer';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
 import {
@@ -28,7 +27,7 @@ import {
  * 原则：能用 Scene 消息 API 的操作（create-node、create-component、remove-node、
  * set-property、save-scene、query-*）走消息 API；消息 API 未覆盖的
  * （reparent、duplicate、remove-component、数组 resize）走 Scene 进程运行时对象。
- * 运行时改动不进入编辑器 Undo，回滚依赖事务管理器的显式逆操作路径。
+ * 运行时改动必须由写后重读确认，不依赖编辑器撤销状态判断成功。
  */
 
 const { director, js, instantiate } = require('cc') as {
@@ -104,53 +103,13 @@ function describeComponent(component: RuntimeNode, fallbackUuid: string): string
   return type ?? fallbackUuid;
 }
 
-/** 当前文档身份与层级指纹，供事务管理器 Revision 前置采集。 */
-export interface CurrentDocumentIdentity {
-  documentId: string;
-  hierarchySha256: string;
-  /** 预制体图指纹：当前文档实例映射（实例根 → 源资产/实例 FileID）的排序哈希。 */
-  prefabGraphSha256: string | null;
-  dirty: boolean | null;
-}
-
-/**
- * 解析当前文档资产 UUID、层级内容指纹、预制体图指纹和 Dirty 状态。
- *
- * @returns 文档身份；文档 UUID 不可解析时抛稳定错误码。
- */
-export async function captureCurrentDocumentIdentity(): Promise<CurrentDocumentIdentity> {
+/** 解析当前文档资产 UUID；无法解析时抛稳定错误码。 */
+export async function readCurrentDocumentAssetUuid(): Promise<string> {
   const identity = await resolveCreatorDocumentIdentity(globalThis);
   if (!identity.assetUuid) {
     throw new ProbeError('CURRENT_DOCUMENT_UUID_EMPTY', { failures: identity.failures });
   }
-  const tree = await Editor.Message.request('scene', 'query-node-tree');
-  const hierarchySha256 = createHash('sha256').update(JSON.stringify(tree ?? null)).digest('hex');
-  const prefabMarks: string[] = [];
-  collectPrefabInstanceMarks(tree, prefabMarks);
-  const prefabGraphSha256 = createHash('sha256').update(prefabMarks.sort().join(';')).digest('hex');
-  let dirty: boolean | null = null;
-  try {
-    dirty = Boolean(await Editor.Message.request('scene', 'query-dirty'));
-  } catch {
-    dirty = null;
-  }
-  return { documentId: identity.assetUuid, hierarchySha256, prefabGraphSha256, dirty };
-}
-
-/** 递归收集节点树中的预制体实例标记（根 UUID|源资产 UUID|prefab 状态）。
- * query-node-tree 为精简形态（裸字段、prefab.assetUuid/state），与单节点 Dump 不同。 */
-function collectPrefabInstanceMarks(node: unknown, marks: string[]): void {
-  const record = readObject(node);
-  const prefab = readObject(record.prefab);
-  if (typeof prefab.assetUuid === 'string' && prefab.assetUuid) {
-    const nodeUuid = typeof record.uuid === 'string' ? record.uuid : '';
-    const state = typeof prefab.state === 'number' ? prefab.state : 0;
-    marks.push(`${nodeUuid}|${prefab.assetUuid}|${state}`);
-  }
-  const children = Array.isArray(record.children) ? record.children : [];
-  for (const child of children) {
-    collectPrefabInstanceMarks(child, marks);
-  }
+  return identity.assetUuid;
 }
 
 /** 构造节点原子写依赖（Scene 消息 + 运行时对象）。 */
@@ -716,8 +675,7 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
       return { targetLocalIds, previous };
     },
     getCurrentDocumentAssetUuid: async () => {
-      const identity = await captureCurrentDocumentIdentity().catch(() => null);
-      return identity?.documentId ?? null;
+      return readCurrentDocumentAssetUuid().catch(() => null);
     },
     findPrefabInstanceRoot: async (parentUuid, name, prefabAssetUuid) => {
       const tree = await Editor.Message.request('scene', 'query-node-tree');

@@ -287,17 +287,19 @@ describe('RuntimeDriver', () => {
     await driver.dispose();
   });
 
-  it('close 关闭页面并拒绝后续 evaluate', async () => {
+  it('close 关闭页面、浏览器并移除会话', async () => {
     const { page, state } = createFakePage();
+    const browser = createFakeBrowser(page);
     const driver = new RuntimeDriver({
-      launcher: async () => createFakeBrowser(page),
+      launcher: async () => browser,
       createSessionId: () => 's6'
     });
     await driver.launch({ projectId: 'proj1', url: 'http://192.168.1.23:7457/' });
     await driver.close('s6');
     expect(state.closed).toBe(true);
-    expect(driver.get('s6').state).toBe('closed');
-    await expect(driver.evaluate('s6', (() => 1) as never)).rejects.toThrow('PREVIEW_SESSION_CLOSED');
+    expect(browser.closed).toBe(true);
+    expect(() => driver.get('s6')).toThrow('PREVIEW_SESSION_NOT_FOUND');
+    expect(driver.list()).toEqual([]);
     await driver.dispose();
   });
 
@@ -366,21 +368,24 @@ describe('RuntimeDriver', () => {
 
     await expect(driver.dispose()).rejects.toThrow(/PREVIEW_DISPOSE_FAILED:.*dispose-failure:.*browser close failed/);
     expect(driver.get('dispose-failure').state).not.toBe('closed');
-    expect(driver.get('dispose-success').state).toBe('closed');
+    expect(() => driver.get('dispose-success')).toThrow('PREVIEW_SESSION_NOT_FOUND');
     expect(second.state.closed).toBe(true);
     await driver.dispose().catch(() => undefined);
   });
 
-  it('页面异常断开时会话标记 lost 并拒绝读写', async () => {
+  it('页面异常断开时关闭浏览器并最终移除 lost 会话', async () => {
     const { page, state } = createFakePage();
+    const browser = createFakeBrowser(page);
     const driver = new RuntimeDriver({
-      launcher: async () => createFakeBrowser(page),
+      launcher: async () => browser,
       createSessionId: () => 's7'
     });
     await driver.launch({ projectId: 'proj1', url: 'http://192.168.1.23:7457/' });
     state.closed = true; // 模拟页面被外部关闭
     await expect(driver.evaluate('s7', (() => 1) as never)).rejects.toThrow('PREVIEW_SESSION_LOST');
-    expect(driver.get('s7').state).toBe('lost');
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(browser.closed).toBe(true);
+    expect(() => driver.get('s7')).toThrow('PREVIEW_SESSION_NOT_FOUND');
     await driver.dispose();
   });
 

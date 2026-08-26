@@ -114,27 +114,6 @@ describe('WriteOperationSchema', () => {
     })).toThrow();
   });
 
-  it('受控资产内容恢复要求 UUID 与恢复前后 SHA256 前置', () => {
-    const currentSha256 = 'a'.repeat(64);
-    const targetSha256 = 'b'.repeat(64);
-    expect(WriteOperationSchema.parse({
-      type: 'asset.restore_content',
-      assetUrl: 'db://assets/ui/Dialog.prefab',
-      expectedAssetUuid: 'dialog-prefab',
-      expectedCurrentSha256: currentSha256,
-      content: '[{\"__type__\":\"cc.Prefab\"}]',
-      targetSha256
-    })).toBeTruthy();
-    expect(() => WriteOperationSchema.parse({
-      type: 'asset.restore_content',
-      assetUrl: 'db://assets/ui/Dialog.prefab',
-      expectedAssetUuid: 'dialog-prefab',
-      expectedCurrentSha256: 'not-a-hash',
-      content: '[]',
-      targetSha256
-    })).toThrow();
-  });
-
   it('安全文本替换要求精确旧文本且禁止无效替换', () => {
     expect(WriteOperationSchema.parse({
       type: 'asset.update_text',
@@ -235,21 +214,14 @@ describe('DirectWriteRequestSchema', () => {
   it('接受一批原子写操作加保存开关', () => {
     expect(DirectWriteRequestSchema.parse({
       operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
-      save: true,
-      undoGroup: 'direct-rename'
+      save: true
     })).toBeTruthy();
   });
 
-  it('拒绝空操作列表和空 Undo 组名', () => {
+  it('拒绝空操作列表', () => {
     expect(() => DirectWriteRequestSchema.parse({
       operations: [],
-      save: true,
-      undoGroup: 'direct'
-    })).toThrow();
-    expect(() => DirectWriteRequestSchema.parse({
-      operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
-      save: true,
-      undoGroup: ''
+      save: true
     })).toThrow();
   });
 });

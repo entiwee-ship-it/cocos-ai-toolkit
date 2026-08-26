@@ -24,6 +24,7 @@ const EditorSessionSchema = z.object({
   projectPath: z.string().min(1),
   creatorVersion: z.string().min(1),
   bridgeVersion: z.string().min(1),
+  bridgeBuildId: z.string().min(1).optional(),
   capabilities: z.array(z.string())
 });
 

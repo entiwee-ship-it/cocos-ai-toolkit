@@ -17,7 +17,6 @@ describe('executeWriteSceneOperations', () => {
         { type: 'component.set_property', componentUuid: 'c1', propertyPath: 'title', value: 'hello' }
       ],
       save: true,
-      undoGroup: 'mixed-write'
     }, dependencies);
 
     expect(outcome.kind).toBe('success');
@@ -27,10 +26,9 @@ describe('executeWriteSceneOperations', () => {
       'node:node.rename',
       'component:component.set_property'
     ]);
-    // 证据保留每个操作的逆操作，供回滚编排
-    const evidence = outcome.evidence as Array<{ inverse: unknown[] }>;
+    // 证据保留每个已执行操作
+    const evidence = outcome.evidence as unknown[];
     expect(evidence).toHaveLength(2);
-    expect(evidence[0].inverse).toHaveLength(1);
   });
 
   it('为新建节点和组件回填结果 UUID 供重读验证', async () => {
@@ -43,7 +41,6 @@ describe('executeWriteSceneOperations', () => {
         name: String(operation.name ?? 'New'),
         stablePath: '/FriendsRoomView/CocosAiValidationView/Title'
       },
-      inverse: [{ type: 'node.delete', nodeUuid: 'n1' }]
     });
     dependencies.executeComponentOperation = async () => ({
       componentUuid: 'c1',
@@ -55,7 +52,6 @@ describe('executeWriteSceneOperations', () => {
         nodeStablePath: '/FriendsRoomView~0/CocosAiValidationView~0/Title~0',
         sameTypeIndex: 0
       },
-      inverse: [{ type: 'component.remove', componentUuid: 'c1' }]
     });
     const outcome = await executeWriteSceneOperations({
       operations: [
@@ -63,7 +59,6 @@ describe('executeWriteSceneOperations', () => {
         { type: 'component.add', nodeUuid: 'n1', componentType: 'cc.Sprite', scriptUuid: null }
       ],
       save: false,
-      undoGroup: 'backfill'
     }, dependencies);
 
     const evidence = outcome.evidence as Array<{ operation: Record<string, unknown> }>;
@@ -79,7 +74,6 @@ describe('executeWriteSceneOperations', () => {
     const outcomeExisting = await executeWriteSceneOperations({
       operations: [{ type: 'node.rename', nodeUuid: 'keep-me', name: 'X' }],
       save: false,
-      undoGroup: 'no-backfill'
     }, dependencies);
     const evidenceExisting = outcomeExisting.evidence as Array<{ operation: Record<string, unknown> }>;
     expect(evidenceExisting[0].operation.resultNodeUuid).toBe('n1');
@@ -94,7 +88,6 @@ describe('executeWriteSceneOperations', () => {
         { type: 'node.delete', nodeUuid: 'n2' }
       ],
       save: true,
-      undoGroup: 'partial-write'
     }, dependencies);
 
     expect(outcome.kind).toBe('operation-failed');
@@ -117,7 +110,6 @@ describe('executeWriteSceneOperations', () => {
     const outcome = await executeWriteSceneOperations({
       operations: [{ type: 'node.rename', nodeUuid: 'n1', name: 'NewName' }],
       save: true,
-      undoGroup: 'verification-unknown'
     }, dependencies);
 
     expect(outcome).toMatchObject({
@@ -146,7 +138,6 @@ describe('executeWriteSceneOperations', () => {
       },
       targetLocalIds: ['nested-instance', 'label-component'],
       previousOverride: { value: 'Override Applied' },
-      inverse: []
     });
 
     const outcome = await executeWriteSceneOperations({
@@ -157,7 +148,6 @@ describe('executeWriteSceneOperations', () => {
         propertyPath: 'string'
       }],
       save: false,
-      undoGroup: 'prefab-stable-locator'
     }, dependencies);
 
     const evidence = outcome.evidence as Array<{ operation: Record<string, unknown> }>;
@@ -179,7 +169,6 @@ describe('executeWriteSceneOperations', () => {
         componentUuid: 'c1',
         before: null,
         after: null,
-        inverse: [],
         changed: false
       };
     };
@@ -190,7 +179,6 @@ describe('executeWriteSceneOperations', () => {
         { type: 'component.add', nodeUuid: 'n1', componentType: 'cc.UITransform', scriptUuid: null }
       ],
       save: true,
-      undoGroup: 'idempotent-component-add'
     }, dependencies);
 
     expect(outcome.kind).toBe('success');
@@ -274,13 +262,11 @@ function createDependencies(options: { failAtType?: string } = {}): WriteSceneCh
     nodeUuid: 'n1',
     before: null,
     after: null,
-    inverse: [{ type: 'node.rename', nodeUuid: 'n1', name: 'Old' }]
   };
   const componentResult: ComponentWriteOpResult = {
     componentUuid: 'c1',
     before: null,
     after: null,
-    inverse: [{ type: 'component.set_property', componentUuid: 'c1', propertyPath: 'title', value: '' }]
   };
   return {
     calls,
@@ -290,7 +276,7 @@ function createDependencies(options: { failAtType?: string } = {}): WriteSceneCh
         const { ProbeError } = await import('../src/probe-errors.js');
         throw new ProbeError('NODE_NOT_FOUND', { nodeUuid: operation.nodeUuid });
       }
-      return { ...nodeResult, inverse: (operation.inverse as never) ?? nodeResult.inverse };
+      return nodeResult;
     },
     executeComponentOperation: async (operation) => {
       calls.push(`component:${operation.type}`);
@@ -307,7 +293,6 @@ function createDependencies(options: { failAtType?: string } = {}): WriteSceneCh
         assetUuid: null,
         before: null,
         after: null,
-        inverse: []
       };
     },
     saveDocument: async () => {

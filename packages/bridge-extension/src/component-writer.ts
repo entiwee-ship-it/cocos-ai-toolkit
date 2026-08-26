@@ -77,8 +77,6 @@ export interface ComponentWriteOpResult {
   componentUuid: string;
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
-  /** 显式逆操作序列，供 step-undo-with-inverse 回滚路径使用。 */
-  inverse: WriteOperation[];
   /** false 表示目标状态原本已满足，本次执行未产生任何文档变更。 */
   changed?: boolean;
 }
@@ -108,8 +106,7 @@ export function parsePropertyPath(propertyPath: string): Array<string | number> 
 }
 
 /**
- * 执行单个组件原子写操作，返回 before/after 证据和显式逆操作。
- * 只允许在事务上下文内由写执行器调用；写入前按 Phase 1 组件 Schema 校验
+ * 执行单个组件原子写操作并返回 before/after 证据。写入前按组件 Schema 校验
  * 属性存在性、可写性（readonly 拒绝），引用写入前核对目标可解析。
  *
  * @param operation 组件写操作（component.* 七类之一）。
@@ -168,7 +165,6 @@ async function addComponent(
       componentUuid: existing.uuid,
       before: snapshot,
       after: snapshot,
-      inverse: [],
       changed: false
     };
   }
@@ -191,8 +187,7 @@ async function addComponent(
       enabled: after.enabled,
       ...(after.nodeStablePath ? { nodeStablePath: after.nodeStablePath } : {}),
       ...(after.sameTypeIndex === undefined ? {} : { sameTypeIndex: after.sameTypeIndex })
-    },
-    inverse: [{ type: 'component.remove', componentUuid }]
+    }
   };
 }
 
@@ -206,14 +201,7 @@ async function removeComponent(
   return {
     componentUuid,
     before: { uuid: componentUuid, type: before.type, nodeUuid: before.nodeUuid, enabled: before.enabled },
-    after: null,
-    // 逆操作为尽力重挂：属性值无法经逆操作还原，深度回滚依赖编辑器 Undo。
-    inverse: [{
-      type: 'component.add',
-      nodeUuid: before.nodeUuid,
-      componentType: before.type,
-      scriptUuid: before.scriptUuid ?? null
-    }]
+    after: null
   };
 }
 
@@ -228,8 +216,7 @@ async function enableComponent(
   return {
     componentUuid,
     before: { uuid: componentUuid, enabled: before.enabled },
-    after: { uuid: componentUuid, enabled: after.enabled },
-    inverse: [{ type: 'component.enable', componentUuid, enabled: before.enabled }]
+    after: { uuid: componentUuid, enabled: after.enabled }
   };
 }
 
@@ -258,8 +245,7 @@ async function setComponentProperty(
   return {
     componentUuid,
     before: { uuid: componentUuid, propertyPath, value: oldValue },
-    after: { uuid: componentUuid, propertyPath, value: actual },
-    inverse: [{ type: 'component.set_property', componentUuid, propertyPath, value: oldValue }]
+    after: { uuid: componentUuid, propertyPath, value: actual }
   };
 }
 
@@ -288,14 +274,12 @@ async function setComponentReference(
     }
   }
   const oldValue = readValueAtPath(info.properties, segments, propertyPath);
-  const schemaProperty = findSchemaProperty(info, segments);
   await dependencies.setComponentProperty(componentUuid, propertyPath, reference);
   const actual = await dependencies.getComponentProperty(componentUuid, propertyPath);
   return {
     componentUuid,
     before: { uuid: componentUuid, propertyPath, reference: oldValue },
-    after: { uuid: componentUuid, propertyPath, reference: actual },
-    inverse: buildReferenceInverse(componentUuid, propertyPath, schemaProperty?.declaredType ?? null, oldValue)
+    after: { uuid: componentUuid, propertyPath, reference: actual }
   };
 }
 
@@ -309,90 +293,13 @@ async function clearComponentReference(
   const segments = parsePropertyPath(propertyPath);
   assertWritableSchema(info, segments);
   const oldValue = readValueAtPath(info.properties, segments, propertyPath);
-  const schemaProperty = findSchemaProperty(info, segments);
   await dependencies.setComponentProperty(componentUuid, propertyPath, null);
   const actual = await dependencies.getComponentProperty(componentUuid, propertyPath);
   return {
     componentUuid,
     before: { uuid: componentUuid, propertyPath, reference: oldValue },
-    after: { uuid: componentUuid, propertyPath, reference: actual },
-    inverse: oldValue === null || oldValue === undefined
-      ? []
-      : buildReferenceInverse(componentUuid, propertyPath, schemaProperty?.declaredType ?? null, oldValue)
+    after: { uuid: componentUuid, propertyPath, reference: actual }
   };
-}
-
-/**
- * 构造引用写入/清空的逆操作。
- * 旧值已是归一化引用形态（kind 字段在位）时直接复用；
- * 旧值为 Creator Dump 形态（{uuid}）时按声明类型归一化为 set_reference——
- * 阶段二回滚未干净的根因是 Dump 旧值直接走 set_property，运行时把 {uuid} 当普通对象
- * 赋值而不是恢复真实引用对象，导致回滚后重读与指纹比对不通过。
- * 旧值为空（null 或空 uuid Dump）时逆操作为 clear_reference。
- *
- * @param componentUuid 目标组件 UUID。
- * @param propertyPath 引用属性路径。
- * @param declaredType 属性声明类型（cc.Node 判节点引用，*Component 判组件引用，其余按资产引用）。
- * @param oldValue 写入前的当前值。
- * @returns 显式逆操作序列。
- */
-function buildReferenceInverse(
-  componentUuid: string,
-  propertyPath: string,
-  declaredType: string | null,
-  oldValue: unknown
-): WriteOperation[] {
-  if (Array.isArray(oldValue)) {
-    return [{
-      type: 'component.set_reference',
-      componentUuid,
-      propertyPath,
-      reference: oldValue.map((item) => normalizeReferenceValue(item, declaredType))
-    }];
-  }
-  const normalized = normalizeReferenceValue(oldValue, declaredType);
-  if (!normalized) {
-    return [{ type: 'component.clear_reference', componentUuid, propertyPath }];
-  }
-  return [{ type: 'component.set_reference', componentUuid, propertyPath, reference: normalized }];
-}
-
-function normalizeReferenceValue(
-  value: unknown,
-  declaredType: string | null
-): WriteReferenceValue | null {
-  const record = readObject(value);
-  if (typeof record.kind === 'string' && record.kind) return record as WriteReferenceValue;
-  const oldUuid = readReferenceDumpUuid(value);
-  if (!oldUuid) return null;
-  const fileId = typeof record.fileId === 'string' && record.fileId ? record.fileId : null;
-  const itemType = declaredType?.endsWith('[]') ? declaredType.slice(0, -2) : declaredType;
-  if (itemType === 'cc.Node') {
-    return { kind: 'node', objectUuid: oldUuid, fileId, nodePath: null, available: true };
-  }
-  if (itemType && itemType.endsWith('Component')) {
-    return {
-      kind: 'component', objectUuid: oldUuid, fileId, typeId: itemType, nodePath: null, available: true
-    };
-  }
-  return {
-    kind: 'asset',
-    assetUuid: oldUuid,
-    subAssetUuid: typeof record.subAssetUuid === 'string' && record.subAssetUuid ? record.subAssetUuid : null,
-    assetType: declaredType,
-    path: null,
-    available: true
-  };
-}
-
-/** 读取引用 Dump 形态（{uuid}/{assetUuid}/{objectUuid}）中的目标 UUID；空引用返回 null。 */
-function readReferenceDumpUuid(value: unknown): string | null {
-  const record = readObject(value);
-  for (const key of ['uuid', 'assetUuid', 'objectUuid']) {
-    const uuid = record[key];
-    if (typeof uuid === 'string' && uuid) return uuid;
-  }
-  return null;
 }
 
 function readObject(value: unknown): Record<string, unknown> {
@@ -424,8 +331,7 @@ async function resizeComponentArray(
   return {
     componentUuid,
     before: { uuid: componentUuid, propertyPath, length: oldLength },
-    after: { uuid: componentUuid, propertyPath, length: Array.isArray(resized) ? resized.length : null },
-    inverse: [{ type: 'component.resize_array', componentUuid, propertyPath, length: oldLength }]
+    after: { uuid: componentUuid, propertyPath, length: Array.isArray(resized) ? resized.length : null }
   };
 }
 

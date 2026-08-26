@@ -4,6 +4,7 @@ export interface BridgeSessionInfo {
   projectPath: string;
   creatorVersion: string;
   bridgeVersion: string;
+  bridgeBuildId?: string;
   capabilities: string[];
 }
 

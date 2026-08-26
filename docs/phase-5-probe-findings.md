@@ -1,6 +1,6 @@
 # 阶段五 Preview 运行态技术探针结论
 
-> 日期：2026-07-22；环境：Cocos Creator 3.8.8（Windows）、空白项目 `worktrees/cocos-ai-blank/Cocos-ai`、Bridge 0.1.27（新增 `probe.debugEditorMessage` 探针方法）。
+> 日期：2026-07-22；环境：Cocos Creator 3.8.8（Windows）、空白项目 `worktrees/cocos-ai-blank/Cocos-ai`、Bridge 0.1.27。本文是历史探测证据；探针脚本与任意 Editor.Message 调试入口已从当前正式运行时删除。
 > 每条结论附实际执行的命令/调用与返回证据；未经实测的推断一律标注。
 
 ## 一、总体结论（GO）
@@ -66,7 +66,7 @@
 ## 七、对实施计划的调整（Task 1 定论）
 
 1. **Task 3 取消**：页面不直连 Probe Server，不需要 game 会话类型。
-2. **Task 4 调整**：`game-probe` 包改为「页面注入脚本模块」（runtime 读取/交互脚本，经 runtime-driver 注入页面执行）；Bridge 新增正式 `preview` 封装（open / query-preview-url / query-connect-num / reload-terminal / 状态聚合），`probe.debugEditorMessage` 保留为诊断方法。
+2. **Task 4 调整**：`game-probe` 包改为「页面注入脚本模块」（runtime 读取/交互脚本，经 runtime-driver 注入页面执行）；Bridge 新增正式 `preview` 封装（open / query-preview-url / query-connect-num / reload-terminal / 状态聚合）。阶段探针已在正式能力稳定后删除。
 3. **新增 runtime-driver**（core）：Playwright 浏览器实例管理（launch 系统 Chrome/Edge，channel 回退链）、页面会话、evaluate 注入、console/截图/输入桥接。
 4. **协议补充**：`PreviewSession` 增加 `actualResolution`（实际生效分辨率）与 `pageSource: 'self-launched'`；视觉验证仅声明 Game 视图，Scene 视图列入已知限制。
 5. **已知限制（写入能力矩阵）**：
@@ -77,5 +77,4 @@
 
 ## 八、复现入口
 
-- 探针脚本：`scripts/probes/phase-5/preview-messages-readonly.mjs`、`preview-launch-sequence.mjs`、`preview-scene-messages.mjs`（随仓库留档）。
-- Bridge 探针方法：`probe.debugEditorMessage`（namespace/method/args/mode/timeoutMs，8s 默认超时兜底，挂起消息返回 `EDITOR_MESSAGE_TIMEOUT`）。
+- 原阶段探针脚本和 `probe.debugEditorMessage` 已删除；本文件仅保留当时结论，不再提供可执行入口。

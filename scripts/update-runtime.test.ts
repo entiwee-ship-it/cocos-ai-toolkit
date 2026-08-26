@@ -31,7 +31,20 @@ describe('运行工作树同步合同', () => {
     expect(readme).toContain("-ProjectPath 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe'");
     expect(readme).toContain("-ToolkitPath 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0'");
     expect(installer).toContain('[string]$WorktreeRoot');
+    expect(installer).toContain('[switch]$AllowSavedProject');
     expect(installer).not.toContain('$realProject');
+  });
+
+  it('Codex、Bridge 与 Probe 默认共用固定运行 Worktree', async () => {
+    const [bridgeInstaller, codexInstaller, checker] = await Promise.all([
+      readFile(installerPath, 'utf8'),
+      readFile(new URL('./install-codex-mcp.ps1', import.meta.url), 'utf8'),
+      readFile(new URL('./check-codex-mcp.ps1', import.meta.url), 'utf8')
+    ]);
+    const runtime = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0';
+    expect(bridgeInstaller).toContain(runtime);
+    expect(codexInstaller).toContain(runtime);
+    expect(checker).toContain(runtime);
   });
 
   it('更新失败会恢复旧提交和旧 Probe，并以 Ready 与 WebSocket 请求作为健康门禁', async () => {

@@ -54,7 +54,7 @@ export interface WriteVerifierDependencies {
  * @param dependencies 保存与重读依赖。
  * @returns 重读验证报告，随写响应带回。
  */
-export async function saveAndVerifyWriteTransaction(
+export async function saveAndVerifyDirectWrite(
   request: { save: boolean },
   executed: VerifiedOperation[],
   dependencies: WriteVerifierDependencies
@@ -258,21 +258,6 @@ async function verifyOperationUnsafe(
         sha256: operation.resultTargetSha256
       };
       return build(expected, actual, typeof expected.sha256 === 'string' && deepEqual(expected, actual));
-    }
-    case 'asset.restore_content': {
-      const [asset, content] = await Promise.all([
-        dependencies.queryAssetInfo(operation.assetUrl as string),
-        dependencies.readAssetContent(operation.assetUrl as string)
-      ]);
-      const actual = {
-        assetUuid: asset?.uuid ?? null,
-        sha256: createHash('sha256').update(content).digest('hex')
-      };
-      const expected = {
-        assetUuid: operation.expectedAssetUuid,
-        sha256: operation.targetSha256
-      };
-      return build(expected, actual, deepEqual(expected, actual));
     }
     case 'prefab.instantiate': {
       const nodeUuid = readResultNodeUuid(operation);
@@ -620,7 +605,6 @@ function describeOperation(operation: WriteOperation): string {
     case 'asset.delete': return `删除资产 ${String(operation.assetUrl)}`;
     case 'asset.write_meta': return `写入资产元数据 ${String(operation.assetUrl)}`;
     case 'asset.update_text': return `安全更新文本资产 ${String(operation.assetUrl)}`;
-    case 'asset.restore_content': return `恢复资产内容 ${String(operation.assetUrl)}`;
     case 'prefab.instantiate': return `实例化预制体 ${String(operation.prefabAssetUuid)}`;
     case 'prefab.create_from_node': return `从节点生成预制体 ${String(operation.assetUrl)}`;
     case 'prefab.instance_override': return `写入预制体实例覆盖 ${String(operation.propertyPath)}`;

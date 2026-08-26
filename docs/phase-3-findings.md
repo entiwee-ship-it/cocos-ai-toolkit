@@ -34,7 +34,7 @@
 
 ## 超出计划的增量能力
 
-- `probe.debugPrefabFacade` 临时探测通道（enumerate/call/instantiate/link/scene-message/watch-arm/watch-collect，target 支持 cce 点路径与 Editor.Message），阶段四收口时摘除或转正式能力。
+- `probe.debugPrefabFacade` 曾用于阶段探测；正式能力稳定后已从 Bridge handlers 和 Scene methods 中删除，不再提供任意门面调用入口。
 - 夹具自举方法学：三层嵌套预制体可完全由工具自身写能力构建（createAsset → openAsset → 事务链），验证脚本已固化。
 - 阶段二结论修正两处：refresh-asset 可触发类重注册（原"仅重新导入"作废）；`create-node` 消息必须带 `type:'cc.Prefab'` 才保留实例信息。
 

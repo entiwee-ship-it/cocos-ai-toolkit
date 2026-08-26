@@ -109,7 +109,7 @@ describe('executePrefabWriteOperation', () => {
     expect((error as ProbeError).code).toBe('NODE_NOT_FOUND');
   });
 
-  it('prefab.instantiate 成功：返回实例证据与 node.delete 逆操作', async () => {
+  it('prefab.instantiate 成功：返回实例证据', async () => {
     const dependencies = createDependencies();
     const result = await executePrefabWriteOperation(
       { type: 'prefab.instantiate', prefabAssetUuid: 'asset-1', parentNodeUuid: 'n-parent', name: 'Card' } as WriteOperation,
@@ -119,7 +119,6 @@ describe('executePrefabWriteOperation', () => {
     expect(result.nodeUuid).toBe('n-new');
     expect(result.before).toBeNull();
     expect(result.after).toMatchObject({ prefabAssetUuid: 'asset-1', instanceFileId: 'inst-1', state: 2 });
-    expect(result.inverse).toEqual([{ type: 'node.delete', nodeUuid: 'n-new' }]);
   });
 
   it('prefab.instantiate 实例信息未建立（缺 instanceFileId）时报错', async () => {
@@ -168,14 +167,10 @@ describe('executePrefabWriteOperation', () => {
       dependencies
     );
 
-    // createPrefab 会重建节点（实测）：必须按重建后 UUID 出证据和逆操作
+    // createPrefab 会重建节点（实测）：必须按重建后 UUID 出证据
     expect(locate).toEqual({ parentUuid: 'n-parent', name: 'healthDialog', prefabAssetUuid: 'asset-new' });
     expect(result.nodeUuid).toBe('n-rebuilt');
     expect(result.assetUuid).toBe('asset-new');
-    expect(result.inverse).toEqual([
-      { type: 'prefab.unlink_instance', instanceRootUuid: 'n-rebuilt' },
-      { type: 'prefab.delete_asset', assetUrl: 'db://assets/a.prefab' }
-    ]);
   });
 
   it('prefab.create_from_node 重建后无法重定位实例根时报错', async () => {
@@ -192,7 +187,7 @@ describe('executePrefabWriteOperation', () => {
     expect((error as ProbeError).code).toBe('PREFAB_INSTANCE_NOT_ESTABLISHED');
   });
 
-  it('prefab.delete_asset 成功执行且无逆操作', async () => {
+  it('prefab.delete_asset 成功执行并返回删除证据', async () => {
     let deleted: string | null = null;
     const dependencies = createDependencies({
       deleteAsset: async (assetUrl) => {
@@ -205,7 +200,6 @@ describe('executePrefabWriteOperation', () => {
     );
 
     expect(deleted).toBe('db://assets/a.prefab');
-    expect(result.inverse).toEqual([]);
   });
 
   it('asset.create 禁止空 Prefab 模板并支持目录与组件脚本', async () => {
@@ -252,9 +246,6 @@ describe('executePrefabWriteOperation', () => {
       type: 'asset.move', sourceUrl: 'db://assets/a.ts', targetUrl: 'db://assets/b.ts', expectedAssetUuid: 'asset-a'
     } as WriteOperation, dependencies);
 
-    expect(result.inverse).toEqual([{
-      type: 'asset.move', sourceUrl: 'db://assets/b.ts', targetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-a'
-    }]);
   });
 
   it('asset.move 检测 UUID 漂移并拒绝成功', async () => {
@@ -273,7 +264,7 @@ describe('executePrefabWriteOperation', () => {
     } as WriteOperation, dependencies)).rejects.toThrow('ASSET_UUID_DRIFT');
   });
 
-  it('asset.write_meta 可回滚且 asset.delete 要求精确 UUID', async () => {
+  it('asset.write_meta 保留前后 Meta 且 asset.delete 要求精确 UUID', async () => {
     let deleted = false;
     const written: unknown[] = [];
     const dependencies = createDependencies({
@@ -285,10 +276,6 @@ describe('executePrefabWriteOperation', () => {
       type: 'asset.write_meta', assetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-a',
       meta: { userData: { priority: 1 } }
     } as WriteOperation, dependencies);
-    expect(metaResult.inverse).toEqual([{
-      type: 'asset.write_meta', assetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-a',
-      meta: { userData: { priority: 0 } }
-    }]);
 
     await expect(executePrefabWriteOperation({
       type: 'asset.delete', assetUrl: 'db://assets/a.ts', expectedAssetUuid: 'asset-other'
@@ -300,57 +287,7 @@ describe('executePrefabWriteOperation', () => {
     expect(written).toEqual([{ userData: { priority: 1 } }]);
   });
 
-  it('asset.restore_content 当前内容哈希漂移时零写入拒绝', async () => {
-    let saveCalls = 0;
-    const targetContent = 'safe-backup';
-    const dependencies = createDependencies({
-      queryAssetInfo: async () => ({ uuid: 'asset-a', type: 'cc.Prefab' }),
-      readAssetContent: async () => 'unexpected-current',
-      saveAssetContent: async () => { saveCalls += 1; }
-    });
-
-    await expect(executePrefabWriteOperation({
-      type: 'asset.restore_content',
-      assetUrl: 'db://assets/ui/Dialog.prefab',
-      expectedAssetUuid: 'asset-a',
-      expectedCurrentSha256: sha256('expected-current'),
-      content: targetContent,
-      targetSha256: sha256(targetContent)
-    } as WriteOperation, dependencies)).rejects.toThrow('ASSET_CONTENT_PRECONDITION_FAILED');
-    expect(saveCalls).toBe(0);
-  });
-
-  it('asset.restore_content 通过 AssetDB 保存并生成带哈希前置的逆操作', async () => {
-    let content = 'current-content';
-    const targetContent = 'safe-backup';
-    const dependencies = createDependencies({
-      queryAssetInfo: async () => ({ uuid: 'asset-a', type: 'cc.Prefab' }),
-      readAssetContent: async () => content,
-      saveAssetContent: async (_assetUrl, nextContent) => { content = nextContent; }
-    });
-
-    const result = await executePrefabWriteOperation({
-      type: 'asset.restore_content',
-      assetUrl: 'db://assets/ui/Dialog.prefab',
-      expectedAssetUuid: 'asset-a',
-      expectedCurrentSha256: sha256(content),
-      content: targetContent,
-      targetSha256: sha256(targetContent)
-    } as WriteOperation, dependencies);
-
-    expect(content).toBe(targetContent);
-    expect(result.after).toMatchObject({ sha256: sha256(targetContent) });
-    expect(result.inverse).toEqual([{
-      type: 'asset.restore_content',
-      assetUrl: 'db://assets/ui/Dialog.prefab',
-      expectedAssetUuid: 'asset-a',
-      expectedCurrentSha256: sha256(targetContent),
-      content: 'current-content',
-      targetSha256: sha256('current-content')
-    }]);
-  });
-
-  it('asset.update_text 只替换唯一旧文本并生成整内容安全逆操作', async () => {
+  it('asset.update_text 只替换唯一旧文本并返回内容哈希证据', async () => {
     let content = 'export enum UIID {\n  Lobby,\n}\n';
     const beforeContent = content;
     const dependencies = createDependencies({
@@ -370,14 +307,6 @@ describe('executePrefabWriteOperation', () => {
 
     expect(content).toContain('CocosAiValidation');
     expect(result.after).toMatchObject({ sha256: sha256(content), matchCount: 1 });
-    expect(result.inverse).toEqual([{
-      type: 'asset.restore_content',
-      assetUrl: 'db://assets/script/GameUIConfig.ts',
-      expectedAssetUuid: 'game-ui-config',
-      expectedCurrentSha256: sha256(content),
-      content: beforeContent,
-      targetSha256: sha256(beforeContent)
-    }]);
   });
 
   it('asset.update_text 旧文本多处命中时零写入拒绝', async () => {
@@ -424,7 +353,6 @@ describe('executePrefabWriteOperation', () => {
     );
 
     expect(reverted).toBe('n1');
-    expect(result.inverse).toEqual([]);
     expect(result.before?.overrideCount).toBe(1);
   });
 
@@ -441,10 +369,9 @@ describe('executePrefabWriteOperation', () => {
     );
 
     expect(reset).toEqual({ uuid: 'n1', path: 'position' });
-    expect(result.inverse).toEqual([]);
   });
 
-  it('prefab.instance_override 精确写入实例覆盖并生成精确还原逆操作', async () => {
+  it('prefab.instance_override 精确写入实例覆盖并返回精确覆盖证据', async () => {
     let written: unknown = null;
     const dependencies = createDependencies({
       setPrefabInstanceOverride: async (...args) => {
@@ -471,11 +398,6 @@ describe('executePrefabWriteOperation', () => {
       'instance-root', 'label-component', 'string', '新标题'
     ]);
     expect(result.targetLocalIds).toEqual(['nested-instance', 'label-component']);
-    expect(result.inverse).toEqual([{
-      type: 'prefab.revert_override', instanceRootUuid: 'instance-root',
-      targetObjectUuid: 'label-component', targetNodePath: 'Root/Panel/Label',
-      propertyPath: 'string'
-    }]);
   });
 
   it('prefab.revert_override 带目标对象时精确移除目标属性覆盖', async () => {
@@ -499,11 +421,6 @@ describe('executePrefabWriteOperation', () => {
     expect(removed).toEqual(['instance-root', 'label-component', 'string']);
     expect(result.targetLocalIds).toEqual(['nested-instance', 'label-component']);
     expect(result.previousOverride).toEqual({ value: '新标题' });
-    expect(result.inverse).toEqual([{
-      type: 'prefab.instance_override', instanceRootUuid: 'instance-root',
-      targetObjectUuid: 'label-component', targetNodePath: 'Root/Panel/Label',
-      propertyPath: 'string', value: '新标题'
-    }]);
   });
 
   it('prefab.apply_to_source 非实例节点拒绝', async () => {
@@ -518,7 +435,7 @@ describe('executePrefabWriteOperation', () => {
     expect((error as ProbeError).code).toBe('PREFAB_INSTANCE_REQUIRED');
   });
 
-  it('prefab.apply_to_source 成功：走门面 applyPrefab 且逆操作为空', async () => {
+  it('prefab.apply_to_source 成功：走门面 applyPrefab 并返回前后证据', async () => {
     let applied: string | null = null;
     const dependencies = createDependencies({
       applyPrefabInstance: async (uuid) => {
@@ -531,11 +448,10 @@ describe('executePrefabWriteOperation', () => {
     );
 
     expect(applied).toBe('n1');
-    expect(result.inverse).toEqual([]);
     expect(result.before?.prefabAssetUuid).toBe('asset-1');
   });
 
-  it('prefab.unlink_instance 成功：解除关联且逆操作为重新关联', async () => {
+  it('prefab.unlink_instance 成功：解除关联并返回前后证据', async () => {
     let unlinked: string | null = null;
     const dependencies = createDependencies({
       unlinkPrefabInstance: async (uuid) => {
@@ -548,7 +464,6 @@ describe('executePrefabWriteOperation', () => {
     );
 
     expect(unlinked).toBe('n1');
-    expect(result.inverse).toEqual([{ type: 'prefab.link_instance', nodeUuid: 'n1', prefabAssetUuid: 'asset-1' }]);
   });
 
   it('prefab.link_instance 成功：关联后实例信息指向目标资产', async () => {
@@ -560,7 +475,6 @@ describe('executePrefabWriteOperation', () => {
       dependencies
     );
 
-    expect(result.inverse).toEqual([{ type: 'prefab.unlink_instance', instanceRootUuid: 'n1' }]);
     expect(result.after?.prefabAssetUuid).toBe('asset-1');
   });
 
@@ -598,7 +512,7 @@ describe('executePrefabWriteOperation', () => {
     expect((error as ProbeError).code).toBe('PREFAB_CYCLE');
   });
 
-  it('prefab.replace_source 成功：重新关联新源且逆操作为关联旧源', async () => {
+  it('prefab.replace_source 成功：重新关联新源并返回前后证据', async () => {
     let infoCalls = 0;
     const dependencies = createDependencies({
       getCurrentDocumentAssetUuid: async () => 'asset-doc',
@@ -616,7 +530,6 @@ describe('executePrefabWriteOperation', () => {
       dependencies
     );
 
-    expect(result.inverse).toEqual([{ type: 'prefab.replace_source', instanceRootUuid: 'n1', newPrefabAssetUuid: 'asset-1' }]);
     expect(result.after?.prefabAssetUuid).toBe('asset-2');
   });
 });

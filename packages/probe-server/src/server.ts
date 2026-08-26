@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join, resolve, sep } from 'node:path';
 import {
@@ -26,6 +26,7 @@ const BridgeHelloSchema = z.object({
     projectPath: z.string().min(1),
     creatorVersion: z.string().min(1),
     bridgeVersion: z.string().min(1),
+    bridgeBuildId: z.string().min(1).optional(),
     capabilities: z.array(z.string())
   })
 });
@@ -204,6 +205,8 @@ export interface ProbeServerOptions {
   runtimeDriver?: RuntimeDriver;
   /** 截图落盘根目录（默认 `<cwd>/reports/runtime-captures`）。 */
   captureRoot?: string;
+  /** 每个 Preview 会话保留的截图数量，默认 100。 */
+  captureFilesPerSession?: number;
   /** 可选 WebSocket Bearer Token；配置后 Bridge 和控制客户端都必须携带。 */
   sessionToken?: string;
 }
@@ -813,6 +816,16 @@ export class ProbeServer {
     const timestamp = new Date().toISOString().replace(/[^0-9]/g, '');
     const filePath = join(directory, `${timestamp}-${index}.png`);
     await writeFile(filePath, buffer);
+    const retention = Number.isInteger(this.options.captureFilesPerSession)
+      && (this.options.captureFilesPerSession as number) > 0
+      ? this.options.captureFilesPerSession as number
+      : 100;
+    const files = (await readdir(directory))
+      .filter((name) => name.endsWith('.png'))
+      .sort();
+    await Promise.all(files.slice(0, Math.max(0, files.length - retention)).map((name) => (
+      unlink(join(directory, name)).catch(() => undefined)
+    )));
     return filePath;
   }
 

@@ -2,13 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProbeError } from '../src/probe-errors.js';
 import {
   executeNodeWriteOperation,
-  executeNodeWriteOperations,
   type NodeInfo,
   type NodeWriterDependencies
 } from '../src/node-writer.js';
 
 describe('node.create', () => {
-  it('在指定父节点下创建节点并返回证据和逆操作', async () => {
+  it('在指定父节点下创建节点并返回证据', async () => {
     const dependencies = createDependencies();
     const result = await executeNodeWriteOperation(
       { type: 'node.create', parentNodeUuid: 'parent-1', name: 'TempNode', layer: 2, active: false },
@@ -25,7 +24,6 @@ describe('node.create', () => {
     expect(result.nodeUuid).toBe('new-node-1');
     expect(result.before).toBeNull();
     expect(result.after).toMatchObject({ name: 'TempNode', layer: 2, active: false });
-    expect(result.inverse).toEqual([{ type: 'node.delete', nodeUuid: 'new-node-1' }]);
   });
 
   it('父节点不存在时拒绝创建', async () => {
@@ -38,7 +36,7 @@ describe('node.create', () => {
 });
 
 describe('node.delete', () => {
-  it('删除节点并保留 before 证据，逆操作为空（只能依赖编辑器 Undo）', async () => {
+  it('删除节点并保留 before 证据', async () => {
     const dependencies = createDependencies();
     const result = await executeNodeWriteOperation(
       { type: 'node.delete', nodeUuid: 'node-1' },
@@ -47,7 +45,6 @@ describe('node.delete', () => {
 
     expect(result.before).toMatchObject({ uuid: 'node-1', name: 'NodeOne' });
     expect(result.after).toBeNull();
-    expect(result.inverse).toEqual([]);
     expect(dependencies.calls).toContain('removeNode:node-1');
   });
 
@@ -61,7 +58,7 @@ describe('node.delete', () => {
 });
 
 describe('node.rename', () => {
-  it('重命名并返回 before/after 证据，逆操作恢复旧名', async () => {
+  it('重命名并返回 before/after 证据', async () => {
     const dependencies = createDependencies();
     const result = await executeNodeWriteOperation(
       { type: 'node.rename', nodeUuid: 'node-1', name: 'Renamed' },
@@ -70,7 +67,6 @@ describe('node.rename', () => {
 
     expect(result.before).toMatchObject({ name: 'NodeOne' });
     expect(result.after).toMatchObject({ name: 'Renamed' });
-    expect(result.inverse).toEqual([{ type: 'node.rename', nodeUuid: 'node-1', name: 'NodeOne' }]);
   });
 });
 
@@ -85,7 +81,6 @@ describe('node.reparent', () => {
     expect(dependencies.calls).toContain('reparentNode:node-2:parent-2:0');
     expect(result.before).toMatchObject({ parentUuid: 'parent-1', stablePath: '/parent-1/node-2' });
     expect(result.after).toMatchObject({ parentUuid: 'parent-2', stablePath: '/parent-2/node-2' });
-    expect(result.inverse).toEqual([{ type: 'node.reparent', nodeUuid: 'node-2', newParentUuid: 'parent-1' }]);
   });
 
   it('禁止把父节点挂到自己子孙下形成环', async () => {
@@ -127,7 +122,6 @@ describe('node.duplicate', () => {
       'getNodeInfo:dup-node-1'
     ]);
     expect(result.nodeUuid).toBe('dup-node-1');
-    expect(result.inverse).toEqual([{ type: 'node.delete', nodeUuid: 'dup-node-1' }]);
   });
 
   it('复制后改名/移动失败时清理半成品副本再抛错', async () => {
@@ -144,7 +138,7 @@ describe('node.duplicate', () => {
 });
 
 describe('node.set_active / set_layer / set_transform', () => {
-  it('set_active 返回布尔 before/after 和逆操作', async () => {
+  it('set_active 返回布尔 before/after', async () => {
     const dependencies = createDependencies();
     const result = await executeNodeWriteOperation(
       { type: 'node.set_active', nodeUuid: 'node-1', active: false },
@@ -153,10 +147,9 @@ describe('node.set_active / set_layer / set_transform', () => {
 
     expect(result.before).toMatchObject({ active: true });
     expect(result.after).toMatchObject({ active: false });
-    expect(result.inverse).toEqual([{ type: 'node.set_active', nodeUuid: 'node-1', active: true }]);
   });
 
-  it('set_layer 返回层级 before/after 和逆操作', async () => {
+  it('set_layer 返回层级 before/after', async () => {
     const dependencies = createDependencies();
     const result = await executeNodeWriteOperation(
       { type: 'node.set_layer', nodeUuid: 'node-1', layer: 8 },
@@ -165,10 +158,9 @@ describe('node.set_active / set_layer / set_transform', () => {
 
     expect(result.before).toMatchObject({ layer: 1 });
     expect(result.after).toMatchObject({ layer: 8 });
-    expect(result.inverse).toEqual([{ type: 'node.set_layer', nodeUuid: 'node-1', layer: 1 }]);
   });
 
-  it('set_transform 只写提供的分量，逆操作恢复完整旧变换', async () => {
+  it('set_transform 只写提供的分量并返回前后值', async () => {
     const dependencies = createDependencies();
     const result = await executeNodeWriteOperation(
       { type: 'node.set_transform', nodeUuid: 'node-1', localTransform: { position: { x: 5, y: 6, z: 0 } } },
@@ -178,44 +170,6 @@ describe('node.set_active / set_layer / set_transform', () => {
     expect(dependencies.calls).toContain('setNodeTransform:node-1:{"position":{"x":5,"y":6,"z":0}}');
     expect(result.before).toMatchObject({ position: { x: 1, y: 2, z: 3 } });
     expect(result.after).toMatchObject({ position: { x: 5, y: 6, z: 0 } });
-    expect(result.inverse).toEqual([{
-      type: 'node.set_transform',
-      nodeUuid: 'node-1',
-      localTransform: {
-        position: { x: 1, y: 2, z: 3 },
-        rotation: { x: 0, y: 0, z: 0, w: 1 },
-        scale: { x: 1, y: 1, z: 1 }
-      }
-    }]);
-  });
-});
-
-describe('executeNodeWriteOperations 顺序执行', () => {
-  it('全部成功时按序返回每个操作结果', async () => {
-    const dependencies = createDependencies();
-    const results = await executeNodeWriteOperations([
-      { type: 'node.rename', nodeUuid: 'node-1', name: 'First' },
-      { type: 'node.set_active', nodeUuid: 'node-1', active: false }
-    ], dependencies);
-
-    expect(results).toHaveLength(2);
-    expect(results[0].after).toMatchObject({ name: 'First' });
-    expect(results[1].after).toMatchObject({ active: false });
-  });
-
-  it('中途失败时错误携带 operationIndex 和已完成操作的逆操作', async () => {
-    const dependencies = createDependencies();
-    const error = await executeNodeWriteOperations([
-      { type: 'node.rename', nodeUuid: 'node-1', name: 'First' },
-      { type: 'node.rename', nodeUuid: 'missing', name: 'Second' }
-    ], dependencies).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(ProbeError);
-    expect((error as ProbeError).code).toBe('NODE_NOT_FOUND');
-    expect((error as ProbeError).details.operationIndex).toBe(1);
-    expect((error as ProbeError).details.completedInverse).toEqual([
-      [{ type: 'node.rename', nodeUuid: 'node-1', name: 'NodeOne' }]
-    ]);
   });
 });
 

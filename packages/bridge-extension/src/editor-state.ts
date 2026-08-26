@@ -27,6 +27,7 @@ export interface BridgeEditorState {
   projectId: string;
   creatorVersion: string;
   bridgeVersion: string;
+  bridgeBuildId: string;
 }
 
 export function buildBridgeHello(state: BridgeEditorState) {
@@ -38,6 +39,7 @@ export function buildBridgeHello(state: BridgeEditorState) {
       projectPath: state.projectPath,
       creatorVersion: state.creatorVersion,
       bridgeVersion: state.bridgeVersion,
+      bridgeBuildId: state.bridgeBuildId,
       capabilities: [...BRIDGE_CAPABILITIES]
     }
   };

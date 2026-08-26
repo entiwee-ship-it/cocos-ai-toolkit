@@ -9,13 +9,15 @@ describe('buildBridgeHello', () => {
       projectPath: 'E:/project',
       projectId: 'project-uuid',
       creatorVersion: '3.8.8',
-      bridgeVersion: '0.1.0'
+      bridgeVersion: '0.1.0',
+      bridgeBuildId: 'sha256:bridge-build'
     });
 
     expect(hello.method).toBe('bridge.hello');
     expect(hello.payload.editorInstanceId).toBe('project-uuid:123');
     expect(hello.payload.projectPath).toBe('E:/project');
     expect(hello.payload.creatorVersion).toBe('3.8.8');
+    expect(hello.payload.bridgeBuildId).toBe('sha256:bridge-build');
     expect(hello.payload.capabilities).toEqual([...BRIDGE_CAPABILITIES]);
     expect(BRIDGE_CAPABILITIES).toContain('probe.directWrite');
     expect(BRIDGE_CAPABILITIES).toContain('probe.saveDocument');

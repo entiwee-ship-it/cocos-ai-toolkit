@@ -183,14 +183,6 @@ export const WriteOperationSchema = z.discriminatedUnion('type', [
       context.addIssue({ code: 'custom', message: '文本替换的新旧内容不能相同' });
     }
   }),
-  z.object({
-    type: z.literal('asset.restore_content'),
-    assetUrl: z.string().min(1),
-    expectedAssetUuid: z.string().min(1),
-    expectedCurrentSha256: z.string().regex(/^[0-9a-f]{64}$/),
-    content: z.string().min(1),
-    targetSha256: z.string().regex(/^[0-9a-f]{64}$/)
-  }),
   // 阶段三预制体语义操作：实例化、生成、还原覆盖、应用到源、替换源、解除与重新关联。
   z.object({
     type: z.literal('prefab.instantiate'),

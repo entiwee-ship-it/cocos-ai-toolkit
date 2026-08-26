@@ -2,7 +2,7 @@
   "package_version": 2,
   "name": "cocos-ai-bridge",
   "title": "Cocos AI Bridge",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Cocos Creator 3.8.x editor bridge for the Cocos AI probe server",
   "author": "李威-Enti",
   "date": "2026-07-17",
@@ -12,7 +12,8 @@
   "main": "./dist/main.js",
   "editor": ">=3.8.0 <3.9.0",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.json && node ../../scripts/write-bridge-build-info.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },

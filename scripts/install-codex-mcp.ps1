@@ -1,6 +1,6 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$ToolkitPath = '',
+    [string]$ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0',
     [string]$ProbeUrl = 'ws://127.0.0.1:32188',
     [string]$ReportRoot = '',
     [string]$NodePath = '',
@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $ToolkitPath) { $ToolkitPath = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path }
+if (-not $ToolkitPath) { $ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0' }
 $ToolkitPath = [IO.Path]::GetFullPath($ToolkitPath)
 if (-not (Test-Path -LiteralPath $ToolkitPath -PathType Container)) {
     throw "工具仓库不存在: $ToolkitPath"

@@ -1,7 +1,7 @@
 import { BridgeClient, type BridgeLifecycleEvent } from './bridge-client';
+import { readBridgeBuildId } from './bridge-build-info';
 import { buildBridgeHello, probeEditorState } from './editor-state';
 import type { CreatorDocumentIdentity } from './creator-document-identity';
-import { debugEditorMessage } from './debug-editor-message';
 import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
 import { ProbeError } from './probe-errors';
 import { probeAssets } from './asset-probe';
@@ -9,7 +9,8 @@ import { probeAssetIndex } from './asset-index';
 import { importAsset } from './import-asset';
 import { createProbeServerBootstrap, type ProbeBootstrapResult } from './probe-bootstrap';
 
-const BRIDGE_VERSION = '0.3.1';
+const BRIDGE_VERSION = '0.4.0';
+const BRIDGE_BUILD_ID = readBridgeBuildId(__dirname);
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
 const BRIDGE_LIFECYCLE_LOG_NAMES: Record<BridgeLifecycleEvent['type'], string> = {
@@ -60,9 +61,6 @@ export function load(): void {
       'probe.createPrefab': (payload) => forwardToScene('createPrefabFromNode', payload),
       'probe.deleteAsset': (payload) => forwardToScene('deleteAsset', payload),
       'probe.refreshAsset': (payload) => forwardToScene('refreshAsset', payload),
-      'probe.debugPrefabLifecycle': (payload) => forwardToScene('debugPrefabLifecycle', payload),
-      'probe.debugPrefabFacade': (payload) => forwardToScene('debugPrefabFacade', payload),
-      'probe.debugEditorMessage': (payload) => debugEditorMessage(payload as Record<string, unknown>),
       'probe.previewOpen': () => openPreviewServer(editorPreviewMessageSource, nodeHttpPreviewProbe),
       'probe.previewStatus': () => readPreviewStatus(editorPreviewMessageSource),
       'probe.previewReload': () => reloadPreviewPages(editorPreviewMessageSource),
@@ -73,6 +71,7 @@ export function load(): void {
   };
   logBridgeLifecycle('扩展开始加载', {
     扩展版本: BRIDGE_VERSION,
+    构建指纹: BRIDGE_BUILD_ID,
     Creator版本: creatorVersion,
     项目ID: projectId,
     项目路径: projectPath,
@@ -95,7 +94,8 @@ export function load(): void {
       projectPath,
       projectId,
       creatorVersion,
-      bridgeVersion: BRIDGE_VERSION
+      bridgeVersion: BRIDGE_VERSION,
+      bridgeBuildId: BRIDGE_BUILD_ID
     }),
     handlers,
     onLifecycleEvent: (event) => {
