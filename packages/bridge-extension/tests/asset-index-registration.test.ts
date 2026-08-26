@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { probeAssetIndex } from '../src/asset-index';
-import { BRIDGE_CAPABILITIES } from '../src/editor-state';
+import { BRIDGE_CAPABILITIES } from '../src/bridge-state';
 
 const originalEditorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Editor');
 

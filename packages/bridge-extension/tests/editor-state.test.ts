@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BRIDGE_CAPABILITIES, buildBridgeHello } from '../src/editor-state.js';
+import { BRIDGE_CAPABILITIES, buildBridgeHello } from '../src/bridge-state.js';
 import { normalizeAssetInfo } from '../src/asset-probe.js';
 
 describe('buildBridgeHello', () => {

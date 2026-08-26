@@ -1,6 +1,6 @@
 import Module from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { probeEditorState } from '../src/editor-state';
+import { probeEditorState } from '../src/bridge-state';
 import { methods } from '../src/main';
 
 const originalEditorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Editor');

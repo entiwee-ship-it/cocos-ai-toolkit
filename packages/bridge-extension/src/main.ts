@@ -1,6 +1,6 @@
 import { BridgeClient, type BridgeLifecycleEvent } from './bridge-client';
 import { readBridgeBuildId } from './bridge-build-info';
-import { buildBridgeHello, probeEditorState } from './editor-state';
+import { buildBridgeHello, probeEditorState } from './bridge-state';
 import type { CreatorDocumentIdentity } from './creator-document-identity';
 import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
 import { ProbeError } from './probe-errors';
