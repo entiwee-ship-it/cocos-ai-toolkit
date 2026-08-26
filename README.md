@@ -152,6 +152,16 @@ AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-works
 npm run smoke:creator -- --project-path E:/xile-workspace/worktrees/xy-client-cocos-ai-probe
 ```
 
+需要验证编辑态 Prefab 实例化时，可在一次性隔离 Worktree 中追加目标/源 Prefab UUID。脚本会实例化、显式重开验证关联、删除探针节点，并比较调用前后的 Git 状态与完整 tracked diff：
+
+```powershell
+npm run smoke:creator -- `
+  --project-path E:/xile-workspace/worktrees/xy-client-cocos-ai-prefab-probe `
+  --target-prefab-uuid <承载探针的 Prefab UUID> `
+  --instantiate-prefab-uuid <待实例化的 Prefab UUID> `
+  --instance-name CocosAiPrefabSmoke
+```
+
 ## 安装 AI 使用技能
 
 仓库自带一份使用技能（`skills/cocos-ai-toolkit/SKILL.md`），告诉 AI 各工具什么时候用、写入纪律和排障方法：
