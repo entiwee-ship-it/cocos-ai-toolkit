@@ -873,15 +873,17 @@ function unpackSnapshot(options: {
         relativePath: '',
         name: 'Panel',
         componentTypes: options.rootComponentTypes ?? ['cc.UITransform'],
-        prefabAssetUuid: options.currentUnlinked || options.completeUnlinked ? null : 'asset-panel',
-        instanceFileId: options.currentUnlinked || options.completeUnlinked ? null : 'instance-file-id'
+        prefabAssetUuid: options.currentUnlinked || options.completeUnlinked ? 'host-asset' : 'asset-panel',
+        instanceFileId: options.currentUnlinked || options.completeUnlinked ? null : 'instance-file-id',
+        isNested: !(options.currentUnlinked || options.completeUnlinked)
       },
       {
         relativePath: '0',
         name: 'Nested',
         componentTypes: ['cc.Sprite'],
-        prefabAssetUuid: options.completeUnlinked ? null : 'asset-nested',
-        instanceFileId: options.completeUnlinked ? null : 'nested-instance-file-id'
+        prefabAssetUuid: options.completeUnlinked ? 'host-asset' : 'asset-nested',
+        instanceFileId: options.completeUnlinked ? null : 'nested-instance-file-id',
+        isNested: !options.completeUnlinked
       }
     ]
   } as never;

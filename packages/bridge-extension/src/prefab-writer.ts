@@ -41,6 +41,7 @@ export interface PrefabSubtreeSnapshot {
     componentTypes: string[];
     prefabAssetUuid: string | null;
     instanceFileId: string | null;
+    isNested: boolean | null;
   }>;
 }
 

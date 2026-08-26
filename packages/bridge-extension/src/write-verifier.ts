@@ -402,7 +402,7 @@ async function verifyOperationUnsafe(
       return build(
         analysis.expected,
         actual,
-        resolved !== null && resolved.info.prefabAssetUuid === null && analysis.passed
+        resolved !== null && analysis.passed
       );
     }
     case 'prefab.link_instance': {
@@ -564,7 +564,8 @@ function readPrefabSubtreeSnapshot(value: unknown): PrefabSubtreeSnapshot | null
       name: entry.name,
       componentTypes: entry.componentTypes as string[],
       prefabAssetUuid: readOptionalString(entry.prefabAssetUuid),
-      instanceFileId: readOptionalString(entry.instanceFileId)
+      instanceFileId: readOptionalString(entry.instanceFileId),
+      isNested: typeof entry.isNested === 'boolean' ? entry.isNested : null
     });
   }
   return { rootStablePath: record.rootStablePath, nodes };
@@ -587,26 +588,33 @@ function analyzePrefabUnpack(
     const current = actualByPath.get(node.relativePath);
     return Boolean(current && arraysEqual(node.componentTypes, current.componentTypes));
   });
-  const oldAssociationRemoved = actual !== null
-    && actualNodes.every((node) => node.prefabAssetUuid !== expectedPrefabAssetUuid);
+  const oldAssociationRemoved = actual !== null && actualNodes.every((node) => !(
+    node.isNested === true && node.prefabAssetUuid === expectedPrefabAssetUuid
+  ));
   const nestedAssociations = beforeNodes.filter((node) => (
-    node.prefabAssetUuid !== null && node.prefabAssetUuid !== expectedPrefabAssetUuid
+    node.isNested === true
+    && node.prefabAssetUuid !== null
+    && node.prefabAssetUuid !== expectedPrefabAssetUuid
   ));
   const nestedAssociationsPreserved = actual !== null && nestedAssociations.every((node) => (
-    actualByPath.get(node.relativePath)?.prefabAssetUuid === node.prefabAssetUuid
+    actualByPath.get(node.relativePath)?.isNested === true
+    && actualByPath.get(node.relativePath)?.prefabAssetUuid === node.prefabAssetUuid
   ));
   const allAssociationsRemoved = actual !== null
-    && actualNodes.every((node) => node.prefabAssetUuid === null);
+    && actualNodes.every((node) => node.isNested !== true);
+  const nestedAssetUuids = [...new Set(
+    nestedAssociations
+      .map((node) => node.prefabAssetUuid)
+      .filter((assetUuid): assetUuid is string => assetUuid !== null)
+  )].sort();
   return {
     expected: {
       mode: removeNested ? 'complete' : 'current',
       oldPrefabAssetUuid: expectedPrefabAssetUuid,
       subtreeNodeCount: beforeNodes.length,
       preserveComponents: true,
-      nestedAssociations: nestedAssociations.map((node) => ({
-        relativePath: node.relativePath,
-        prefabAssetUuid: node.prefabAssetUuid
-      }))
+      nestedAssociationCount: nestedAssociations.length,
+      nestedAssetUuids
     },
     actual: {
       subtreeNodeCount: actualNodes.length,
@@ -614,7 +622,8 @@ function analyzePrefabUnpack(
       componentsPreserved,
       oldAssociationRemoved,
       nestedAssociationsPreserved,
-      allAssociationsRemoved
+      allAssociationsRemoved,
+      remainingNestedAssociationCount: actualNodes.filter((node) => node.isNested === true).length
     },
     passed: subtreePreserved
       && componentsPreserved
