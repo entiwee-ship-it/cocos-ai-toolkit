@@ -7,6 +7,7 @@ import { ProbeError } from './probe-errors';
 import { probeAssets } from './asset-probe';
 import { probeAssetIndex } from './asset-index';
 import { importAsset } from './import-asset';
+import { createProbeServerBootstrap, type ProbeBootstrapResult } from './probe-bootstrap';
 
 const BRIDGE_VERSION = '0.3.1';
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
@@ -80,7 +81,13 @@ export function load(): void {
     能力数量: Object.keys(handlers).length
   });
 
-  client = new BridgeClient({
+  const bootstrap = createProbeServerBootstrap({
+    url: probeUrl,
+    bridgeDistDirectory: __dirname,
+    nodePath: process.env.COCOS_AI_NODE_PATH
+  });
+  let bridgeClient: BridgeClient;
+  bridgeClient = new BridgeClient({
     url: probeUrl,
     sessionToken: process.env.COCOS_AI_SESSION_TOKEN,
     hello: () => buildBridgeHello({
@@ -91,9 +98,16 @@ export function load(): void {
       bridgeVersion: BRIDGE_VERSION
     }),
     handlers,
-    onLifecycleEvent: logBridgeClientLifecycle
+    onLifecycleEvent: (event) => {
+      logBridgeClientLifecycle(event);
+      if (event.type === 'disconnected' && client === bridgeClient) {
+        void ensureProbeServer(bootstrap);
+      }
+    }
   });
-  client.connect();
+  client = bridgeClient;
+  bridgeClient.connect();
+  void ensureProbeServer(bootstrap);
 }
 
 export function unload(): void {
@@ -133,6 +147,19 @@ function logBridgeLifecycle(eventName: string, details: Record<string, unknown>)
     // Creator 日志 API 不可用时继续回退到进程控制台。
   }
   console.log(message);
+}
+
+async function ensureProbeServer(
+  bootstrap: { ensureRunning(): Promise<ProbeBootstrapResult> }
+): Promise<void> {
+  try {
+    const result = await bootstrap.ensureRunning();
+    logBridgeLifecycle('探针服务自检完成', { 结果: result });
+  } catch (error) {
+    logBridgeLifecycle('探针服务自动启动失败', {
+      原因: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 /**

@@ -52,7 +52,9 @@ Bridge 使用 Junction 指向运行时 Worktree 的 `packages/bridge-extension`�
 
 ## 启动 Probe Server
 
-在独立终端运行：
+Bridge Extension 加载时会先探测 loopback Probe Server；服务不存在时，Bridge 会从同一 Toolkit 检出自动启动 `packages/probe-server/dist/run.js`，连接断开后也会再次探测并拉起。Node 默认从 Creator 进程的 `PATH` 查找，可用 `COCOS_AI_NODE_PATH` 指定绝对路径。
+
+手工诊断或不启动 Creator 时，仍可在独立终端运行：
 
 ```powershell
 & scripts/start-probe-server.ps1 -Port 32188 -ReportRoot 'reports'
