@@ -91,6 +91,57 @@ describe('saveAndVerifyDirectWrite', () => {
     expect(report.items[0]).toMatchObject({ expected: '节点存在', actual: '节点存在', passed: true });
   });
 
+  it('prefab.instantiate 保存重开后按稳定路径重定位并保留实例关联', async () => {
+    const dependencies = createDependencies();
+    dependencies.getPrefabInstanceInfo = async (nodeUuid) => nodeUuid === 'avatar-reloaded'
+      ? prefabInfo({
+          nodeUuid,
+          name: 'Avatar',
+          stablePath: '/Scene~0/Panel~0/Avatar~0',
+          prefabAssetUuid: 'avatar-prefab',
+          instanceFileId: 'avatar-instance'
+        })
+      : null;
+    dependencies.getNodeInfoByStablePath = async (stablePath) => (
+      stablePath === '/Scene~0/Panel~0/Avatar~0' ? { uuid: 'avatar-reloaded' } : null
+    );
+
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [{
+      operation: {
+        type: 'prefab.instantiate',
+        prefabAssetUuid: 'avatar-prefab',
+        parentNodeUuid: 'panel-old',
+        name: 'Avatar',
+        resultNodeUuid: 'avatar-created',
+        resultNodeStablePath: '/Scene~0/Panel~0/Avatar~0',
+        resultPrefabAssetUuid: 'avatar-prefab',
+        resultPrefabInstanceFileId: 'avatar-instance'
+      },
+      nodeUuid: 'avatar-created',
+      assetUuid: null,
+      before: null,
+      after: prefabInfo({
+        nodeUuid: 'avatar-created',
+        name: 'Avatar',
+        stablePath: '/Scene~0/Panel~0/Avatar~0',
+        prefabAssetUuid: 'avatar-prefab',
+        instanceFileId: 'avatar-instance'
+      })
+    } as never], dependencies);
+
+    expect(dependencies.calls).toEqual(['saveDocument', 'reloadDocument']);
+    expect(report.passed).toBe(true);
+    expect(report.items[0]).toMatchObject({
+      passed: true,
+      actual: {
+        nodeUuid: 'avatar-reloaded',
+        stablePath: '/Scene~0/Panel~0/Avatar~0',
+        prefabAssetUuid: 'avatar-prefab',
+        instanceFileId: 'avatar-instance'
+      }
+    });
+  });
+
   it('component.add 复用现有组件时作为 no-op 验证且不触发保存', async () => {
     const dependencies = createDependencies();
     const report = await saveAndVerifyDirectWrite(

@@ -13,6 +13,7 @@ function createInstanceInfo(overrides: Partial<PrefabInstanceInfo> = {}): Prefab
   return {
     nodeUuid: 'n-new',
     name: 'healthDialog',
+    stablePath: '/Scene~0/healthDialog~0',
     prefabAssetUuid: 'asset-1',
     sourceObjectFileId: 'file-1',
     instanceFileId: 'inst-1',
@@ -118,7 +119,12 @@ describe('executePrefabWriteOperation', () => {
 
     expect(result.nodeUuid).toBe('n-new');
     expect(result.before).toBeNull();
-    expect(result.after).toMatchObject({ prefabAssetUuid: 'asset-1', instanceFileId: 'inst-1', state: 2 });
+    expect(result.after).toMatchObject({
+      stablePath: '/Scene~0/healthDialog~0',
+      prefabAssetUuid: 'asset-1',
+      instanceFileId: 'inst-1',
+      state: 2
+    });
   });
 
   it('prefab.instantiate 实例信息未建立（缺 instanceFileId）时报错', async () => {

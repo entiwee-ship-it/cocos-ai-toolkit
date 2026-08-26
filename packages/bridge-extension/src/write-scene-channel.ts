@@ -27,8 +27,8 @@ export type WriteSceneExecutionOutcome = WriteExecutionOutcome & {
 };
 
 /**
- * 在事务上下文内按序执行混合写操作，并保留逐操作证据（含逆操作）。
- * 失败即停：返回 operation-failed，已执行操作的证据照常带回，供回滚编排。
+ * 按序执行混合写操作并保留逐操作证据。
+ * 失败即停：返回 operation-failed，已执行操作的证据照常带回，供调用方重读当前状态。
  *
  * @param input 写操作序列和保存开关。
  * @param dependencies Scene 侧写通道依赖。

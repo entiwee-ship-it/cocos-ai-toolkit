@@ -35,11 +35,11 @@
 
 - 节点：`cocos_node_create`、`cocos_node_rename`、`cocos_node_set_transform`、`cocos_node_reparent`、`cocos_node_delete`
 - 组件：`cocos_component_add`、`cocos_component_set_property`
-- Prefab：`cocos_prefab_create`、`cocos_prefab_rename`、`cocos_prefab_delete`
+- Prefab：`cocos_prefab_instantiate`、`cocos_prefab_create`、`cocos_prefab_rename`、`cocos_prefab_delete`
 - 文档与资源：`cocos_document_save`、`cocos_asset_import`、`cocos_asset_refresh`
 - 多操作：`cocos_batch_write`，只接受 `node.*` 和 `component.*`；它只减少往返，不提供原子提交或回滚。
 
-Prefab 重命名使用 `uuid + newName`，只修改原目录内文件名。Creator AssetDB 会拒绝覆盖已有目标，并验证移动后 UUID 不变。
+Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读取返回的 `nodeUuid`、`instanceFileId` 和 `stablePath`；不要从创建瞬间缓存 UUID。Prefab 重命名使用 `uuid + newName`，只修改原目录内文件名。Creator AssetDB 会拒绝覆盖已有目标，并验证移动后 UUID 不变。
 
 ## 4. Preview 与运行态验证
 

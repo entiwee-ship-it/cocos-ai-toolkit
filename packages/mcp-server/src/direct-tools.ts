@@ -92,6 +92,7 @@ export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_node_delete',
   'cocos_component_add',
   'cocos_component_set_property',
+  'cocos_prefab_instantiate',
   'cocos_prefab_create',
   'cocos_prefab_rename',
   'cocos_document_save',
@@ -303,6 +304,59 @@ export class CocosDirectToolService {
       ...(input.expectedOldValue !== undefined ? { expectedOldValue: input.expectedOldValue } : {})
     };
     return this.directWrite(editor, [operation]);
+  }
+
+  /** 在父节点下实例化 Prefab，并返回保存重开后的稳定实例身份。 */
+  async instantiatePrefab(input: ProjectSelector & {
+    prefabUuid: string;
+    parentUuid?: string;
+    parentPath?: string;
+    name?: string;
+  }) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    const parentNodeUuid = await this.resolveNodeUuid(
+      editor,
+      { nodeUuid: input.parentUuid, path: input.parentPath },
+      'parent'
+    );
+    const result = await this.directWrite(editor, [{
+      type: 'prefab.instantiate' as const,
+      prefabAssetUuid: input.prefabUuid,
+      parentNodeUuid,
+      ...(input.name ? { name: input.name } : {})
+    }]);
+    const verification = result.outcome.verification;
+    const verificationItem = verification?.items.find((item) => item.operationIndex === 0);
+    const actual = asRecord(verificationItem?.actual);
+    const evidence = Array.isArray(result.outcome.evidence)
+      ? asRecord(result.outcome.evidence[0])
+      : {};
+    const enrichedOperation = asRecord(evidence.operation);
+    const nodeUuid = readNonEmptyString(actual.nodeUuid)
+      ?? readNonEmptyString(enrichedOperation.resultNodeUuid);
+    const prefabAssetUuid = readNonEmptyString(actual.prefabAssetUuid)
+      ?? readNonEmptyString(enrichedOperation.resultPrefabAssetUuid);
+    const instanceFileId = readNonEmptyString(actual.instanceFileId)
+      ?? readNonEmptyString(enrichedOperation.resultPrefabInstanceFileId);
+    const stablePath = readNonEmptyString(actual.stablePath)
+      ?? readNonEmptyString(enrichedOperation.resultNodeStablePath);
+    if (!nodeUuid || prefabAssetUuid !== input.prefabUuid || !instanceFileId || !stablePath || !verification) {
+      throw new Error(`PREFAB_INSTANTIATE_RESULT_INVALID:${JSON.stringify({
+        nodeUuid,
+        prefabAssetUuid,
+        instanceFileId,
+        stablePath,
+        verification: verification ?? null
+      })}`);
+    }
+    return {
+      ...result,
+      nodeUuid,
+      prefabAssetUuid,
+      instanceFileId,
+      stablePath,
+      verification
+    };
   }
 
   /** 将现有节点迁移到新父节点，保留节点 UUID，可选指定兄弟顺序。 */
@@ -650,6 +704,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null;
 }
 
 const RAW_VALUE_FIELDS = new Set(['currentValue', 'defaultValue', 'value', 'expectedOldValue']);
@@ -1177,6 +1235,19 @@ export function registerCocosDirectWriteTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(await service.setComponentProperty(input)));
+
+  server.registerTool('cocos_prefab_instantiate', {
+    description: '在父节点下实例化 Prefab 并保存重开验证；parentUuid 或 parentPath 二选一，unknown 时先重读当前文档且不要重试。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      prefabUuid: z.string().min(1),
+      parentUuid: z.string().min(1).optional(),
+      parentPath: z.string().min(1).optional(),
+      name: z.string().min(1).optional()
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(await service.instantiatePrefab(input)));
 
   server.registerTool('cocos_prefab_create', {
     description: '把当前文档中的节点生成为 Prefab 资产；ASSET_ALREADY_EXISTS 时换 URL。',

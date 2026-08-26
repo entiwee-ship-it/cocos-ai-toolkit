@@ -307,6 +307,7 @@ describe('直写档工具注册', () => {
       'cocos_node_reparent',
       'cocos_component_add',
       'cocos_component_set_property',
+      'cocos_prefab_instantiate',
       'cocos_prefab_create',
       'cocos_prefab_rename',
       'cocos_document_save',
@@ -350,6 +351,7 @@ describe('直写档工具注册', () => {
       'cocos_node_reparent',
       'cocos_component_add',
       'cocos_component_set_property',
+      'cocos_prefab_instantiate',
       'cocos_prefab_create',
       'cocos_prefab_rename',
       'cocos_document_save',
@@ -752,6 +754,146 @@ describe('直写档写工具', () => {
     expect(JSON.stringify(result.content)).toContain('NODE_NOT_FOUND');
   });
 
+  it('cocos_prefab_instantiate 按 parentPath 直写并返回重开后的稳定实例证据', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.directWrite': {
+        kind: 'success',
+        executedOps: 1,
+        verification: {
+          passed: true,
+          verifiedAt: '2026-08-26T00:00:00.000Z',
+          items: [{
+            operationIndex: 0,
+            description: '实例化 Prefab avatar-prefab',
+            expected: '实例已建立且源资产一致',
+            actual: {
+              nodeUuid: 'avatar-node-reloaded',
+              stablePath: '/Root~0/Panel~0/Avatar~0',
+              prefabAssetUuid: 'avatar-prefab',
+              instanceFileId: 'avatar-instance'
+            },
+            passed: true
+          }]
+        },
+        evidence: [{
+          operation: {
+            type: 'prefab.instantiate',
+            prefabAssetUuid: 'avatar-prefab',
+            parentNodeUuid: 'panel-uuid',
+            name: 'Avatar',
+            resultNodeUuid: 'avatar-node-created',
+            resultNodeStablePath: '/Root~0/Panel~0/Avatar~0',
+            resultPrefabAssetUuid: 'avatar-prefab',
+            resultPrefabInstanceFileId: 'avatar-instance'
+          }
+        }]
+      }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_instantiate',
+      arguments: {
+        projectId: 'proj1',
+        prefabUuid: 'avatar-prefab',
+        parentPath: 'Root/Panel',
+        name: 'Avatar'
+      }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      nodeUuid: 'avatar-node-reloaded',
+      prefabAssetUuid: 'avatar-prefab',
+      instanceFileId: 'avatar-instance',
+      stablePath: '/Root~0/Panel~0/Avatar~0',
+      verification: { passed: true }
+    });
+    const write = probeClient.requests.at(-1);
+    expect(write?.method).toBe('probe.directWrite');
+    const payload = write?.payload as {
+      params: { operations: Array<Record<string, unknown>>; save: boolean };
+    };
+    expect(payload.params).toEqual({
+      operations: [{
+        type: 'prefab.instantiate',
+        prefabAssetUuid: 'avatar-prefab',
+        parentNodeUuid: 'panel-uuid',
+        name: 'Avatar'
+      }],
+      save: true
+    });
+  });
+
+  it('cocos_prefab_instantiate 保留 Bridge 的资产和父节点结构化错误', async () => {
+    for (const code of [
+      'PREFAB_ASSET_NOT_FOUND',
+      'PREFAB_ASSET_TYPE_MISMATCH',
+      'NODE_NOT_FOUND'
+    ]) {
+      const probeClient = new RecordingProbeClient(createRespond({
+        'probe.directWrite': {
+          kind: 'operation-failed',
+          executedOps: 0,
+          failure: { code, message: code, operationIndex: 0 }
+        }
+      }));
+      const { client } = await createHarness(probeClient, { enableWrites: true });
+
+      const result = await client.callTool({
+        name: 'cocos_prefab_instantiate',
+        arguments: { projectId: 'proj1', prefabUuid: 'avatar-prefab', parentUuid: 'panel-uuid' }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain(code);
+    }
+  });
+
+  it('cocos_prefab_instantiate 对 unknown 和 verify-fail 都失败且不包装成成功', async () => {
+    const outcomes = [
+      {
+        kind: 'unknown',
+        executedOps: 1,
+        failure: {
+          code: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+          message: 'DIRECT_WRITE_VERIFICATION_UNKNOWN',
+          operationIndex: null,
+          stage: 'unknown'
+        }
+      },
+      {
+        kind: 'success',
+        executedOps: 1,
+        verification: {
+          passed: false,
+          verifiedAt: '2026-08-26T00:00:00.000Z',
+          items: [{
+            operationIndex: 0,
+            description: '实例化 Prefab avatar-prefab',
+            expected: '实例已建立且源资产一致',
+            actual: null,
+            passed: false
+          }]
+        }
+      }
+    ];
+
+    for (const [index, outcome] of outcomes.entries()) {
+      const probeClient = new RecordingProbeClient(createRespond({ 'probe.directWrite': outcome }));
+      const { client } = await createHarness(probeClient, { enableWrites: true });
+
+      const result = await client.callTool({
+        name: 'cocos_prefab_instantiate',
+        arguments: { projectId: 'proj1', prefabUuid: 'avatar-prefab', parentUuid: 'panel-uuid' }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain(
+        index === 0 ? 'DIRECT_WRITE_OUTCOME_UNKNOWN' : 'DIRECT_WRITE_VERIFY_FAILED'
+      );
+    }
+  });
+
   it('cocos_node_delete 直写 node.delete', async () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const { client } = await createHarness(probeClient, { enableWrites: true });
@@ -825,6 +967,12 @@ describe('直写档写工具', () => {
       {
         name: 'cocos_node_create',
         arguments: { parentUuid: 'root-uuid', parentPath: 'Root', name: 'Child' }
+      },
+      {
+        name: 'cocos_prefab_instantiate',
+        arguments: {
+          prefabUuid: 'avatar-prefab', parentUuid: 'root-uuid', parentPath: 'Root', name: 'Avatar'
+        }
       },
       {
         name: 'cocos_prefab_create',

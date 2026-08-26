@@ -370,7 +370,7 @@ async function instantiatePrefab(
   const nodeUuid = await dependencies.instantiatePrefab(operation.parentNodeUuid, operation.prefabAssetUuid, operation.name);
   const after = await dependencies.getPrefabInstanceInfo(nodeUuid);
   if (!after || !after.instanceFileId || after.prefabAssetUuid !== operation.prefabAssetUuid) {
-    // 实例信息未正确建立时必须报错，由事务回滚兜底，避免半实例状态外流。
+    // 实例关系未建立时立即失败；调用方必须先重读当前文档，不能把半实例状态当成成功。
     throw new ProbeError('PREFAB_INSTANCE_NOT_ESTABLISHED', {
       nodeUuid,
       expectedAssetUuid: operation.prefabAssetUuid,
