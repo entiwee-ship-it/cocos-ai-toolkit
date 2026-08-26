@@ -153,6 +153,35 @@ function Start-ProbeRuntime {
     }
 }
 
+function Start-OrAdoptProbeRuntime {
+    param(
+        [string]$Worktree,
+        [string]$NodePath,
+        [string]$ProbeEntry,
+        [string]$CliEntry,
+        [int]$Port,
+        [string]$ReportRoot
+    )
+    $existing = Get-ProbeListener -Port $Port
+    if ($existing) {
+        Assert-ProbeListener -Listener $existing -ExpectedEntry $ProbeEntry -Port $Port
+        Invoke-Native -FilePath $NodePath -NativeArgs @($CliEntry, 'editors') | Out-Null
+        return [pscustomobject]@{ Id = $existing.ProcessId }
+    }
+    try {
+        return Start-ProbeRuntime -Worktree $Worktree -NodePath $NodePath -ProbeEntry $ProbeEntry `
+            -CliEntry $CliEntry -Port $Port -ReportRoot $ReportRoot
+    } catch {
+        $startFailure = $_.Exception.Message
+        $existing = Get-ProbeListener -Port $Port
+        if (-not $existing) { throw }
+        Assert-ProbeListener -Listener $existing -ExpectedEntry $ProbeEntry -Port $Port
+        Invoke-Native -FilePath $NodePath -NativeArgs @($CliEntry, 'editors') | Out-Null
+        Write-Output "  Bridge 已抢先拉起同源 Probe，更新脚本接管 PID $($existing.ProcessId)：$startFailure"
+        return [pscustomobject]@{ Id = $existing.ProcessId }
+    }
+}
+
 # ---------- 1. 校验运行时 Worktree ----------
 $script:Worktree = [IO.Path]::GetFullPath($RuntimeWorktree)
 if (-not (Test-Path -LiteralPath $script:Worktree -PathType Container)) {
@@ -228,7 +257,7 @@ try {
             $oldProbeStopped = $true
             Write-Output "    已停止旧进程 PID $($listener.ProcessId)"
         }
-        $newProbe = Start-ProbeRuntime -Worktree $script:Worktree -NodePath $node -ProbeEntry $probeEntry `
+        $newProbe = Start-OrAdoptProbeRuntime -Worktree $script:Worktree -NodePath $node -ProbeEntry $probeEntry `
             -CliEntry $cliEntry -Port $Port -ReportRoot $reportRoot
         Write-Output "    Probe Server 已就绪并通过 WebSocket 健康检查: ws://127.0.0.1:$Port (PID $($newProbe.Id))"
     }
@@ -244,7 +273,7 @@ try {
     }
     if ($oldProbeStopped -and $hadOldProbe -and -not $SkipProbeRestart -and $rollbackErrors.Count -eq 0) {
         try {
-            $restoredProbe = Start-ProbeRuntime -Worktree $script:Worktree -NodePath $node -ProbeEntry $probeEntry `
+            $restoredProbe = Start-OrAdoptProbeRuntime -Worktree $script:Worktree -NodePath $node -ProbeEntry $probeEntry `
                 -CliEntry $cliEntry -Port $Port -ReportRoot $reportRoot
             Write-Output "    已恢复旧 Probe Server（PID $($restoredProbe.Id)）"
         } catch {

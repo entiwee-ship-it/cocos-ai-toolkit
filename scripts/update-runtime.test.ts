@@ -56,6 +56,8 @@ describe('运行工作树同步合同', () => {
     expect(updater).toContain('更新失败，已恢复旧运行时');
     expect(updater).toContain('回滚失败');
     expect(updater).toContain('$normalizedEntry');
+    expect(updater).toContain('Start-OrAdoptProbeRuntime');
+    expect(updater).toContain('Bridge 已抢先拉起同源 Probe');
   });
 
   it('每次构建前清空所有 workspace 的旧 dist 产物', async () => {
