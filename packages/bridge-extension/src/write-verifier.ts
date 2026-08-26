@@ -554,20 +554,24 @@ function readPrefabSubtreeSnapshot(value: unknown): PrefabSubtreeSnapshot | null
     if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
     const entry = node as Record<string, unknown>;
     if (
-      typeof entry.relativePath !== 'string'
+      typeof entry.nodeUuid !== 'string'
+      || !entry.nodeUuid
+      || typeof entry.relativePath !== 'string'
       || typeof entry.name !== 'string'
       || !Array.isArray(entry.componentTypes)
       || !entry.componentTypes.every((type) => typeof type === 'string')
+      || typeof entry.isNested !== 'boolean'
+      || typeof entry.state !== 'number'
     ) return null;
     nodes.push({
-      nodeUuid: readOptionalString(entry.nodeUuid) ?? '',
+      nodeUuid: entry.nodeUuid,
       relativePath: entry.relativePath,
       name: entry.name,
       componentTypes: entry.componentTypes as string[],
       prefabAssetUuid: readOptionalString(entry.prefabAssetUuid),
       instanceFileId: readOptionalString(entry.instanceFileId),
-      isNested: typeof entry.isNested === 'boolean' ? entry.isNested : null,
-      state: typeof entry.state === 'number' ? entry.state : null
+      isNested: entry.isNested,
+      state: entry.state
     });
   }
   return { rootStablePath: record.rootStablePath, nodes };
@@ -590,9 +594,8 @@ function analyzePrefabUnpack(
     const current = actualByPath.get(node.relativePath);
     return Boolean(current && arraysEqual(node.componentTypes, current.componentTypes));
   });
-  const oldAssociationRemoved = actual !== null && actualNodes.every((node) => !(
-    node.isNested === true && node.prefabAssetUuid === expectedPrefabAssetUuid
-  ));
+  const oldAssociationRemoved = actual !== null
+    && actualNodes.every((node) => node.prefabAssetUuid !== expectedPrefabAssetUuid);
   const nestedAssociations = beforeNodes.filter((node) => (
     node.isNested === true
     && node.prefabAssetUuid !== null

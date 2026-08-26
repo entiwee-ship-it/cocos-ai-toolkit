@@ -750,6 +750,28 @@ describe('saveAndVerifyDirectWrite', () => {
     expect(report.items[0].actual).toMatchObject({ componentsPreserved: false });
   });
 
+  it('prefab.unlink_instance 直接实例根仍保留旧源 UUID 时验证失败', async () => {
+    const dependencies = createDependencies();
+    dependencies.getPrefabInstanceInfo = async () => prefabInfo({
+      nodeUuid: 'instance-new', prefabAssetUuid: 'asset-panel', instanceFileId: 'instance-file-id'
+    });
+    dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'instance-new' });
+    dependencies.getPrefabSubtreeSnapshot = async () => unpackSnapshot();
+
+    const report = await saveAndVerifyDirectWrite(writeRequest(), [{
+      operation: {
+        type: 'prefab.unlink_instance', instanceRootUuid: 'instance-old',
+        removeNested: false, expectedPrefabAssetUuid: 'asset-panel',
+        resultNodeStablePath: '/Scene~0/Panel~0', resultPrefabBeforeSubtree: unpackSnapshot()
+      },
+      nodeUuid: 'instance-old', assetUuid: null,
+      before: prefabInfo(), after: prefabInfo()
+    } as never], dependencies);
+
+    expect(report.passed).toBe(false);
+    expect(report.items[0].actual).toMatchObject({ oldAssociationRemoved: false });
+  });
+
   it('save 为 false 时不保存不重开，直接对编辑器现状重读验证', async () => {
     const dependencies = createDependencies();
     const report = await saveAndVerifyDirectWrite(
