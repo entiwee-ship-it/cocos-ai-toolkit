@@ -35,6 +35,7 @@ function createSubtreeSnapshot(overrides: Record<string, unknown> = {}) {
     rootStablePath: '/Scene~0/Instance~0',
     nodes: [
       {
+        nodeUuid: 'n1',
         relativePath: '',
         name: 'Instance',
         componentTypes: ['cc.UITransform'],
@@ -43,6 +44,7 @@ function createSubtreeSnapshot(overrides: Record<string, unknown> = {}) {
         isNested: true
       },
       {
+        nodeUuid: 'nested-node',
         relativePath: '0',
         name: 'Nested',
         componentTypes: ['cc.Sprite'],
@@ -490,11 +492,11 @@ describe('executePrefabWriteOperation', () => {
     const afterSubtree = createSubtreeSnapshot({
       nodes: [
         {
-          relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
+          nodeUuid: 'n1', relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
           prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false
         },
         {
-          relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
+          nodeUuid: 'nested-node', relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
           prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: true
         }
       ]
@@ -523,17 +525,29 @@ describe('executePrefabWriteOperation', () => {
   });
 
   it('prefab.unlink_instance complete 递归解除嵌套关联', async () => {
-    let removeNested: boolean | null = null;
+    const unlinkCalls: Array<{ uuid: string; removeNested: boolean }> = [];
     let infoReadCount = 0;
     let subtreeReadCount = 0;
-    const afterSubtree = createSubtreeSnapshot({
+    const currentSubtree = createSubtreeSnapshot({
       nodes: [
         {
-          relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
+          nodeUuid: 'n1', relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
           prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false
         },
         {
-          relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
+          nodeUuid: 'nested-node', relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
+          prefabAssetUuid: 'asset-nested', instanceFileId: 'inst-nested', isNested: true
+        }
+      ]
+    });
+    const afterSubtree = createSubtreeSnapshot({
+      nodes: [
+        {
+          nodeUuid: 'n1', relativePath: '', name: 'Instance', componentTypes: ['cc.UITransform'],
+          prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false
+        },
+        {
+          nodeUuid: 'nested-node', relativePath: '0', name: 'Nested', componentTypes: ['cc.Sprite'],
           prefabAssetUuid: 'host-asset', instanceFileId: null, isNested: false
         }
       ]
@@ -542,11 +556,13 @@ describe('executePrefabWriteOperation', () => {
       getPrefabInstanceInfo: async () => infoReadCount++ === 0
         ? createInstanceInfo()
         : createInstanceInfo({ prefabAssetUuid: null, instanceFileId: null }),
-      getPrefabSubtreeSnapshot: async () => subtreeReadCount++ === 0
-        ? createSubtreeSnapshot()
-        : afterSubtree,
-      unlinkPrefabInstance: async (_uuid, recursive) => {
-        removeNested = recursive;
+      getPrefabSubtreeSnapshot: async () => [
+        createSubtreeSnapshot(),
+        currentSubtree,
+        afterSubtree
+      ][subtreeReadCount++] ?? afterSubtree,
+      unlinkPrefabInstance: async (uuid, recursive) => {
+        unlinkCalls.push({ uuid, removeNested: recursive });
       }
     });
 
@@ -557,7 +573,10 @@ describe('executePrefabWriteOperation', () => {
       expectedPrefabAssetUuid: 'asset-1'
     } as WriteOperation, dependencies);
 
-    expect(removeNested).toBe(true);
+    expect(unlinkCalls).toEqual([
+      { uuid: 'n1', removeNested: false },
+      { uuid: 'nested-node', removeNested: false }
+    ]);
     expect(result.afterSubtree).toEqual(afterSubtree);
   });
 

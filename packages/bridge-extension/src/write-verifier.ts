@@ -560,6 +560,7 @@ function readPrefabSubtreeSnapshot(value: unknown): PrefabSubtreeSnapshot | null
       || !entry.componentTypes.every((type) => typeof type === 'string')
     ) return null;
     nodes.push({
+      nodeUuid: readOptionalString(entry.nodeUuid) ?? '',
       relativePath: entry.relativePath,
       name: entry.name,
       componentTypes: entry.componentTypes as string[],

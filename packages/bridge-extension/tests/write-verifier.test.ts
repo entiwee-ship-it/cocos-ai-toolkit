@@ -870,6 +870,7 @@ function unpackSnapshot(options: {
     rootStablePath: '/Scene~0/Panel~0',
     nodes: [
       {
+        nodeUuid: 'instance-root',
         relativePath: '',
         name: 'Panel',
         componentTypes: options.rootComponentTypes ?? ['cc.UITransform'],
@@ -878,6 +879,7 @@ function unpackSnapshot(options: {
         isNested: !(options.currentUnlinked || options.completeUnlinked)
       },
       {
+        nodeUuid: 'nested-root',
         relativePath: '0',
         name: 'Nested',
         componentTypes: ['cc.Sprite'],

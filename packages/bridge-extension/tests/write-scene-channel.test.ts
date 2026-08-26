@@ -161,6 +161,46 @@ describe('executeWriteSceneOperations', () => {
     });
   });
 
+  it('Prefab 解包子树快照只供内部验证，不进入公开 evidence', async () => {
+    const dependencies = createDependencies();
+    const subtree = {
+      rootStablePath: '/Scene~0/Panel~0',
+      nodes: [{
+        nodeUuid: 'instance-old', relativePath: '', name: 'Panel', componentTypes: [],
+        prefabAssetUuid: 'asset-panel', instanceFileId: 'instance-file-id', isNested: true
+      }]
+    };
+    dependencies.executePrefabOperation = async () => ({
+      nodeUuid: 'instance-old',
+      assetUuid: null,
+      before: { stablePath: '/Scene~0/Panel~0', prefabAssetUuid: 'asset-panel' },
+      after: { stablePath: '/Scene~0/Panel~0', prefabAssetUuid: null },
+      beforeSubtree: subtree,
+      afterSubtree: subtree
+    });
+    dependencies.verify = async (executed) => {
+      expect(executed[0].operation).toMatchObject({ resultPrefabBeforeSubtree: subtree });
+      return {
+        passed: true,
+        verifiedAt: '2026-08-26T00:00:00.000Z',
+        items: [{ operationIndex: 0, description: 'unpack', expected: true, actual: true, passed: true }]
+      };
+    };
+
+    const outcome = await executeWriteSceneOperations({
+      operations: [{
+        type: 'prefab.unlink_instance', instanceRootUuid: 'instance-old',
+        removeNested: false, expectedPrefabAssetUuid: 'asset-panel'
+      }],
+      save: true
+    }, dependencies);
+
+    const evidence = outcome.evidence as Array<Record<string, unknown>>;
+    expect(evidence[0]).not.toHaveProperty('beforeSubtree');
+    expect(evidence[0]).not.toHaveProperty('afterSubtree');
+    expect(evidence[0].operation).not.toHaveProperty('resultPrefabBeforeSubtree');
+  });
+
   it('全部操作均未改变文档时不保存也不重开', async () => {
     const dependencies = createDependencies();
     dependencies.executeComponentOperation = async (operation) => {

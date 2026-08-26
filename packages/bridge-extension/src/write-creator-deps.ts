@@ -546,6 +546,7 @@ async function readPrefabSubtreeSnapshot(nodeUuid: string): Promise<PrefabSubtre
       .map((component) => readObject(component).type)
       .filter((type): type is string => typeof type === 'string' && type.length > 0);
     nodes.push({
+      nodeUuid: typeof node.uuid === 'string' ? node.uuid : '',
       relativePath: indexes.join('/'),
       name: typeof node.name === 'string' ? node.name : '',
       componentTypes,

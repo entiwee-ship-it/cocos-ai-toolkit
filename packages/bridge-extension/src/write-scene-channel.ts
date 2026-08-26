@@ -124,7 +124,7 @@ export async function executeWriteSceneOperations(
           operationIndex: index,
           details: probeError.details
         },
-        evidence: executed
+        evidence: publicWriteEvidence(executed)
       };
     }
   }
@@ -151,15 +151,39 @@ export async function executeWriteSceneOperations(
         originalError: original,
         nextAction: '写入可能已生效；先重读当前文档状态，确认前不要重试。'
       },
-      evidence: executed
+      evidence: publicWriteEvidence(executed)
     };
   }
   return {
     kind: 'success',
     executedOps: executed.length,
     verification,
-    evidence: executed
+    evidence: publicWriteEvidence(executed)
   };
+}
+
+/**
+ * 删除只供保存重开验证使用的 Prefab 子树快照，避免公开 evidence 携带整棵节点树。
+ *
+ * @param executed Scene 写通道内部的完整逐操作证据。
+ * @returns 可安全返回给 MCP 调用方的紧凑证据。
+ */
+function publicWriteEvidence(executed: VerifiedOperation[]): VerifiedOperation[] {
+  return executed.map((entry) => {
+    const {
+      beforeSubtree: _beforeSubtree,
+      afterSubtree: _afterSubtree,
+      ...publicEntry
+    } = entry as VerifiedOperation & {
+      beforeSubtree?: unknown;
+      afterSubtree?: unknown;
+    };
+    const {
+      resultPrefabBeforeSubtree: _resultPrefabBeforeSubtree,
+      ...publicOperation
+    } = entry.operation as WriteOperation & { resultPrefabBeforeSubtree?: unknown };
+    return { ...publicEntry, operation: publicOperation } as VerifiedOperation;
+  });
 }
 
 /**

@@ -36,6 +36,7 @@ export interface PrefabInstanceInfo {
 export interface PrefabSubtreeSnapshot {
   rootStablePath: string;
   nodes: Array<{
+    nodeUuid: string;
     relativePath: string;
     name: string;
     componentTypes: string[];
@@ -221,9 +222,28 @@ async function unlinkInstance(
   if (!beforeSubtree) {
     throw new ProbeError('NODE_NOT_FOUND', { nodeUuid: operation.instanceRootUuid });
   }
-  await dependencies.unlinkPrefabInstance(operation.instanceRootUuid, operation.removeNested);
+  await dependencies.unlinkPrefabInstance(operation.instanceRootUuid, false);
+  let afterSubtree = await dependencies.getPrefabSubtreeSnapshot(operation.instanceRootUuid);
+  if (operation.removeNested) {
+    let previousNestedCount = countNestedNodes(afterSubtree);
+    while (afterSubtree && previousNestedCount > 0) {
+      const nestedRoot = findDeepestNestedRoot(afterSubtree);
+      if (!nestedRoot) break;
+      await dependencies.unlinkPrefabInstance(nestedRoot.nodeUuid, false);
+      const next = await dependencies.getPrefabSubtreeSnapshot(operation.instanceRootUuid);
+      const nextNestedCount = countNestedNodes(next);
+      if (!next || nextNestedCount >= previousNestedCount) {
+        throw new ProbeError('PREFAB_COMPLETE_UNPACK_INCOMPLETE', {
+          nodeUuid: operation.instanceRootUuid,
+          previousNestedCount,
+          nextNestedCount
+        });
+      }
+      afterSubtree = next;
+      previousNestedCount = nextNestedCount;
+    }
+  }
   const after = await dependencies.getPrefabInstanceInfo(operation.instanceRootUuid);
-  const afterSubtree = await dependencies.getPrefabSubtreeSnapshot(operation.instanceRootUuid);
   return {
     nodeUuid: operation.instanceRootUuid,
     assetUuid: null,
@@ -232,6 +252,26 @@ async function unlinkInstance(
     beforeSubtree,
     afterSubtree
   };
+}
+
+function countNestedNodes(snapshot: PrefabSubtreeSnapshot | null): number {
+  return snapshot?.nodes.filter((node) => node.isNested === true).length ?? 0;
+}
+
+function findDeepestNestedRoot(snapshot: PrefabSubtreeSnapshot) {
+  const byPath = new Map(snapshot.nodes.map((node) => [node.relativePath, node]));
+  return snapshot.nodes
+    .filter((node) => {
+      if (node.isNested !== true || !node.prefabAssetUuid) return false;
+      const separator = node.relativePath.lastIndexOf('/');
+      const parentPath = separator >= 0 ? node.relativePath.slice(0, separator) : '';
+      const parent = byPath.get(parentPath);
+      return !parent
+        || parent.isNested !== true
+        || parent.prefabAssetUuid !== node.prefabAssetUuid;
+    })
+    .sort((left, right) => right.relativePath.split('/').length - left.relativePath.split('/').length)[0]
+    ?? null;
 }
 
 /** 重新关联：把节点关联到指定预制体资产；关联后实例信息必须建立。 */
