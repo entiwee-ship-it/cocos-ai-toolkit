@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { ProbeClientStatus } from '@cocos-ai/client';
 import { z } from 'zod';
 import {
   AssetRecordSchema,
@@ -13,6 +14,7 @@ const ASSET_INSPECT_PAGE_SIZE_MAX = 500;
 /** MCP 侧只读探针客户端抽象。 */
 export interface ReadonlyProbeClient {
   request(method: string, payload: unknown): Promise<unknown>;
+  getStatus?(): ProbeClientStatus;
 }
 
 const EditorSessionSchema = z.object({
@@ -198,6 +200,12 @@ export interface CocosReadonlyToolServiceOptions {
  */
 export class CocosReadonlyToolService {
   constructor(private readonly options: CocosReadonlyToolServiceOptions) {}
+
+  /** 返回 Probe 后端状态；测试替身未实现时返回 null。 */
+  readBackendStatus() {
+    const status = this.options.probeClient.getStatus?.();
+    return status ? { available: status.state === 'connected', ...status } : null;
+  }
 
   /**
    * 返回当前 Probe Server 已登记的全部 Creator 编辑器实例。

@@ -24,4 +24,41 @@ describe('RequestRouter structured errors', () => {
     expect((error as RequestRouterError).payload).toEqual(bridgePayload);
     expect(toServerErrorPayload(error)).toEqual(bridgePayload);
   });
+
+  it('只读请求超时返回可重试错误并保留方法、请求和编辑器身份', async () => {
+    const router = new RequestRouter();
+    const error = await router.wait('request-read', 5, {
+      method: 'probe.node',
+      editorInstanceId: 'editor-1'
+    }).catch((caught: unknown) => caught) as RequestRouterError;
+
+    expect(error.payload).toMatchObject({
+      code: 'SERVER_REQUEST_TIMEOUT',
+      retryable: true,
+      details: {
+        requestId: 'request-read',
+        method: 'probe.node',
+        editorInstanceId: 'editor-1'
+      }
+    });
+  });
+
+  it('写请求超时继续返回 OUTCOME_UNKNOWN 并禁止盲重试', async () => {
+    const router = new RequestRouter();
+    const error = await router.wait('request-write', 5, {
+      method: 'probe.directWrite',
+      editorInstanceId: 'editor-1'
+    }).catch((caught: unknown) => caught) as RequestRouterError;
+
+    expect(error.payload).toMatchObject({
+      code: 'OUTCOME_UNKNOWN',
+      retryable: false,
+      nextAction: expect.stringContaining('禁止重试')
+    });
+  });
+
+  it('Server 遗留 CODE:details 异常在边界转换为稳定 code', () => {
+    expect(toServerErrorPayload(new Error('RUNTIME_HIERARCHY_UNAVAILABLE:{"found":false}')))
+      .toMatchObject({ code: 'RUNTIME_HIERARCHY_UNAVAILABLE' });
+  });
 });

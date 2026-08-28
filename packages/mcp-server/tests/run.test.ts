@@ -6,7 +6,7 @@ import {
 } from '../src/run.js';
 
 describe('Cocos MCP stdio runtime', () => {
-  it('先连接 Probe Client，再连接 MCP Transport，并且关闭操作幂等', async () => {
+  it('先连接 MCP Transport，再后台连接 Probe Client，并且关闭操作幂等', async () => {
     const events: string[] = [];
     const probeClient = {
       async connect() {
@@ -33,8 +33,8 @@ describe('Cocos MCP stdio runtime', () => {
     await Promise.all([runtime.close(), runtime.close()]);
 
     expect(events).toEqual([
-      'probe.connect',
       'server.connect:stdio',
+      'probe.connect',
       'server.close',
       'probe.close'
     ]);
@@ -66,11 +66,28 @@ describe('Cocos MCP stdio runtime', () => {
       transport: { name: 'stdio' }
     })).rejects.toThrow('STDIO_CONNECT_FAILED');
     expect(events).toEqual([
-      'probe.connect',
       'server.connect',
       'server.close',
       'probe.close'
     ]);
+  });
+
+  it('Probe 长时间离线不阻塞 MCP stdio 初始化', async () => {
+    let closeProbe = false;
+    const runtime = await startMcpRuntime({
+      probeClient: {
+        connect: () => new Promise<void>(() => undefined),
+        async close() { closeProbe = true; }
+      },
+      server: {
+        async connect() {},
+        async close() {}
+      },
+      transport: { name: 'stdio' }
+    });
+
+    await runtime.close();
+    expect(closeProbe).toBe(true);
   });
 
   it('从环境变量读取 Probe 地址、会话 Token 和服务端授权报告根', () => {

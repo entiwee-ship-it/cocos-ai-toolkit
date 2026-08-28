@@ -13,6 +13,7 @@ import {
   type CocosReadonlyToolServiceOptions,
   type EditorSession
 } from './tools.js';
+import { normalizeToolError, toToolResult } from './tool-result.js';
 
 const ProjectSelectorInput = {
   projectId: z.string().min(1),
@@ -135,6 +136,7 @@ interface ResolvedNodeBoundsInput {
 }
 
 const MAX_NODE_BATCH_ITEMS = 32;
+const NODE_BATCH_CONCURRENCY = 4;
 const DEFAULT_NODE_BATCH_OUTPUT_BYTES = 512 * 1024;
 const MIN_SINGLE_READ_OUTPUT_BYTES = 16 * 1024;
 const MAX_SINGLE_READ_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -151,7 +153,12 @@ export class CocosDirectToolService {
   ) {}
 
   async listEditors() {
-    return { editors: await this.readonlyService.listEditors() };
+    const backend = this.readonlyService.readBackendStatus();
+    if (backend && !backend.available) return { editors: [], backend };
+    return {
+      editors: await this.readonlyService.listEditors(),
+      ...(backend ? { backend } : {})
+    };
   }
 
   async readEditorState(input: ProjectSelector) {
@@ -259,24 +266,42 @@ export class CocosDirectToolService {
         })).hierarchy))
       : [];
     const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_NODE_BATCH_OUTPUT_BYTES;
+    const candidates = new Array<Record<string, unknown>>(addresses.length);
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < addresses.length) {
+        const requestIndex = nextIndex;
+        nextIndex += 1;
+        const requested = addresses[requestIndex];
+        try {
+          const nodeUuid = requested.nodeUuid ?? resolveNodePathFromEntries(
+            pathEntries,
+            requested.path!,
+            'NODE_NOT_FOUND',
+            'NODE_PATH_AMBIGUOUS'
+          ).uuid;
+          const result = asRecord(await this.readResolvedNode(editor, nodeUuid, input, bounds, true));
+          const { editor: _editor, ...payload } = result;
+          candidates[requestIndex] = { requestIndex, requested, nodeUuid, found: true, ...payload };
+        } catch (error) {
+          candidates[requestIndex] = {
+            requestIndex,
+            requested,
+            nodeUuid: requested.nodeUuid ?? null,
+            found: false,
+            error: toReadError(error)
+          };
+        }
+      }
+    };
+    await Promise.all(Array.from(
+      { length: Math.min(NODE_BATCH_CONCURRENCY, addresses.length) },
+      () => worker()
+    ));
+
     const items: Array<Record<string, unknown>> = [];
     let truncated = false;
-    for (let requestIndex = 0; requestIndex < addresses.length; requestIndex += 1) {
-      const requested = addresses[requestIndex];
-      let item: Record<string, unknown>;
-      try {
-        const nodeUuid = requested.nodeUuid ?? resolveNodePathFromEntries(
-          pathEntries,
-          requested.path!,
-          'NODE_NOT_FOUND',
-          'NODE_PATH_AMBIGUOUS'
-        ).uuid;
-        const result = asRecord(await this.readResolvedNode(editor, nodeUuid, input, bounds, true));
-        const { editor: _editor, ...payload } = result;
-        item = { requestIndex, requested, nodeUuid, found: true, ...payload };
-      } catch (error) {
-        item = { requestIndex, requested, nodeUuid: requested.nodeUuid ?? null, found: false, error: toReadError(error) };
-      }
+    for (const item of candidates) {
       if (estimateToolTransportBytes({ editor, items: [...items, item] }) > maxOutputBytes) {
         truncated = true;
         break;
@@ -928,12 +953,7 @@ function readNonEmptyString(value: unknown): string | null {
 }
 
 function toReadError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  const separator = message.indexOf(':');
-  return {
-    code: separator > 0 ? message.slice(0, separator) : message || 'NODE_READ_FAILED',
-    message
-  };
+  return normalizeToolError(error, 'NODE_READ_FAILED');
 }
 
 function estimateToolTransportBytes(value: unknown): number {
@@ -1340,18 +1360,18 @@ export function registerCocosDirectReadonlyTools(
   service: CocosDirectToolService
 ): void {
   server.registerTool('cocos_editor_list', {
-    description: '列出当前连接 Probe Server 的 Creator；空列表时启动 Creator/Bridge 后重试。',
+    description: '列出当前连接 Probe Server 的 Creator；Probe 离线时返回空 editors 和 backend 状态，Bridge 上线后同一任务自动恢复。',
     inputSchema: {},
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async () => toToolResult(await service.listEditors()));
+  }, async () => toToolResult(service.listEditors()));
 
   server.registerTool('cocos_editor_state', {
     description: '读取目标 Creator 当前文档 UUID、dirty、Scene/AssetDB 就绪状态、选择与 Preview 状态。',
     inputSchema: ProjectSelectorInput,
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.readEditorState(input)));
+  }, async (input) => toToolResult(service.readEditorState(input)));
 
   server.registerTool('cocos_asset_search', {
     description: '在 Creator AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），按 cursor 分页。',
@@ -1364,7 +1384,7 @@ export function registerCocosDirectReadonlyTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.searchAssets(input)));
+  }, async (input) => toToolResult(service.searchAssets(input)));
 
   server.registerTool('cocos_asset_inspect', {
     description: '按 UUID 读取资产详情、可选原始 Meta、依赖和反向使用者，关系按 cursor 分页。',
@@ -1377,7 +1397,7 @@ export function registerCocosDirectReadonlyTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.inspectAsset(input)));
+  }, async (input) => toToolResult(service.inspectAsset(input)));
 
   server.registerTool('cocos_hierarchy', {
     description: '读取当前文档节点树；rootPath 会先解析 UUID，再由 Creator 原生读取目标子树并保留 truncated。query/fields/summary 可启用紧凑投影，去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw；完整读取受 maxOutputBytes 预算保护。',
@@ -1392,7 +1412,7 @@ export function registerCocosDirectReadonlyTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.readHierarchy(input)));
+  }, async (input) => toToolResult(service.readHierarchy(input)));
 
   server.registerTool('cocos_node_read', {
     description: '按 nodeUuid 或 path 读取节点详情；缺省保持完整旧返回。fields/propertyPaths/summary 启用紧凑投影，去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw；完整读取受 maxOutputBytes 预算保护，propertyPaths 必须配合 componentType。',
@@ -1411,7 +1431,7 @@ export function registerCocosDirectReadonlyTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.readNode(input)));
+  }, async (input) => toToolResult(service.readNode(input)));
 
   server.registerTool('cocos_nodes_read', {
     description: '批量读取最多 32 个节点；nodeUuids 后接 paths，逐项返回 found/error，并统一应用组件、字段和编辑态 bounds 投影。',
@@ -1430,7 +1450,7 @@ export function registerCocosDirectReadonlyTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.readNodes(input)));
+  }, async (input) => toToolResult(service.readNodes(input)));
 
   server.registerTool('cocos_prefab_open', {
     description: '通过 Creator 打开 Prefab 并等待文档身份就绪；PREFAB_OPEN_NOT_READY 时核对 UUID 后重试。',
@@ -1440,7 +1460,7 @@ export function registerCocosDirectReadonlyTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.openPrefab(input)));
+  }, async (input) => toToolResult(service.openPrefab(input)));
 
   server.registerTool('cocos_scene_open', {
     description: '通过 Creator 打开 Scene 并等待文档身份就绪；ASSET_NOT_SCENE 时核对 UUID。',
@@ -1450,7 +1470,7 @@ export function registerCocosDirectReadonlyTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.openScene(input)));
+  }, async (input) => toToolResult(service.openScene(input)));
 }
 
 /** 注册直写档写工具（仅显式 --enable-writes 时可见；每次写入自动保存并逐项重读回显）。 */
@@ -1470,7 +1490,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.createNode(input)));
+  }, async (input) => toToolResult(service.createNode(input)));
 
   server.registerTool('cocos_node_rename', {
     description: '按 nodeUuid 或 path 重命名节点并保存回读；二者必须且只能提供一个。',
@@ -1481,7 +1501,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.renameNode(input)));
+  }, async (input) => toToolResult(service.renameNode(input)));
 
   server.registerTool('cocos_node_set_transform', {
     description: '修改节点局部 position/rotation/scale 并保存回读；nodeUuid 或 path 二选一，至少提供一个 transform 分量。',
@@ -1492,7 +1512,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.setNodeTransform(input)));
+  }, async (input) => toToolResult(service.setNodeTransform(input)));
 
   server.registerTool('cocos_node_select', {
     description: '按 nodeUuid 或 path 清空旧节点选择并选中唯一目标；不修改或保存文档。',
@@ -1502,7 +1522,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.selectNode(input)));
+  }, async (input) => toToolResult(service.selectNode(input)));
 
   server.registerTool('cocos_node_reparent', {
     description: '把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex。',
@@ -1515,7 +1535,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.reparentNode(input)));
+  }, async (input) => toToolResult(service.reparentNode(input)));
 
   server.registerTool('cocos_node_delete', {
     description: '按 nodeUuid 或 path 删除节点及其子树并保存；不可回滚。',
@@ -1525,7 +1545,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: DELETE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.deleteNode(input)));
+  }, async (input) => toToolResult(service.deleteNode(input)));
 
   server.registerTool('cocos_component_add', {
     description: '在节点上挂载组件并保存；自定义脚本组件必须提供 scriptUuid（可用 cocos_asset_search 查）。',
@@ -1537,7 +1557,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.addComponent(input)));
+  }, async (input) => toToolResult(service.addComponent(input)));
 
   server.registerTool('cocos_component_set_property', {
     description: '修改节点上某组件的属性值并保存回读；propertyPath 支持 items[2] 嵌套路径；expectedOldValue 不一致时拒绝写入。',
@@ -1551,7 +1571,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.setComponentProperty(input)));
+  }, async (input) => toToolResult(service.setComponentProperty(input)));
 
   server.registerTool('cocos_prefab_instantiate', {
     description: '在父节点下实例化 Prefab 并保存重开验证；parentUuid 或 parentPath 二选一，unknown 时先重读当前文档且不要重试。',
@@ -1564,7 +1584,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.instantiatePrefab(input)));
+  }, async (input) => toToolResult(service.instantiatePrefab(input)));
 
   server.registerTool('cocos_prefab_unpack', {
     description: '按 nodeUuid 或 path 移除 Prefab 关联；current 仅移除当前关联，complete 递归移除嵌套关联，expectedPrefabAssetUuid 用于锁定源资产。',
@@ -1576,7 +1596,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.unpackPrefab(input)));
+  }, async (input) => toToolResult(service.unpackPrefab(input)));
 
   server.registerTool('cocos_prefab_create', {
     description: '把当前文档中的节点生成为 Prefab 资产；ASSET_ALREADY_EXISTS 时换 URL。',
@@ -1588,7 +1608,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.createPrefab(input)));
+  }, async (input) => toToolResult(service.createPrefab(input)));
 
   server.registerTool('cocos_prefab_rename', {
     description: '按 UUID 在原目录内重命名 Prefab；newName 不含路径或 .prefab 后缀，Creator AssetDB 会保持 UUID 并拒绝覆盖。',
@@ -1599,14 +1619,14 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.renamePrefab(input)));
+  }, async (input) => toToolResult(service.renamePrefab(input)));
 
   server.registerTool('cocos_document_save', {
     description: '保存当前文档（直写工具已自动保存，此入口用于手工修改后的落盘）。',
     inputSchema: ProjectSelectorInput,
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.saveDocument(input)));
+  }, async (input) => toToolResult(service.saveDocument(input)));
 
   server.registerTool('cocos_prefab_delete', {
     description: '按 UUID 删除 Prefab 资产；不可回滚。必须传精确 confirmAssetUrl；存在引用时还需 confirmReferenced=true。',
@@ -1618,7 +1638,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: DELETE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.deletePrefab(input)));
+  }, async (input) => toToolResult(service.deletePrefab(input)));
 
   server.registerTool('cocos_asset_import', {
     description: '把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入；ASSET_ALREADY_EXISTS 时换 URL。',
@@ -1629,7 +1649,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.importAsset(input)));
+  }, async (input) => toToolResult(service.importAsset(input)));
 
   server.registerTool('cocos_asset_refresh', {
     description: '重新导入资产并尝试触发 TypeScript 编译；脚本改动后调用。',
@@ -1639,7 +1659,7 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.refreshAsset(input)));
+  }, async (input) => toToolResult(service.refreshAsset(input)));
 
   server.registerTool('cocos_batch_write', {
     description: '一次请求仅执行多项 node.* / component.* 写操作并保存回读；asset.* / prefab.* 不在公开输入契约内。只减少往返，不提供事务或回滚，失败时 executedOps 之前的修改可能已生效。',
@@ -1649,15 +1669,5 @@ export function registerCocosDirectWriteTools(
     },
     outputSchema: ToolOutputSchema,
     annotations: DELETE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.batchWrite(input)));
-}
-
-function toToolResult(value: unknown) {
-  const structuredContent = value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : { value };
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(value) }],
-    structuredContent
-  };
+  }, async (input) => toToolResult(service.batchWrite(input)));
 }

@@ -432,6 +432,33 @@ describe('直写档只读工具', () => {
     });
   });
 
+  it('Probe 离线时 cocos_editor_list 仍成功返回固定结构和后端状态', async () => {
+    const probeClient: ReadonlyProbeClient = {
+      getStatus: () => ({
+        url: 'ws://127.0.0.1:32188',
+        state: 'reconnecting',
+        reconnectAttempt: 2,
+        nextRetryAt: '2026-08-28T00:00:00.000Z'
+      }),
+      async request() {
+        throw new Error('REQUEST_SHOULD_NOT_RUN');
+      }
+    };
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      editors: [],
+      backend: {
+        available: false,
+        state: 'reconnecting',
+        reconnectAttempt: 2
+      }
+    });
+  });
+
   it('cocos_editor_state 返回当前文档、就绪和 dirty 状态', async () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const { client } = await createHarness(probeClient);
@@ -834,6 +861,43 @@ describe('直写档只读工具', () => {
     ))).toBe(true);
   });
 
+  it('cocos_nodes_read 以并发 4 读取并保持输入顺序', async () => {
+    const fallback = createRespond();
+    let active = 0;
+    let maxActive = 0;
+    const probeClient = new RecordingProbeClient(async (method, payload) => {
+      if (method !== 'probe.node') return fallback(method, payload);
+      const uuid = (payload as { params: { uuid: string } }).params.uuid;
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setTimeout(resolve, (8 - Number(uuid.slice(5))) * 2));
+      active -= 1;
+      return {
+        data: {
+          ...NODE_DETAIL,
+          identity: { ...NODE_DETAIL.identity, objectUuid: uuid },
+          name: uuid
+        },
+        source: 'message-api'
+      };
+    });
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_nodes_read',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuids: Array.from({ length: 8 }, (_, index) => `node-${index}`),
+        summary: true
+      }
+    });
+
+    const items = (result.structuredContent as { items: Array<{ requestIndex: number; nodeUuid: string }> }).items;
+    expect(maxActive).toBe(4);
+    expect(items.map((item) => item.requestIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(items.map((item) => item.nodeUuid)).toEqual(Array.from({ length: 8 }, (_, index) => `node-${index}`));
+  });
+
   it('cocos_nodes_read 超出输出预算时显式截断', async () => {
     const probeClient = new RecordingProbeClient(createRespond({
       'probe.node': {
@@ -864,6 +928,9 @@ describe('直写档只读工具', () => {
       arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', componentType: 'cc.Button' }
     });
     expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: 'COMPONENT_NOT_FOUND', retryable: false }
+    });
     expect(JSON.stringify(result.content)).toContain('COMPONENT_NOT_FOUND');
     expect(JSON.stringify(result.content)).toContain('cc.Label');
   });

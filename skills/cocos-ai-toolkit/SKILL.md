@@ -17,7 +17,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 
 ## 编辑主流程（按序组合）
 
-1. `cocos_editor_list` 发现在线项目（按 projectPath 选择；同项目多实例时传 editorInstanceId）。
+1. `cocos_editor_list` 发现在线项目（按 projectPath 选择；同项目多实例时传 editorInstanceId）。Probe 离线时仍会返回空 editors 和 backend 状态；Bridge 启动 Probe 后同一任务自动恢复。
 2. `cocos_editor_state` 确认当前文档 UUID、dirty 和 Scene/AssetDB ready。
 3. `cocos_asset_search` 按名称/路径找 Prefab、Scene 或脚本 UUID（Bridge 内分页并复用短缓存）；`cocos_asset_inspect` 按 UUID 直接看类型、URL、依赖和 users，不要先取全量索引。
 4. `cocos_prefab_open` / `cocos_scene_open` 打开目标文档，等待身份就绪。
@@ -49,7 +49,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | 一次直发多项写操作 | `cocos_batch_write`（仅接受 `node.*` 与 `component.*`；`asset.*` / `prefab.*` 会以 `BATCH_WRITE_OPERATION_NOT_ALLOWED` 拒绝；只减少往返，不是事务、无回滚，失败时已执行项可能已生效） |
 
 节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件类型兼容 `cc.` 前缀（`Label` = `cc.Label`）。
-`cocos_node_read` 的 `prefabInstance` 直接给出实例根、源 UUID、instanceFileId、state 和 sourceUrl；`includeBounds` 可返回 local/world rect 与 anchor，按需追加后代并集和 `relativeToPath` 坐标。`cocos_nodes_read` 最多 32 项，单项失败不会丢失其它结果。
+`cocos_node_read` 的 `prefabInstance` 直接给出实例根、源 UUID、instanceFileId、state 和 sourceUrl；`includeBounds` 可返回 local/world rect 与 anchor，按需追加后代并集和 `relativeToPath` 坐标。`cocos_nodes_read` 最多 32 项、默认并发 4，保持输入顺序且单项失败不会丢失其它结果。
 
 `cocos_node_read` / `cocos_nodes_read` 的 `writeCapabilities` 会标明当前文档可直接执行的节点和组件写入。遇到关闭能力或 `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` 时，读取 `ownerPrefabUuid`、`ownerSourceUrl` 和 `nextAction`，确认后显式调用 `cocos_prefab_open` 打开源 Prefab；禁止自动切换文档。文档身份未知时继续依赖写后重读验证。
 
@@ -63,6 +63,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 - 运行期节点/组件 UUID 每次重开文档都会变，禁止缓存；每个编辑会话内现取 hierarchy。
 - 连续多处修改时按"先读后写、逐项确认"推进；`cocos_batch_write` 仅接受 `node.*` 与 `component.*` 操作，是单次请求直发多项操作，不是批量暂存、事务或回滚。
 - 错误码都带下一步指引：`NODE_NOT_FOUND` 重取 hierarchy、`COMPONENT_NOT_FOUND` 会附可用组件清单、`ASSET_NOT_PREFAB` / `ASSET_NOT_SCENE` 用 asset_inspect 核对类型、`ASSET_ALREADY_EXISTS` 换 URL；Prefab 删除先处理 `PREFAB_DELETE_CONFIRMATION_REQUIRED`，有引用再处理 `PREFAB_REFERENCES_CONFIRMATION_REQUIRED`。
+- 工具失败优先读取 `structuredContent.error` 的 `code/details/stage/nextAction/retryable`；文本块只用于人读兼容，不要按冒号拆错误码。
 
 ## 运行态工具
 

@@ -1,7 +1,7 @@
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { ArtifactStore } from '../src/artifact-store.js';
 import { ProbeServer } from '../src/server.js';
@@ -11,6 +11,13 @@ describe('Probe Server 默认配置', () => {
   it('Bridge 请求默认超时与 MCP 大型 Prefab 写入超时一致', () => {
     expect((probeServerModule as unknown as { DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS?: number })
       .DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS).toBe(180_000);
+  });
+
+  it('按方法选择短、中、长 Bridge 请求预算', () => {
+    expect(probeServerModule.resolveBridgeRequestTimeoutMs('probe.node', 180_000)).toBe(15_000);
+    expect(probeServerModule.resolveBridgeRequestTimeoutMs('probe.assetIndex', 180_000)).toBe(60_000);
+    expect(probeServerModule.resolveBridgeRequestTimeoutMs('probe.directWrite', 180_000)).toBe(180_000);
+    expect(probeServerModule.resolveBridgeRequestTimeoutMs('probe.node', 1_000)).toBe(1_000);
   });
 });
 import { SessionRegistry } from '../src/session-registry.js';
@@ -202,7 +209,39 @@ describe('ProbeServer', () => {
     await server.stop();
   });
 
+  it('定时 ping 健康客户端并保留可用连接', async () => {
+    const server = new ProbeServer({
+      host: '127.0.0.1',
+      port: 0,
+      requestTimeoutMs: 1_000,
+      heartbeatIntervalMs: 10
+    });
+    const address = await server.start();
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    let pingCount = 0;
+    socket.on('ping', () => { pingCount += 1; });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', () => socket.send(JSON.stringify({
+          method: 'client.hello', payload: { clientName: 'heartbeat-client' }
+        })));
+        socket.once('message', () => resolve());
+        socket.once('error', reject);
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 35));
+      expect(pingCount).toBeGreaterThanOrEqual(1);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      socket.close();
+      await server.stop();
+    }
+  });
+
   it('登记 Bridge 并按 correlationId 配对响应', async () => {
+    const previous = process.env.COCOS_AI_REQUEST_LOG;
+    process.env.COCOS_AI_REQUEST_LOG = 'debug';
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const server = new ProbeServer({ host: '127.0.0.1', port: 0, requestTimeoutMs: 1000 });
     const address = await server.start();
     const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
@@ -250,7 +289,13 @@ describe('ProbeServer', () => {
     );
 
     expect(response).toEqual({ ready: true });
+    const log = write.mock.calls.map((call) => String(call[0])).find((line) => line.includes('probe-server'));
+    expect(log).toContain('"method":"probe.editorState"');
+    expect(log).toContain('"eventLoopUtilization"');
     socket.close();
     await server.stop();
+    write.mockRestore();
+    if (previous === undefined) delete process.env.COCOS_AI_REQUEST_LOG;
+    else process.env.COCOS_AI_REQUEST_LOG = previous;
   });
 });

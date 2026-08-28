@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join, resolve, sep } from 'node:path';
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import {
   resolveWebSocketMaxPayload,
   ResolutionSchema,
@@ -17,6 +18,7 @@ import { RequestRouter, toServerErrorPayload } from './request-router.js';
 import { SessionRegistry, type SessionSelector } from './session-registry.js';
 
 export const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 180_000;
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 const BridgeHelloSchema = z.object({
   method: z.literal('bridge.hello'),
@@ -199,6 +201,7 @@ export interface ProbeServerOptions {
   port: number;
   /** 转发 Bridge 请求的等待超时毫秒数。 */
   requestTimeoutMs: number;
+  heartbeatIntervalMs?: number;
   /** WebSocket 单条消息的最大接收字节数。 */
   maxPayload?: number;
   /** 运行态页面驱动（阶段五）；未装配时运行态方法返回 RUNTIME_DRIVER_UNAVAILABLE。 */
@@ -221,6 +224,10 @@ export class ProbeServer {
 
   private readonly requestRouter = new RequestRouter();
   private readonly sockets = new Map<string, WebSocket>();
+  private readonly socketLiveness = new WeakMap<WebSocket, boolean>();
+  private readonly eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+  private eventLoopUtilization = performance.eventLoopUtilization();
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private server: WebSocketServer | null = null;
 
   constructor(private readonly options: ProbeServerOptions) {}
@@ -251,6 +258,8 @@ export class ProbeServer {
     });
     this.server = server;
     server.on('connection', (socket) => this.handleConnection(socket));
+    this.eventLoopDelay.enable();
+    this.startHeartbeat(server);
 
     await new Promise<void>((resolve, reject) => {
       server.once('listening', resolve);
@@ -277,9 +286,38 @@ export class ProbeServer {
     }
 
     const requestId = randomUUID();
-    const response = this.requestRouter.wait(requestId, this.options.requestTimeoutMs);
-    socket.send(JSON.stringify({ type: 'request', requestId, method, payload }));
-    return response;
+    const timeoutMs = resolveBridgeRequestTimeoutMs(method, this.options.requestTimeoutMs);
+    const startedAt = performance.now();
+    const message = JSON.stringify({ type: 'request', requestId, method, payload });
+    const response = this.requestRouter.wait(requestId, timeoutMs, {
+      method,
+      editorInstanceId: session.editorInstanceId
+    });
+    socket.send(message);
+    try {
+      const result = await response;
+      this.logBridgeRequest({
+        method,
+        requestId,
+        editorInstanceId: session.editorInstanceId,
+        startedAt,
+        requestBytes: Buffer.byteLength(message, 'utf8'),
+        responseBytes: safeJsonBytes(result),
+        outcome: 'success'
+      });
+      return result;
+    } catch (error) {
+      this.logBridgeRequest({
+        method,
+        requestId,
+        editorInstanceId: session.editorInstanceId,
+        startedAt,
+        requestBytes: Buffer.byteLength(message, 'utf8'),
+        responseBytes: 0,
+        outcome: 'error'
+      });
+      throw error;
+    }
   }
 
   /**
@@ -292,6 +330,11 @@ export class ProbeServer {
     }
 
     this.requestRouter.abortAll();
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.eventLoopDelay.disable();
     const cleanupErrors: string[] = [];
     let runtimeDisposeFailed = false;
     if (this.options.runtimeDriver) {
@@ -339,6 +382,8 @@ export class ProbeServer {
     let editorInstanceId: string | null = null;
     let initialized = false;
     let role: 'bridge' | 'client' | null = null;
+    this.socketLiveness.set(socket, true);
+    socket.on('pong', () => this.socketLiveness.set(socket, true));
 
     socket.on('message', (raw) => {
       const message = this.parseMessage(raw);
@@ -829,12 +874,109 @@ export class ProbeServer {
     return filePath;
   }
 
+  /** Probe Server 主动 ping 所有连接，连续一个周期无 pong 时终止半开连接。 */
+  private startHeartbeat(server: WebSocketServer): void {
+    const intervalMs = this.options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) {
+      throw new Error('INVALID_HEARTBEAT_INTERVAL');
+    }
+    this.heartbeatTimer = setInterval(() => {
+      for (const socket of server.clients) {
+        if (socket.readyState !== WebSocket.OPEN) continue;
+        if (this.socketLiveness.get(socket) === false) {
+          socket.terminate();
+          continue;
+        }
+        this.socketLiveness.set(socket, false);
+        socket.ping();
+      }
+    }, intervalMs);
+    this.heartbeatTimer.unref?.();
+  }
+
+  /** 仅记录慢 Bridge 调用或大载荷，同时附带低成本 event-loop 指标。 */
+  private logBridgeRequest(input: {
+    method: string;
+    requestId: string;
+    editorInstanceId: string;
+    startedAt: number;
+    requestBytes: number;
+    responseBytes: number;
+    outcome: string;
+  }): void {
+    const elapsedMs = performance.now() - input.startedAt;
+    const payloadThreshold = input.method === 'probe.assetIndex' ? 1024 * 1024 : 256 * 1024;
+    if (
+      process.env.COCOS_AI_REQUEST_LOG !== 'debug'
+      && elapsedMs < slowRequestThresholdMs(input.method)
+      && input.requestBytes < payloadThreshold
+      && input.responseBytes < payloadThreshold
+    ) return;
+    const utilization = performance.eventLoopUtilization(this.eventLoopUtilization);
+    this.eventLoopUtilization = performance.eventLoopUtilization();
+    const eventLoopDelayMeanMs = Number.isFinite(this.eventLoopDelay.mean)
+      ? this.eventLoopDelay.mean / 1_000_000
+      : 0;
+    const eventLoopDelayMaxMs = Number.isFinite(this.eventLoopDelay.max)
+      ? this.eventLoopDelay.max / 1_000_000
+      : 0;
+    this.eventLoopDelay.reset();
+    process.stderr.write(`${JSON.stringify({
+      type: 'cocos-ai.request',
+      layer: 'probe-server',
+      method: input.method,
+      requestId: input.requestId,
+      editorInstanceId: input.editorInstanceId,
+      elapsedMs: Math.round(elapsedMs * 100) / 100,
+      requestBytes: input.requestBytes,
+      responseBytes: input.responseBytes,
+      outcome: input.outcome,
+      eventLoopDelayMeanMs: Math.round(eventLoopDelayMeanMs * 100) / 100,
+      eventLoopDelayMaxMs: Math.round(eventLoopDelayMaxMs * 100) / 100,
+      eventLoopUtilization: Math.round(utilization.utilization * 10_000) / 10_000
+    })}\n`);
+  }
+
   private parseMessage(raw: RawData): unknown | null {
     try {
       return JSON.parse(raw.toString()) as unknown;
     } catch {
       return null;
     }
+  }
+}
+
+export function resolveBridgeRequestTimeoutMs(method: string, fallbackMs: number): number {
+  if (
+    method === 'probe.editorState'
+    || method === 'probe.hierarchy'
+    || method === 'probe.node'
+    || method === 'probe.component'
+    || method === 'probe.prefab'
+    || method === 'probe.nodeSelect'
+  ) return Math.min(fallbackMs, 15_000);
+  if (
+    method === 'probe.assets'
+    || method === 'probe.assetIndex'
+    || method === 'probe.assetSearch'
+    || method === 'probe.openAsset'
+  ) return Math.min(fallbackMs, 60_000);
+  return fallbackMs;
+}
+
+function slowRequestThresholdMs(method: string): number {
+  if (method === 'probe.assetIndex' || method === 'probe.assetSearch') return 150;
+  if (method === 'probe.node' || method === 'probe.hierarchy') return 50;
+  if (method === 'probe.directWrite') return 2_000;
+  if (method === 'probe.previewOpen') return 5_000;
+  return 1_000;
+}
+
+function safeJsonBytes(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  } catch {
+    return 0;
   }
 }
 

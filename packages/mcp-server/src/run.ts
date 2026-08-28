@@ -71,7 +71,7 @@ function readRequestTimeoutMs(rawValue: string | undefined): number {
 }
 
 /**
- * 先连接唯一 Probe Client，再启动 MCP Transport，并返回幂等关闭句柄。
+ * 先启动 MCP Transport 暴露固定工具面，再让 Probe Client 在后台持续连接，并返回幂等关闭句柄。
  *
  * @param options 已构造的 Probe Client、MCP Server（包含默认只读和可选门控工具）和 Transport。
  * @param options.probeClient 提供 Creator WebSocket 请求的共享客户端。
@@ -85,8 +85,8 @@ export async function startMcpRuntime<TTransport>(options: {
   transport: TTransport;
 }): Promise<McpRuntime> {
   try {
-    await options.probeClient.connect();
     await options.server.connect(options.transport);
+    void options.probeClient.connect().catch(() => undefined);
   } catch (error) {
     await closeRuntimeResources(options.server, options.probeClient).catch(() => undefined);
     throw error;

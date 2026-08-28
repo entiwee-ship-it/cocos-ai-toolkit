@@ -58,7 +58,6 @@ export class BridgeClient {
     this.socket = socket;
 
     socket.on('open', () => {
-      this.reconnectAttempt = 0;
       this.emitLifecycle({ type: 'socket-open', url: this.options.url });
       socket.send(JSON.stringify(this.options.hello()));
       this.emitLifecycle({ type: 'hello-sent' });
@@ -122,6 +121,7 @@ export class BridgeClient {
         return false;
       }
       if (value.ok === true) {
+        this.reconnectAttempt = 0;
         this.emitLifecycle({ type: 'ready' });
       }
       return true;
@@ -161,7 +161,8 @@ export class BridgeClient {
 
     const base = this.options.reconnectBaseMs ?? 500;
     const maximum = this.options.reconnectMaxMs ?? 10_000;
-    const delay = Math.min(maximum, base * (2 ** this.reconnectAttempt));
+    const baseDelay = Math.min(maximum, base * (2 ** this.reconnectAttempt));
+    const delay = Math.min(maximum, baseDelay + Math.floor(baseDelay * 0.2 * Math.random()));
     this.reconnectAttempt += 1;
     this.emitLifecycle({
       type: 'retry-scheduled',

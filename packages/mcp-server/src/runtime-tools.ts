@@ -9,6 +9,7 @@ import {
 } from '@cocos-ai/protocol';
 import { z as zod } from 'zod';
 import type { CocosReadonlyToolService, CocosReadonlyToolServiceOptions } from './tools.js';
+import { toToolResult } from './tool-result.js';
 
 /**
  * 运行态与视觉验证 MCP 工具。
@@ -370,7 +371,7 @@ export function registerCocosRuntimeReadonlyTools(
     },
     outputSchema: SessionsOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.listPreviewSessions(input)));
+  }, async (input) => toToolResult(service.listPreviewSessions(input)));
 
   server.registerTool('cocos_runtime_get_hierarchy', {
     description: '读取 Preview 运行时整树或指定 path 子树；可排除 inactive 子树，动态节点带 dynamic 标注。',
@@ -383,7 +384,7 @@ export function registerCocosRuntimeReadonlyTools(
     },
     outputSchema: RuntimeNodeSnapshotSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.getRuntimeHierarchy(input)));
+  }, async (input) => toToolResult(service.getRuntimeHierarchy(input)));
 
   server.registerTool('cocos_runtime_inspect_component', {
     description: '按节点路径与组件类型读取运行时组件属性包（cc. 前缀自动兼容；未命中返回候选清单）。',
@@ -392,7 +393,7 @@ export function registerCocosRuntimeReadonlyTools(
     },
     outputSchema: RuntimeRecordOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.inspectRuntimeComponent(input)));
+  }, async (input) => toToolResult(service.inspectRuntimeComponent(input)));
 
   server.registerTool('cocos_runtime_get_console', {
     description: '读取 Preview 运行时 Console（seq 游标增量拉取、级别过滤、error 带堆栈）。',
@@ -403,7 +404,7 @@ export function registerCocosRuntimeReadonlyTools(
     },
     outputSchema: ConsoleOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.getRuntimeConsole(input)));
+  }, async (input) => toToolResult(service.getRuntimeConsole(input)));
 
   server.registerTool('cocos_runtime_watch_property', {
     description: '监听运行时组件属性变化（server 侧轮询，变化即返回；支持点路径嵌套属性）。',
@@ -416,7 +417,7 @@ export function registerCocosRuntimeReadonlyTools(
     },
     outputSchema: WatchOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.watchRuntimeProperty(input)));
+  }, async (input) => toToolResult(service.watchRuntimeProperty(input)));
 
   server.registerTool('cocos_runtime_capture', {
     description: 'Game 视图截图：指定/多分辨率、目标区域裁剪、节点边界与锚点叠加；产物落盘返回路径（视觉结果仅作辅助证据）。',
@@ -430,7 +431,7 @@ export function registerCocosRuntimeReadonlyTools(
     },
     outputSchema: CaptureOutputSchema,
     annotations: READONLY_ANNOTATIONS
-  }, async (input) => toToolResult(await service.captureRuntime(input)));
+  }, async (input) => toToolResult(service.captureRuntime(input)));
 }
 
 /** 登记仅在显式 enableWrites 时开放的运行态动作工具。 */
@@ -448,7 +449,7 @@ export function registerCocosRuntimeGatedTools(
     },
     outputSchema: PreviewSessionSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.launchPreview(input)));
+  }, async (input) => toToolResult(service.launchPreview(input)));
 
   server.registerTool('cocos_preview_stop', {
     description: '停止指定 Preview 页面会话（仅工具自 launch 的页面）。',
@@ -457,7 +458,7 @@ export function registerCocosRuntimeGatedTools(
     },
     outputSchema: RuntimeRecordOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.stopPreview(input)));
+  }, async (input) => toToolResult(service.stopPreview(input)));
 
   server.registerTool('cocos_runtime_invoke_method', {
     description: '调用运行时组件方法（白名单参数、生命周期与危险方法黑名单、返回值序列化回传）。',
@@ -468,7 +469,7 @@ export function registerCocosRuntimeGatedTools(
     },
     outputSchema: RuntimeRecordOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.invokeRuntimeMethod(input)));
+  }, async (input) => toToolResult(service.invokeRuntimeMethod(input)));
 
   server.registerTool('cocos_runtime_sample_window', {
     description: '在单次页面执行中逐帧或定时采样组件属性；可先触发组件方法，并保留节点销毁的 nodeValid=false 证据。',
@@ -478,7 +479,7 @@ export function registerCocosRuntimeGatedTools(
     },
     outputSchema: RuntimeSampleWindowSnapshotSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.sampleRuntimeWindow(input)));
+  }, async (input) => toToolResult(service.sampleRuntimeWindow(input)));
 
   server.registerTool('cocos_runtime_dispatch_input', {
     description: '向 Preview 页面派发输入（tap/click 为画布 CSS 像素坐标，key 为按键；回执不保证游戏响应，须后续断言验证）。',
@@ -491,7 +492,7 @@ export function registerCocosRuntimeGatedTools(
     },
     outputSchema: RuntimeRecordOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.dispatchRuntimeInput(input)));
+  }, async (input) => toToolResult(service.dispatchRuntimeInput(input)));
 
   server.registerTool('cocos_runtime_instantiate_prefab', {
     description: '在 Preview 运行时加载并实例化 Prefab，挂到指定节点；只影响运行时，不写工程文件。',
@@ -504,7 +505,7 @@ export function registerCocosRuntimeGatedTools(
     },
     outputSchema: RuntimeRecordOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.instantiateRuntimePrefab(input)));
+  }, async (input) => toToolResult(service.instantiateRuntimePrefab(input)));
 
   server.registerTool('cocos_runtime_run_scenario', {
     description: '按 launch、wait-node、assert-property、dispatch-input、instantiate-prefab、assert-console、capture、assert-image-diff、stop 九类步骤执行场景并产出逐项证据；stop(always:true) 会在前序步骤失败后继续清理 Preview。SESSION_REQUIRED/LOST 时传有效 sessionId 或先 launch 后重跑。',
@@ -516,15 +517,5 @@ export function registerCocosRuntimeGatedTools(
     },
     outputSchema: RuntimeRecordOutputSchema,
     annotations: WRITE_ANNOTATIONS
-  }, async (input) => toToolResult(await service.runRuntimeScenario(input)));
-}
-
-function toToolResult(value: unknown) {
-  const structuredContent = value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : { value };
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(structuredContent) }],
-    structuredContent
-  };
+  }, async (input) => toToolResult(service.runRuntimeScenario(input)));
 }

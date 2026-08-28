@@ -66,13 +66,10 @@ try {
   client = new Client({ name: 'cocos-ai-creator-smoke', version: toolkitVersion });
   await client.connect(transport);
 
-  const editorList = await callTool(client, { name: 'cocos_editor_list', arguments: {} });
+  const editorList = await waitForProjectEditor(client, projectPath, 2_000);
   result.steps.push('editors');
   const editors = Array.isArray(editorList.editors) ? editorList.editors : [];
   const matches = editors.filter((editor) => samePath(editor.projectPath, projectPath));
-  if (matches.length === 0) {
-    throw new SmokeSkip('CREATOR_EDITOR_NOT_FOUND');
-  }
   if (matches.length !== 1) throw new Error('CREATOR_EDITOR_AMBIGUOUS');
   const editor = matches[0];
   result.creatorVersion = editor.creatorVersion ?? null;
@@ -142,6 +139,18 @@ async function callTool(targetClient, request) {
   const response = await targetClient.callTool(request);
   if (response.isError) throw new Error(`MCP_TOOL_FAILED:${request.name}:${JSON.stringify(response.content)}`);
   return response.structuredContent ?? {};
+}
+
+/** 等待 MCP 后台 ProbeClient 完成握手，并返回包含目标工程的编辑器列表。 */
+async function waitForProjectEditor(targetClient, targetProjectPath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const editorList = await callTool(targetClient, { name: 'cocos_editor_list', arguments: {} });
+    const editors = Array.isArray(editorList.editors) ? editorList.editors : [];
+    if (editors.some((editor) => samePath(editor.projectPath, targetProjectPath))) return editorList;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  throw new SmokeSkip('CREATOR_EDITOR_NOT_FOUND');
 }
 
 async function runPrefabInstantiateSmoke(targetClient, editor, options) {

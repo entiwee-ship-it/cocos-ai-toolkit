@@ -15,6 +15,7 @@ describe('Creator 3.8.8 smoke 合同', () => {
     expect(packageJson.scripts?.['smoke:creator:write-routing']).toContain('--write-applicability true');
     expect(smoke).toContain("'--enable-writes'");
     expect(smoke).toContain("name: 'cocos_editor_list'");
+    expect(smoke).toContain('waitForProjectEditor(client, projectPath, 2_000)');
     expect(smoke).toContain("name: 'cocos_hierarchy'");
     expect(smoke).toContain("name: 'cocos_component_add'");
     expect(smoke).toContain("componentType: 'cc.UITransform'");

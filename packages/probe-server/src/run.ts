@@ -1,12 +1,19 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RuntimeDriver } from '@cocos-ai/core';
-import { DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS, ProbeServer } from './server.js';
+import {
+  DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  ProbeServer
+} from './server.js';
 import { launchPlaywrightBrowser } from './playwright-launcher.js';
 
 const host = process.env.COCOS_AI_PROBE_HOST ?? '127.0.0.1';
 const port = Number(process.env.COCOS_AI_PROBE_PORT ?? '32188');
 const requestTimeoutMs = Number(process.env.COCOS_AI_PROBE_TIMEOUT_MS ?? DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS);
+const heartbeatIntervalMs = Number(
+  process.env.COCOS_AI_PROBE_HEARTBEAT_MS ?? DEFAULT_HEARTBEAT_INTERVAL_MS
+);
 const sessionToken = process.env.COCOS_AI_SESSION_TOKEN || undefined;
 // 截图落盘根固定在工具仓库 reports 下（dist/run.js 上溯三级），不随启动 cwd 漂移。
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -22,6 +29,7 @@ const server = new ProbeServer({
   host,
   port,
   requestTimeoutMs,
+  heartbeatIntervalMs,
   runtimeDriver,
   captureRoot,
   captureFilesPerSession,

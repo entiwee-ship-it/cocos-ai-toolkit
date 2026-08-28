@@ -10,6 +10,12 @@ export interface RequestErrorPayload {
   details: unknown;
   stage?: string;
   nextAction?: string;
+  retryable?: boolean;
+}
+
+export interface RequestContext {
+  method: string;
+  editorInstanceId: string;
 }
 
 export class RequestRouterError extends Error {
@@ -38,16 +44,26 @@ export class RequestRouter {
    * @param timeoutMs 等待响应的最大毫秒数。
    * @returns Bridge 响应载荷。
    */
-  wait(requestId: string, timeoutMs: number): Promise<unknown> {
+  wait(requestId: string, timeoutMs: number, context?: RequestContext): Promise<unknown> {
+    const startedAt = Date.now();
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
+        const outcomeUnknown = context ? isPotentialWriteMethod(context.method) : true;
         reject(new RequestRouterError({
-          code: 'OUTCOME_UNKNOWN',
+          code: outcomeUnknown ? 'OUTCOME_UNKNOWN' : 'SERVER_REQUEST_TIMEOUT',
           message: `等待 Bridge 响应超过 ${timeoutMs}ms`,
-          details: { timeoutMs },
-          stage: 'unknown',
-          nextAction: '先重读当前文档状态；确认结局前禁止重试写入'
+          details: {
+            timeoutMs,
+            elapsedMs: Date.now() - startedAt,
+            requestId,
+            ...(context ?? {})
+          },
+          stage: outcomeUnknown ? 'unknown' : 'bridge-request',
+          nextAction: outcomeUnknown
+            ? '先重读当前文档状态；确认结局前禁止重试写入'
+            : '确认 Creator Bridge 在线后重试该只读请求',
+          retryable: !outcomeUnknown
         }));
       }, timeoutMs);
 
@@ -95,8 +111,28 @@ export class RequestRouter {
 
 export function toServerErrorPayload(error: unknown): RequestErrorPayload {
   if (error instanceof RequestRouterError) return error.payload;
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const record = error as Record<string, unknown>;
+    if (typeof record.code === 'string' && record.code) {
+      return {
+        code: record.code,
+        message: typeof record.message === 'string' && record.message ? record.message : record.code,
+        details: record.details ?? {},
+        ...(typeof record.stage === 'string' ? { stage: record.stage } : {}),
+        ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+        ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {})
+      };
+    }
+  }
   if (error instanceof Error) {
-    return { code: error.message || 'UNKNOWN_SERVER_ERROR', message: error.message, details: {} };
+    const message = error.message || 'UNKNOWN_SERVER_ERROR';
+    const code = readStableErrorCode(message, 'UNKNOWN_SERVER_ERROR');
+    return {
+      code,
+      message,
+      details: {},
+      retryable: code === 'EDITOR_INSTANCE_DISCONNECTED'
+    };
   }
   return { code: 'UNKNOWN_SERVER_ERROR', message: 'Unknown server error', details: {} };
 }
@@ -113,8 +149,18 @@ function normalizeRequestErrorPayload(payload: unknown): RequestErrorPayload {
     message,
     details: record.details ?? {},
     ...(typeof record.stage === 'string' ? { stage: record.stage } : {}),
-    ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {})
+    ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+    ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {})
   };
+}
+
+function isPotentialWriteMethod(method: string): boolean {
+  return method === 'probe.directWrite'
+    || method === 'probe.saveDocument'
+    || method === 'probe.importAsset'
+    || method === 'probe.createPrefab'
+    || method === 'probe.deleteAsset'
+    || method === 'probe.refreshAsset';
 }
 
 function formatRequestError(payload: RequestErrorPayload): string {
@@ -125,3 +171,4 @@ function formatRequestError(payload: RequestErrorPayload): string {
     payload.nextAction ? `nextAction=${payload.nextAction}` : null
   ].filter(Boolean).join(': ');
 }
+import { readStableErrorCode } from '@cocos-ai/protocol';

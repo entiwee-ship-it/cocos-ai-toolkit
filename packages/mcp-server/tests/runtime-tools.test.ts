@@ -218,6 +218,9 @@ describe('运行态 MCP 工具（阶段五）', () => {
 
     const result = await client.callTool({ name: 'cocos_preview_launch', arguments: { projectId: 'proj1' } });
     expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: 'EDITOR_INSTANCE_NOT_FOUND', retryable: false }
+    });
     expect(JSON.stringify(result.content)).toContain('EDITOR_INSTANCE_NOT_FOUND');
   });
 

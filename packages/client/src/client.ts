@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { resolveWebSocketMaxPayload } from '@cocos-ai/protocol';
 import WebSocket, { type RawData } from 'ws';
 
@@ -6,6 +7,11 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
+  method: string;
+  requestId: string;
+  startedAt: number;
+  requestBytes: number;
+  editorInstanceId?: string;
 }
 
 interface ServerResponse {
@@ -21,6 +27,14 @@ export interface ProbeClientErrorPayload {
   details: unknown;
   stage?: string;
   nextAction?: string;
+  retryable?: boolean;
+}
+
+export interface ProbeClientStatus {
+  url: string;
+  state: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed';
+  reconnectAttempt: number;
+  nextRetryAt: string | null;
 }
 
 export class ProbeClientError extends Error {
@@ -29,6 +43,7 @@ export class ProbeClientError extends Error {
   readonly details: unknown;
   readonly stage?: string;
   readonly nextAction?: string;
+  readonly retryable: boolean;
 
   constructor(readonly payload: ProbeClientErrorPayload) {
     super(formatProbeClientError(payload));
@@ -38,6 +53,7 @@ export class ProbeClientError extends Error {
     this.details = payload.details;
     this.stage = payload.stage;
     this.nextAction = payload.nextAction;
+    this.retryable = payload.retryable === true;
   }
 }
 
@@ -45,9 +61,10 @@ export class ProbeClient {
   private socket: WebSocket | null = null;
   private readonly pending = new Map<string, PendingRequest>();
   private disposed = false;
-  private everConnected = false;
+  private connected = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  private nextRetryAt: number | null = null;
   private connectedPromise: Promise<void> | null = null;
   private signalConnected: (() => void) | null = null;
   private signalDisconnected: ((error: Error) => void) | null = null;
@@ -73,39 +90,68 @@ export class ProbeClient {
 
   /**
    * 连接 Probe Server 并完成客户端身份握手。
-   * 首次握手成功后连接中断会按指数退避自动重连，直到 close()。
+   * 首次连接失败或握手后中断都会按带抖动的指数退避自动重连，直到 close()。
    */
   async connect(): Promise<void> {
-    if (this.socket) {
+    if (this.socket || this.reconnectTimer || this.connectedPromise) {
       throw new Error('CLIENT_ALREADY_CONNECTED');
     }
     this.disposed = false;
     this.beginConnectionEpoch();
-    await this.openSocket();
+    void this.openSocket().catch(() => undefined);
+    await this.waitConnected();
   }
 
   /**
    * 向 Probe Server 发送控制请求。
-   * 断线重连期间到来的请求会等待连接恢复，等待超过 timeoutMs 报 CLIENT_NOT_CONNECTED。
+   * 后端离线时立即返回 PROBE_SERVER_UNAVAILABLE；恢复后同一实例可直接继续请求。
    *
    * @param method Server 控制方法或 Bridge 探针方法。
    * @param payload JSON 请求参数。
    * @returns Server 返回的 JSON 载荷。
    */
   async request(method: string, payload: unknown): Promise<unknown> {
-    await this.waitConnected();
+    if (!this.connected) {
+      throw new ProbeClientError({
+        code: 'PROBE_SERVER_UNAVAILABLE',
+        message: 'Probe Server 当前不可用',
+        details: this.getStatus(),
+        nextAction: '等待 Creator Bridge 自动启动 Probe，或确认 127.0.0.1:32188 监听后重试',
+        retryable: true
+      });
+    }
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       throw new Error('CLIENT_NOT_CONNECTED');
     }
 
     const requestId = randomUUID();
+    const message = JSON.stringify({ type: 'request', requestId, method, payload });
     const response = new Promise<unknown>((resolve, reject) => {
-      this.registerPending(requestId, resolve, reject);
+      this.registerPending(requestId, method, payload, Buffer.byteLength(message, 'utf8'), resolve, reject);
     });
 
-    socket.send(JSON.stringify({ type: 'request', requestId, method, payload }));
+    socket.send(message);
     return response;
+  }
+
+  /** 返回当前连接状态，供 MCP 在 Probe 离线时生成可行动结果。 */
+  getStatus(): ProbeClientStatus {
+    const state = this.disposed
+      ? 'closed'
+      : this.connected
+        ? 'connected'
+        : this.reconnectTimer
+          ? 'reconnecting'
+          : this.socket
+            ? 'connecting'
+            : 'idle';
+    return {
+      url: this.url,
+      state,
+      reconnectAttempt: this.reconnectAttempt,
+      nextRetryAt: this.nextRetryAt === null ? null : new Date(this.nextRetryAt).toISOString()
+    };
   }
 
   /**
@@ -113,14 +159,17 @@ export class ProbeClient {
    */
   async close(): Promise<void> {
     this.disposed = true;
+    this.connected = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.nextRetryAt = null;
     const socket = this.socket;
     this.socket = null;
     this.abortPending('SERVER_CONNECTION_CLOSED');
     this.signalDisconnected?.(new Error('CLIENT_NOT_CONNECTED'));
+    this.connectedPromise = null;
     this.signalConnected = null;
     this.signalDisconnected = null;
     if (!socket || socket.readyState === WebSocket.CLOSED) {
@@ -149,9 +198,10 @@ export class ProbeClient {
       };
 
       socket.on('open', () => {
-        this.reconnectAttempt = 0;
-        this.registerPending('client.hello', () => settle(() => {
-          this.everConnected = true;
+        this.nextRetryAt = null;
+        this.registerPending('client.hello', 'client.hello', {}, 0, () => settle(() => {
+          this.connected = true;
+          this.reconnectAttempt = 0;
           this.signalConnected?.();
           this.signalConnected = null;
           this.signalDisconnected = null;
@@ -167,6 +217,7 @@ export class ProbeClient {
       socket.on('error', (error) => {
         this.abortPending(error.message);
         settle(() => reject(error));
+        socket.terminate();
       });
     });
   }
@@ -207,33 +258,71 @@ export class ProbeClient {
       return;
     }
     this.socket = null;
-    if (this.disposed || !this.everConnected) {
+    const wasConnected = this.connected;
+    this.connected = false;
+    if (this.disposed) {
       this.signalDisconnected?.(new Error('SERVER_CONNECTION_CLOSED'));
       this.signalConnected = null;
       this.signalDisconnected = null;
       return;
     }
+    if (wasConnected || !this.connectedPromise) this.beginConnectionEpoch();
+    this.scheduleReconnect();
+  }
 
-    this.beginConnectionEpoch();
-    const delay = Math.min(this.reconnectMaxMs, this.reconnectBaseMs * (2 ** this.reconnectAttempt));
+  /** 按带抖动的指数退避安排下一次连接，首次连接失败同样持续恢复。 */
+  private scheduleReconnect(): void {
+    if (this.disposed || this.reconnectTimer) return;
+    const baseDelay = Math.min(this.reconnectMaxMs, this.reconnectBaseMs * (2 ** this.reconnectAttempt));
+    const delay = Math.min(
+      this.reconnectMaxMs,
+      baseDelay + Math.floor(baseDelay * 0.2 * Math.random())
+    );
     this.reconnectAttempt += 1;
+    this.nextRetryAt = Date.now() + delay;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      // 重连失败会经由 error/close 事件再次进入 handleClose 继续退避。
+      this.nextRetryAt = null;
       void this.openSocket().catch(() => undefined);
     }, delay);
   }
 
   private registerPending(
     correlationId: string,
+    method: string,
+    payload: unknown,
+    requestBytes: number,
     resolve: (value: unknown) => void,
     reject: (error: Error) => void
   ): void {
+    const startedAt = performance.now();
     const timeout = setTimeout(() => {
+      const pending = this.pending.get(correlationId);
       this.pending.delete(correlationId);
-      reject(new Error('SERVER_REQUEST_TIMEOUT'));
+      if (pending) this.logRequest(pending, 0, 'timeout');
+      reject(new ProbeClientError({
+        code: 'SERVER_REQUEST_TIMEOUT',
+        message: 'Probe Server 请求超时',
+        details: {
+          method,
+          requestId: correlationId,
+          timeoutMs: this.timeoutMs,
+          elapsedMs: Math.round(performance.now() - startedAt)
+        },
+        nextAction: '确认 Probe 与 Creator Bridge 仍在线后重试只读请求；写请求先重读状态',
+        retryable: !isPotentialWriteMethod(method)
+      }));
     }, this.timeoutMs);
-    this.pending.set(correlationId, { resolve, reject, timeout });
+    this.pending.set(correlationId, {
+      resolve,
+      reject,
+      timeout,
+      method,
+      requestId: correlationId,
+      startedAt,
+      requestBytes,
+      ...readEditorTarget(payload)
+    });
   }
 
   private handleMessage(raw: RawData): void {
@@ -252,6 +341,7 @@ export class ProbeClient {
 
     clearTimeout(pending.timeout);
     this.pending.delete(response.correlationId);
+    this.logRequest(pending, Buffer.byteLength(raw.toString(), 'utf8'), response.ok ? 'success' : 'error');
     if (response.ok) {
       pending.resolve(response.payload);
       return;
@@ -271,7 +361,8 @@ export class ProbeClient {
         message: typeof record.message === 'string' && record.message ? record.message : code,
         details: record.details ?? {},
         ...(typeof record.stage === 'string' ? { stage: record.stage } : {}),
-        ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {})
+        ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+        ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {})
       };
     }
     return { code: 'SERVER_REQUEST_FAILED', message: 'Server request failed', details: payload };
@@ -280,9 +371,45 @@ export class ProbeClient {
   private abortPending(code: string): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
-      pending.reject(new Error(code));
+      this.logRequest(pending, 0, 'connection-closed');
+      const outcomeUnknown = isPotentialWriteMethod(pending.method);
+      pending.reject(new ProbeClientError({
+        code: outcomeUnknown ? 'OUTCOME_UNKNOWN' : code,
+        message: outcomeUnknown ? '连接中断，写入结局未知' : code,
+        details: {
+          method: pending.method,
+          requestId: pending.requestId,
+          elapsedMs: Math.round(performance.now() - pending.startedAt)
+        },
+        ...(outcomeUnknown ? { nextAction: '先重读当前文档或资产状态；确认结局前禁止重试写入' } : {}),
+        retryable: !outcomeUnknown
+      }));
     }
     this.pending.clear();
+  }
+
+  /** 仅记录慢请求或大载荷，不输出业务 payload。 */
+  private logRequest(pending: PendingRequest, responseBytes: number, outcome: string): void {
+    const elapsedMs = performance.now() - pending.startedAt;
+    const threshold = slowRequestThresholdMs(pending.method);
+    const payloadThreshold = slowPayloadThresholdBytes(pending.method);
+    if (
+      process.env.COCOS_AI_REQUEST_LOG !== 'debug'
+      && elapsedMs < threshold
+      && pending.requestBytes < payloadThreshold
+      && responseBytes < payloadThreshold
+    ) return;
+    process.stderr.write(`${JSON.stringify({
+      type: 'cocos-ai.request',
+      layer: 'probe-client',
+      method: pending.method,
+      requestId: pending.requestId,
+      ...(pending.editorInstanceId ? { editorInstanceId: pending.editorInstanceId } : {}),
+      elapsedMs: Math.round(elapsedMs * 100) / 100,
+      requestBytes: pending.requestBytes,
+      responseBytes,
+      outcome
+    })}\n`);
   }
 }
 
@@ -296,4 +423,33 @@ function formatProbeClientError(payload: ProbeClientErrorPayload): string {
       : null,
     payload.nextAction ? `nextAction=${payload.nextAction}` : null
   ].filter(Boolean).join(': ');
+}
+
+function readEditorTarget(payload: unknown): { editorInstanceId?: string } {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
+  const selector = (payload as { selector?: unknown }).selector;
+  if (!selector || typeof selector !== 'object' || Array.isArray(selector)) return {};
+  const editorInstanceId = (selector as { editorInstanceId?: unknown }).editorInstanceId;
+  return typeof editorInstanceId === 'string' && editorInstanceId ? { editorInstanceId } : {};
+}
+
+function isPotentialWriteMethod(method: string): boolean {
+  return method === 'probe.directWrite'
+    || method === 'probe.saveDocument'
+    || method === 'probe.importAsset'
+    || method === 'probe.createPrefab'
+    || method === 'probe.deleteAsset'
+    || method === 'probe.refreshAsset';
+}
+
+function slowRequestThresholdMs(method: string): number {
+  if (method === 'probe.assetIndex' || method === 'probe.assetSearch') return 150;
+  if (method === 'probe.node' || method === 'probe.hierarchy') return 50;
+  if (method === 'probe.directWrite') return 2_000;
+  if (method === 'server.previewLaunch') return 5_000;
+  return 1_000;
+}
+
+function slowPayloadThresholdBytes(method: string): number {
+  return method === 'probe.assetIndex' ? 1024 * 1024 : 256 * 1024;
 }

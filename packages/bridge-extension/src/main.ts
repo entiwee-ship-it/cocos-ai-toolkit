@@ -14,7 +14,7 @@ import {
 import { importAsset } from './import-asset';
 import { createProbeServerBootstrap, type ProbeBootstrapResult } from './probe-bootstrap';
 
-const BRIDGE_VERSION = '0.6.1';
+const BRIDGE_VERSION = '0.6.2';
 const BRIDGE_BUILD_ID = readBridgeBuildId(__dirname);
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 

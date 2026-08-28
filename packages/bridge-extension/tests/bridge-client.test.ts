@@ -1,5 +1,5 @@
 import type { AddressInfo } from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { DEFAULT_WEBSOCKET_MAX_PAYLOAD_BYTES } from '../../protocol/src/transport.js';
 import {
@@ -55,7 +55,8 @@ describe('BridgeClient WebSocket transport', () => {
     }
   });
 
-  it('断线后报告重连计划，dispose 后报告释放且不再连接', async () => {
+  it('断线后报告带抖动的重连计划，dispose 后报告释放且不再连接', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>((resolve) => server.once('listening', resolve));
     const port = (server.address() as AddressInfo).port;
@@ -74,7 +75,7 @@ describe('BridgeClient WebSocket transport', () => {
       hello: () => ({ method: 'bridge.hello', payload: {} }),
       handlers: {},
       reconnectBaseMs: 40,
-      reconnectMaxMs: 40,
+      reconnectMaxMs: 100,
       onLifecycleEvent: (event) => {
         events.push(event);
         if (event.type === 'retry-scheduled') resolveRetry?.();
@@ -95,9 +96,11 @@ describe('BridgeClient WebSocket transport', () => {
         'retry-scheduled',
         'disposed'
       ]);
+      expect(events).toContainEqual({ type: 'retry-scheduled', attempt: 1, delayMs: 44 });
       expect(connectionCount).toBe(1);
     } finally {
       client.dispose();
+      vi.restoreAllMocks();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
