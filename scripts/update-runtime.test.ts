@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 const updaterPath = new URL('./update-runtime.ps1', import.meta.url);
 const installerPath = new URL('./install-bridge.ps1', import.meta.url);
+const removerPath = new URL('./remove-bridge.ps1', import.meta.url);
 const cleanerPath = new URL('./clean-dist.mjs', import.meta.url);
 const rootPackagePath = new URL('../package.json', import.meta.url);
 const readmePath = new URL('../README.md', import.meta.url);
@@ -83,6 +84,33 @@ describe('运行工作树同步合同', () => {
 
       await expect(stat(staleDist)).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(stat(join(sourceDir, 'main.ts'))).resolves.toBeDefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('安全移除 Bridge Junction 而不删除目标目录内容', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cocos-ai-remove-bridge-'));
+    try {
+      const toolkit = join(root, 'toolkit');
+      const bridge = join(toolkit, 'packages', 'bridge-extension');
+      const project = join(root, 'project');
+      const extension = join(project, 'extensions', 'cocos-ai-bridge');
+      await mkdir(bridge, { recursive: true });
+      await mkdir(join(project, 'extensions'), { recursive: true });
+      await writeFile(join(bridge, 'sentinel.txt'), 'keep');
+      await symlink(bridge, extension, 'junction');
+
+      execFileSync('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', fileURLToPath(removerPath),
+        '-ProjectPath', project,
+        '-ToolkitPath', toolkit
+      ], { stdio: 'pipe' });
+
+      await expect(stat(extension)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(join(bridge, 'sentinel.txt'))).resolves.toBeDefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

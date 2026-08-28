@@ -14,9 +14,9 @@ if (-not (Test-Path -LiteralPath $extensionPath)) {
     exit 0
 }
 $item = Get-Item -LiteralPath $extensionPath -Force
-$target = if ($item.Target) { [IO.Path]::GetFullPath([string]$item.Target) } else { '' }
+$target = if ($item.Target) { (Resolve-Path -LiteralPath ([string]$item.Target)).Path } else { '' }
 if ($item.LinkType -ne 'Junction' -or $target.TrimEnd('\') -ine $bridgePath.TrimEnd('\')) {
     throw "目标不是指向本工具 Bridge 的 Junction，拒绝删除: $extensionPath"
 }
-Remove-Item -LiteralPath $extensionPath -Force
+[IO.Directory]::Delete($extensionPath)
 Write-Output "已移除 Bridge Junction: $extensionPath"
