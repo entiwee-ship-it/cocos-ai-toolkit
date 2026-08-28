@@ -17,14 +17,21 @@ const targetPrefabUuid = args.targetPrefabUuid ?? null;
 const instantiatePrefabUuid = args.instantiatePrefabUuid ?? null;
 const instanceName = args.instanceName ?? 'CocosAiPrefabSmoke';
 const unpackMode = args.unpackMode ?? null;
+const writeApplicability = args.writeApplicability === 'true';
 if (Boolean(targetPrefabUuid) !== Boolean(instantiatePrefabUuid)) {
   throw new Error('PREFAB_SMOKE_UUID_PAIR_REQUIRED');
+}
+if (args.writeApplicability !== undefined && args.writeApplicability !== 'true' && args.writeApplicability !== 'false') {
+  throw new Error(`WRITE_APPLICABILITY_INVALID:${args.writeApplicability}`);
 }
 if (unpackMode !== null && unpackMode !== 'current' && unpackMode !== 'complete') {
   throw new Error(`PREFAB_UNPACK_MODE_INVALID:${unpackMode}`);
 }
 if (unpackMode && (!targetPrefabUuid || !instantiatePrefabUuid)) {
   throw new Error('PREFAB_UNPACK_REQUIRES_INSTANTIATE_FIXTURE');
+}
+if (writeApplicability && (!targetPrefabUuid || !instantiatePrefabUuid)) {
+  throw new Error('WRITE_APPLICABILITY_REQUIRES_INSTANTIATE_FIXTURE');
 }
 const mcpEntry = join(repoRoot, 'packages', 'mcp-server', 'dist', 'run.js');
 const toolkitVersion = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).version;
@@ -106,7 +113,8 @@ try {
       targetPrefabUuid,
       instantiatePrefabUuid,
       instanceName,
-      unpackMode
+      unpackMode,
+      writeApplicability
     });
   }
 
@@ -204,6 +212,9 @@ async function runPrefabInstantiateSmoke(targetClient, editor, options) {
     if (!persisted || readPrefabAssetUuid(persisted) !== options.instantiatePrefabUuid) {
       throw new Error(`PREFAB_INSTANTIATE_REOPEN_VERIFY_FAILED:${instancePath}`);
     }
+    const writeRouting = options.writeApplicability
+      ? await runWriteApplicabilitySmoke(targetClient, editor, persisted, options.instantiatePrefabUuid)
+      : null;
     let unpack = null;
     if (options.unpackMode) {
       const unpacked = await callTool(targetClient, {
@@ -265,6 +276,7 @@ async function runPrefabInstantiateSmoke(targetClient, editor, options) {
       stablePath: instantiated.stablePath,
       reopenedNodeUuid: readNodeUuid(persisted),
       reopenedPath: readNodePath(persisted),
+      ...(writeRouting ? { writeRouting } : {}),
       ...(unpack ? { unpack } : {})
     };
   } finally {
@@ -300,6 +312,88 @@ async function runPrefabInstantiateSmoke(targetClient, editor, options) {
       }
     }
   }
+}
+
+async function runWriteApplicabilitySmoke(targetClient, editor, instanceRoot, sourcePrefabUuid) {
+  const instanceRootUuid = readNodeUuid(instanceRoot);
+  const contentNode = Array.isArray(instanceRoot?.children) ? instanceRoot.children[0] : null;
+  const contentNodeUuid = readNodeUuid(contentNode);
+  if (!instanceRootUuid || !contentNodeUuid) throw new Error('WRITE_APPLICABILITY_FIXTURE_INVALID');
+
+  const [rootRead, contentRead] = await Promise.all([
+    callTool(targetClient, {
+      name: 'cocos_node_read',
+      arguments: {
+        projectId: editor.projectId,
+        editorInstanceId: editor.editorInstanceId,
+        nodeUuid: instanceRootUuid
+      }
+    }),
+    callTool(targetClient, {
+      name: 'cocos_node_read',
+      arguments: {
+        projectId: editor.projectId,
+        editorInstanceId: editor.editorInstanceId,
+        nodeUuid: contentNodeUuid
+      }
+    })
+  ]);
+  const rootCapabilities = rootRead.writeCapabilities;
+  const contentCapabilities = contentRead.writeCapabilities;
+  if (
+    rootCapabilities?.canRename !== true
+    || rootCapabilities?.canSetTransform !== true
+    || rootCapabilities?.canCreateChild !== false
+    || rootCapabilities?.canSetComponentProperty !== false
+  ) {
+    throw new Error(`WRITE_APPLICABILITY_ROOT_CAPABILITIES_INVALID:${JSON.stringify(rootCapabilities ?? null)}`);
+  }
+  if (
+    contentCapabilities?.canSetTransform !== false
+    || contentCapabilities?.canSetComponentProperty !== false
+    || contentCapabilities?.ownerPrefabUuid !== sourcePrefabUuid
+    || contentCapabilities?.nextAction?.tool !== 'cocos_prefab_open'
+  ) {
+    throw new Error(`WRITE_APPLICABILITY_CONTENT_CAPABILITIES_INVALID:${JSON.stringify(contentCapabilities ?? null)}`);
+  }
+
+  const contentNodeData = contentRead.node?.data ?? contentRead.node;
+  const position = contentNodeData?.transform?.position;
+  if (!position || ['x', 'y', 'z'].some((key) => typeof position[key] !== 'number')) {
+    throw new Error('WRITE_APPLICABILITY_CONTENT_POSITION_INVALID');
+  }
+  const rejected = await targetClient.callTool({
+    name: 'cocos_node_set_transform',
+    arguments: {
+      projectId: editor.projectId,
+      editorInstanceId: editor.editorInstanceId,
+      nodeUuid: contentNodeUuid,
+      localTransform: { position }
+    }
+  });
+  if (!rejected.isError || !JSON.stringify(rejected.content).includes('NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT')) {
+    throw new Error(`WRITE_APPLICABILITY_REJECTION_MISSING:${JSON.stringify(rejected)}`);
+  }
+  result.steps.push('write-applicability-rejected');
+
+  const editorState = await callTool(targetClient, {
+    name: 'cocos_editor_state',
+    arguments: {
+      projectId: editor.projectId,
+      editorInstanceId: editor.editorInstanceId
+    }
+  });
+  if (editorState.state?.document?.dirty !== false) {
+    throw new Error(`WRITE_APPLICABILITY_DIRTY_AFTER_REJECTION:${JSON.stringify(editorState.state ?? null)}`);
+  }
+  result.steps.push('write-applicability-clean');
+  return {
+    instanceRootUuid,
+    contentNodeUuid,
+    ownerPrefabUuid: contentCapabilities.ownerPrefabUuid,
+    errorCode: 'NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT',
+    dirtyAfterRejection: false
+  };
 }
 
 async function writeResult() {

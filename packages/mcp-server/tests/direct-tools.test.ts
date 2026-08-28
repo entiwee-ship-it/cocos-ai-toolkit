@@ -136,6 +136,29 @@ const NODE_DETAIL = {
     state: 2,
     sourceUrl: 'db://assets/ui/Source.prefab'
   },
+  writeCapabilities: {
+    assessment: 'confirmed',
+    documentMode: 'prefab',
+    ownerDocumentUuid: 'owner-prefab',
+    ownerPrefabUuid: 'source-prefab',
+    ownerSourceUrl: 'db://assets/ui/Source.prefab',
+    sourceFileId: 'panel-file-id',
+    isNestedPrefabContent: true,
+    isInstanceRoot: true,
+    canRename: true,
+    canSetTransform: true,
+    canDelete: true,
+    canReparent: true,
+    canDuplicate: true,
+    canSetActive: false,
+    canSetLayer: false,
+    canCreateChild: false,
+    canAddComponent: false,
+    canRemoveComponent: false,
+    canSetComponentProperty: false,
+    reasonCode: 'NESTED_PREFAB_INSTANCE_ROOT_LIMITED',
+    nextAction: { tool: 'cocos_prefab_open', arguments: { uuid: 'source-prefab' } }
+  },
   components: [{
     identity: { objectUuid: 'label-comp-uuid', fileId: 'label-file-id' },
     class: {
@@ -645,8 +668,12 @@ describe('直写档只读工具', () => {
 
     expect(result.structuredContent).toMatchObject({
       prefabInstance: NODE_DETAIL.prefabInstance,
+      writeCapabilities: NODE_DETAIL.writeCapabilities,
       bounds,
-      summary: { prefabInstance: NODE_DETAIL.prefabInstance }
+      summary: {
+        prefabInstance: NODE_DETAIL.prefabInstance,
+        writeCapabilities: NODE_DETAIL.writeCapabilities
+      }
     });
     expect(probeClient.requests.at(-1)).toMatchObject({
       method: 'probe.node',
@@ -1283,6 +1310,30 @@ describe('直写档写工具', () => {
       expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
     }
     expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+  });
+
+  it('写入前适用性错误保持原错误码，不包装成 outcome 错误', async () => {
+    const respond = createRespond();
+    const probeClient = new RecordingProbeClient((method, payload) => {
+      if (method === 'probe.directWrite') {
+        throw new Error('NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT:db://assets/Nested.prefab');
+      }
+      return respond(method, payload);
+    });
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_node_set_transform',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuid: 'panel-uuid',
+        localTransform: { position: { x: 1, y: 2, z: 3 } }
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT');
+    expect(JSON.stringify(result.content)).not.toContain('DIRECT_WRITE_OUTCOME_INVALID');
   });
 
   it('cocos_node_select 按 path 选择唯一节点且不走保存写通道', async () => {

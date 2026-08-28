@@ -11,6 +11,33 @@ export const PrefabInstanceSummarySchema = z.object({
   sourceUrl: z.string().nullable()
 });
 
+export const NodeWriteCapabilitiesSchema = z.object({
+  assessment: z.enum(['confirmed', 'unknown']),
+  documentMode: z.string().nullable(),
+  ownerDocumentUuid: z.string().nullable(),
+  ownerPrefabUuid: z.string().nullable(),
+  ownerSourceUrl: z.string().nullable(),
+  sourceFileId: z.string().nullable(),
+  isNestedPrefabContent: z.boolean(),
+  isInstanceRoot: z.boolean(),
+  canRename: z.boolean(),
+  canSetTransform: z.boolean(),
+  canDelete: z.boolean(),
+  canReparent: z.boolean(),
+  canDuplicate: z.boolean(),
+  canSetActive: z.boolean(),
+  canSetLayer: z.boolean(),
+  canCreateChild: z.boolean(),
+  canAddComponent: z.boolean(),
+  canRemoveComponent: z.boolean(),
+  canSetComponentProperty: z.boolean(),
+  reasonCode: z.string().nullable(),
+  nextAction: z.object({
+    tool: z.literal('cocos_prefab_open'),
+    arguments: z.object({ uuid: z.string().min(1) })
+  }).nullable()
+});
+
 export const ProbeNodeSchema = z.object({
   kind: z.literal('node'),
   identity: ObjectIdentitySchema,
@@ -27,6 +54,7 @@ export const ProbeNodeSchema = z.object({
   components: z.array(ProbeComponentSchema).optional(),
   prefabContext: PrefabContextSchema.optional(),
   prefabInstance: PrefabInstanceSummarySchema.optional(),
+  writeCapabilities: NodeWriteCapabilitiesSchema.optional(),
   raw: z.unknown().optional()
 }).passthrough();
 

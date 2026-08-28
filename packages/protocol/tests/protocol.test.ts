@@ -27,6 +27,29 @@ const validResponse = {
       fileId: 'file-id',
       typeId: null,
       scriptUuid: null
+    },
+    writeCapabilities: {
+      assessment: 'confirmed',
+      documentMode: 'prefab',
+      ownerDocumentUuid: 'owner-prefab',
+      ownerPrefabUuid: 'nested-prefab',
+      ownerSourceUrl: 'db://assets/Nested.prefab',
+      sourceFileId: 'file-id',
+      isNestedPrefabContent: true,
+      isInstanceRoot: false,
+      canRename: false,
+      canSetTransform: false,
+      canDelete: false,
+      canReparent: false,
+      canDuplicate: false,
+      canSetActive: false,
+      canSetLayer: false,
+      canCreateChild: false,
+      canAddComponent: false,
+      canRemoveComponent: false,
+      canSetComponentProperty: false,
+      reasonCode: 'NESTED_PREFAB_CONTENT_CLOSED',
+      nextAction: { tool: 'cocos_prefab_open', arguments: { uuid: 'nested-prefab' } }
     }
   },
   coverage: {
@@ -49,6 +72,11 @@ describe('ProbeResponseSchema', () => {
       identity: {
         objectUuid: 'node-uuid',
         fileId: 'file-id'
+      },
+      writeCapabilities: {
+        isNestedPrefabContent: true,
+        canSetTransform: false,
+        ownerPrefabUuid: 'nested-prefab'
       }
     });
     expect(result.unresolved).toHaveLength(1);

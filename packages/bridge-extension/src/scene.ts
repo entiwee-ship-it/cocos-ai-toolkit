@@ -17,6 +17,8 @@ import {
 } from './write-creator-deps';
 import type { WriteOperation } from './write-types';
 import { readNodeBounds } from './scene-bounds';
+import { buildNodeWriteCapabilities, type NodeWriteCapabilities } from './write-applicability';
+import { readDumpValue } from './raw-reflection';
 
 const { director, Vec3 } = require('cc') as {
   director: { getScene(): unknown };
@@ -38,14 +40,25 @@ async function probeHierarchy(request: unknown): Promise<unknown> {
 async function probeNode(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const uuid = requireUuid(input);
-  const raw = await Editor.Message.request('scene', 'query-node', uuid);
+  const [raw, documentIdentity] = await Promise.all([
+    Editor.Message.request('scene', 'query-node', uuid),
+    resolveCreatorDocumentIdentity(globalThis)
+  ]);
   const normalized = normalizeNodeDump(raw);
   const sourceUrl = normalized.prefabInstance.prefabAssetUuid
     ? await readPrefabSourceUrl(normalized.prefabInstance.prefabAssetUuid)
     : null;
   let data: Record<string, unknown> = {
     ...normalized,
-    prefabInstance: { ...normalized.prefabInstance, sourceUrl }
+    prefabInstance: { ...normalized.prefabInstance, sourceUrl },
+    writeCapabilities: buildNodeWriteCapabilities({
+      documentAssetUuid: documentIdentity.assetUuid,
+      documentMode: documentIdentity.mode,
+      nodeFileId: normalized.identity.fileId,
+      prefabAssetUuid: normalized.prefabInstance.prefabAssetUuid,
+      sourceUrl,
+      isInstanceRoot: normalized.prefabInstance.isInstanceRoot
+    })
   };
   if (input.includeBounds === true) {
     const scene = readObject(director.getScene());
@@ -75,6 +88,152 @@ async function readPrefabSourceUrl(prefabAssetUuid: string): Promise<string | nu
   } catch {
     return null;
   }
+}
+
+type NodeWriteCapability = Extract<keyof NodeWriteCapabilities, `can${string}`>;
+
+/**
+ * 在进入 writer 之前拒绝 Creator 已确认会静默不生效的嵌套 Prefab 内容写入。
+ *
+ * @param operations 本次直写请求中的有序操作。
+ */
+export async function assertWriteOperationsApplicable(operations: WriteOperation[]): Promise<void> {
+  const documentIdentity = await resolveCreatorDocumentIdentity(globalThis);
+  if (documentIdentity.mode !== 'prefab' || !documentIdentity.assetUuid) return;
+  const nodeCache = new Map<string, NodeWriteCapabilities>();
+  const componentNodeCache = new Map<string, string>();
+  const assertNode = async (
+    nodeUuid: string,
+    capability: NodeWriteCapability,
+    operationIndex: number,
+    operationType: WriteOperation['type'],
+    targetRole: string
+  ): Promise<void> => {
+    let capabilities = nodeCache.get(nodeUuid);
+    if (!capabilities) {
+      const raw = await Editor.Message.request('scene', 'query-node', nodeUuid);
+      const normalized = normalizeNodeDump(raw);
+      const prefabAssetUuid = normalized.prefabInstance.prefabAssetUuid;
+      const sourceUrl = prefabAssetUuid && prefabAssetUuid !== documentIdentity.assetUuid
+        ? await readPrefabSourceUrl(prefabAssetUuid)
+        : null;
+      capabilities = buildNodeWriteCapabilities({
+        documentAssetUuid: documentIdentity.assetUuid,
+        documentMode: documentIdentity.mode,
+        nodeFileId: normalized.identity.fileId,
+        prefabAssetUuid,
+        sourceUrl,
+        isInstanceRoot: normalized.prefabInstance.isInstanceRoot
+      });
+      nodeCache.set(nodeUuid, capabilities);
+    }
+    if (capabilities[capability] === true) return;
+    throw new ProbeError('NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT', {
+      operationIndex,
+      operationType,
+      targetRole,
+      nodeUuid,
+      requiredCapability: capability,
+      documentMode: capabilities.documentMode,
+      ownerDocumentUuid: capabilities.ownerDocumentUuid,
+      ownerPrefabUuid: capabilities.ownerPrefabUuid,
+      ownerSourceUrl: capabilities.ownerSourceUrl,
+      sourceFileId: capabilities.sourceFileId,
+      isInstanceRoot: capabilities.isInstanceRoot,
+      reasonCode: capabilities.reasonCode,
+      route: capabilities.nextAction,
+      nextAction: capabilities.ownerPrefabUuid
+        ? '用 cocos_prefab_open 打开源 Prefab，重新读取节点后再写入'
+        : '重新读取当前文档和节点身份后再写入'
+    });
+  };
+  const resolveComponentNodeUuid = async (componentUuid: string): Promise<string> => {
+    const cached = componentNodeCache.get(componentUuid);
+    if (cached) return cached;
+    const raw = readObject(await Editor.Message.request('scene', 'query-component', componentUuid));
+    const values = readObject(raw.value);
+    const node = readObject(readDumpValue(values.node));
+    const nodeUuid = typeof node.uuid === 'string' && node.uuid ? node.uuid : null;
+    if (!nodeUuid) throw new ProbeError('COMPONENT_NODE_NOT_FOUND', { componentUuid });
+    componentNodeCache.set(componentUuid, nodeUuid);
+    return nodeUuid;
+  };
+  for (let operationIndex = 0; operationIndex < operations.length; operationIndex += 1) {
+    const operation = operations[operationIndex];
+    switch (operation.type) {
+      case 'node.create':
+        await assertNode(readOperationString(operation, 'parentNodeUuid'), 'canCreateChild', operationIndex, operation.type, 'parent');
+        break;
+      case 'node.delete':
+        await assertNode(readOperationString(operation, 'nodeUuid'), 'canDelete', operationIndex, operation.type, 'target');
+        break;
+      case 'node.rename':
+        await assertNode(readOperationString(operation, 'nodeUuid'), 'canRename', operationIndex, operation.type, 'target');
+        break;
+      case 'node.reparent':
+        await assertNode(readOperationString(operation, 'nodeUuid'), 'canReparent', operationIndex, operation.type, 'target');
+        await assertNode(readOperationString(operation, 'newParentUuid'), 'canCreateChild', operationIndex, operation.type, 'newParent');
+        break;
+      case 'node.duplicate':
+        await assertNode(readOperationString(operation, 'nodeUuid'), 'canDuplicate', operationIndex, operation.type, 'target');
+        if (readOptionalOperationString(operation, 'parentUuid')) {
+          await assertNode(readOperationString(operation, 'parentUuid'), 'canCreateChild', operationIndex, operation.type, 'parent');
+        }
+        break;
+      case 'node.set_active':
+        await assertNode(readOperationString(operation, 'nodeUuid'), 'canSetActive', operationIndex, operation.type, 'target');
+        break;
+      case 'node.set_layer':
+        await assertNode(readOperationString(operation, 'nodeUuid'), 'canSetLayer', operationIndex, operation.type, 'target');
+        break;
+      case 'node.set_transform':
+        await assertNode(readOperationString(operation, 'nodeUuid'), 'canSetTransform', operationIndex, operation.type, 'target');
+        break;
+      case 'component.add':
+        await assertNode(readOperationString(operation, 'nodeUuid'), 'canAddComponent', operationIndex, operation.type, 'target');
+        break;
+      case 'component.remove':
+        await assertNode(
+          await resolveComponentNodeUuid(readOperationString(operation, 'componentUuid')),
+          'canRemoveComponent',
+          operationIndex,
+          operation.type,
+          'componentOwner'
+        );
+        break;
+      case 'component.enable':
+      case 'component.set_property':
+      case 'component.set_reference':
+      case 'component.clear_reference':
+      case 'component.resize_array':
+        await assertNode(
+          await resolveComponentNodeUuid(readOperationString(operation, 'componentUuid')),
+          'canSetComponentProperty',
+          operationIndex,
+          operation.type,
+          'componentOwner'
+        );
+        break;
+      case 'prefab.instantiate':
+        await assertNode(readOperationString(operation, 'parentNodeUuid'), 'canCreateChild', operationIndex, operation.type, 'parent');
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+function readOperationString(operation: WriteOperation, field: string): string {
+  const value = operation[field];
+  if (typeof value !== 'string' || !value) {
+    throw new ProbeError('INVALID_WRITE_OPERATION_FIELD', { operationType: operation.type, field });
+  }
+  return value;
+}
+
+function readOptionalOperationString(operation: WriteOperation, field: string): string | null {
+  const value = operation[field];
+  return typeof value === 'string' && value ? value : null;
 }
 
 async function probeComponent(request: unknown): Promise<unknown> {
@@ -224,6 +383,7 @@ async function writeExecute(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const operations = Array.isArray(input.operations) ? input.operations as WriteOperation[] : [];
   if (operations.length === 0) throw new ProbeError('INVALID_WRITE_OPERATIONS');
+  await assertWriteOperationsApplicable(operations);
   const save = input.save === true;
   return executeWriteSceneOperations(
     { operations, save },

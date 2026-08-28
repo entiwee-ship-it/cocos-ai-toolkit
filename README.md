@@ -102,7 +102,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_asset_search` | 在 AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），cursor 分页 |
 | `cocos_asset_inspect` | 按 UUID 读取资产详情、Meta、依赖和反向使用者，cursor 分页 |
 | `cocos_hierarchy` | 读取当前文档节点树；深层 `rootPath` 原生读取目标子树并保留 `truncated`，`query/fields/summary` 可紧凑投影 |
-| `cocos_node_read` | 读取单节点、`prefabInstance` 和可选编辑态 bounds；支持组件属性、后代并集及 `relativeToPath` |
+| `cocos_node_read` | 读取单节点、`prefabInstance`、`writeCapabilities` 和可选编辑态 bounds；支持组件属性、后代并集及 `relativeToPath` |
 | `cocos_nodes_read` | 批量读取最多 32 个 UUID/path，逐项返回 found/error，统一组件投影并限制输出预算 |
 | `cocos_prefab_open` | 通过 Creator 打开 Prefab 并等待文档身份就绪 |
 | `cocos_scene_open` | 通过 Creator 打开 Scene 并等待文档身份就绪 |
@@ -130,6 +130,8 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_batch_write` | 一次直发多项 `node.*` / `component.*` 操作；不接受 `asset.*` / `prefab.*`，只减少 MCP 往返，不是事务且无回滚，失败时 `executedOps` 之前的修改可能已生效 |
 
 节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件按类型解析，兼容 `cc.` 前缀（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。`DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已经执行但保存或验证结局未知，必须先重读状态，确认前禁止重试。直写不提供事务、Revision 前置、Undo 编排或回滚。
+
+`writeCapabilities` 会在写入前说明当前文档能否直接修改该节点。Prefab 编辑模式下，嵌套实例内容的已知无效写入会以 `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` 拒绝，并返回 `cocos_prefab_open` 的源 Prefab 路由；工具不会自动切换文档。文档身份暂不可判定时保持放行，继续由保存后的逐项重读验证兜底。
 
 ### 运行态 13 个（只读组默认开放，动作组需 `--enable-writes`）
 
@@ -163,6 +165,12 @@ npm run smoke:creator -- `
   --target-prefab-uuid <承载探针的 Prefab UUID> `
   --instantiate-prefab-uuid <待实例化的 Prefab UUID> `
   --instance-name CocosAiPrefabSmoke
+```
+
+固定最小 Creator 工程可直接验证源 Prefab 路由、拒写前不进入保存链路及 `dirty=false`：
+
+```powershell
+npm run smoke:creator:write-routing
 ```
 
 在上述命令末尾追加 `--unpack-mode current` 或 `--unpack-mode complete`，可分别验证“仅移除当前关联”和“递归移除嵌套关联”；两种模式应分开运行并保留各自报告。

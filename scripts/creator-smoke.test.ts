@@ -12,6 +12,7 @@ describe('Creator 3.8.8 smoke 合同', () => {
     };
 
     expect(packageJson.scripts?.['smoke:creator']).toContain('run-creator-3.8.8-smoke.mjs');
+    expect(packageJson.scripts?.['smoke:creator:write-routing']).toContain('--write-applicability true');
     expect(smoke).toContain("'--enable-writes'");
     expect(smoke).toContain("name: 'cocos_editor_list'");
     expect(smoke).toContain("name: 'cocos_hierarchy'");
@@ -21,6 +22,11 @@ describe('Creator 3.8.8 smoke 合同', () => {
     expect(smoke).toContain("name: 'cocos_prefab_unpack'");
     expect(smoke).toContain("name: 'cocos_prefab_open'");
     expect(smoke).toContain("name: 'cocos_node_delete'");
+    expect(smoke).toContain("name: 'cocos_node_read'");
+    expect(smoke).toContain("name: 'cocos_node_set_transform'");
+    expect(smoke).toContain("name: 'cocos_editor_state'");
+    expect(smoke).toContain('NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT');
+    expect(smoke).toContain('WRITE_APPLICABILITY_REQUIRES_INSTANTIATE_FIXTURE');
     expect(smoke).toContain('prefab-instantiate-reopen');
     expect(smoke).toContain('prefab-instantiate-cleanup');
     expect(smoke).toContain('prefab-unpack-${options.unpackMode}');

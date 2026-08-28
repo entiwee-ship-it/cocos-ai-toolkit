@@ -304,12 +304,14 @@ export class CocosDirectToolService {
     });
     const nodeData = unwrapData(node);
     const prefabInstance = nodeData.prefabInstance ?? null;
+    const writeCapabilities = nodeData.writeCapabilities ?? null;
     const nodeBounds = nodeData.bounds;
     if (!input.componentType) {
       const result = {
         editor,
         node,
         prefabInstance,
+        writeCapabilities,
         ...(nodeBounds !== undefined ? { bounds: nodeBounds } : {})
       };
       return forceProjection || usesNodeProjection(input) ? projectNodeResult(result, input) : result;
@@ -327,6 +329,7 @@ export class CocosDirectToolService {
       componentUuid,
       component: component.schema,
       prefabInstance,
+      writeCapabilities,
       ...(nodeBounds !== undefined ? { bounds: nodeBounds } : {}),
       ...(component.raw !== undefined ? { raw: component.raw } : {})
     };
@@ -1192,6 +1195,7 @@ function compactNodeData(node: Record<string, unknown>, fields?: string[]): Reco
     ...(clean.childUuids !== undefined ? { childUuids: clean.childUuids } : {}),
     ...(clean.transform !== undefined ? { transform: clean.transform } : {}),
     ...(clean.prefabInstance !== undefined ? { prefabInstance: clean.prefabInstance } : {}),
+    ...(clean.writeCapabilities !== undefined ? { writeCapabilities: clean.writeCapabilities } : {}),
     ...(clean.bounds !== undefined ? { bounds: clean.bounds } : {}),
     components: components.map(compactHierarchyComponent),
     ...(clean.unresolved !== undefined ? { unresolved: clean.unresolved } : {})
@@ -1248,6 +1252,7 @@ function projectNodeResult(
     componentUuid?: string;
     component?: unknown;
     prefabInstance?: unknown;
+    writeCapabilities?: unknown;
     bounds?: unknown;
     raw?: unknown;
   },
@@ -1265,6 +1270,7 @@ function projectNodeResult(
     componentTypes: components.map(componentLabel).filter(Boolean),
     unresolvedCount: Array.isArray(node.unresolved) ? node.unresolved.length : 0,
     prefabInstance: result.prefabInstance ?? node.prefabInstance ?? null,
+    writeCapabilities: result.writeCapabilities ?? node.writeCapabilities ?? null,
     ...(result.component !== undefined ? {
       selectedComponent: String(asRecord(result.component).className || asRecord(result.component).qualifiedName || ''),
       selectedPropertyCount: Array.isArray(asRecord(result.component).properties)
@@ -1278,6 +1284,7 @@ function projectNodeResult(
     nodeUuid: result.nodeUuid || asRecord(node.identity).objectUuid || null,
     ...(result.componentUuid ? { componentUuid: result.componentUuid } : {}),
     prefabInstance: result.prefabInstance ?? node.prefabInstance ?? null,
+    writeCapabilities: result.writeCapabilities ?? node.writeCapabilities ?? null,
     ...(result.bounds !== undefined || node.bounds !== undefined ? { bounds: result.bounds ?? node.bounds } : {}),
     summary,
     ...(!summaryOnly ? { node: compactNodeData(node, input.fields) } : {}),

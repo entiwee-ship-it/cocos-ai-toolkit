@@ -17,7 +17,7 @@
 3. `cocos_asset_search`：按名称或路径寻找 Prefab、Scene、脚本 UUID。
 4. `cocos_asset_inspect`：读取资产类型、URL、依赖和反向使用者。
 5. `cocos_prefab_open` 或 `cocos_scene_open`：通过 Creator 打开目标文档并等待身份就绪。
-6. `cocos_hierarchy`：读取节点树；`cocos_node_read`：查看单节点、Prefab 实例摘要和 bounds；多节点使用 `cocos_nodes_read`。
+6. `cocos_hierarchy`：读取节点树；`cocos_node_read`：查看单节点、Prefab 实例摘要、`writeCapabilities` 和 bounds；多节点使用 `cocos_nodes_read`。
 7. 调用写工具；成功响应中的 `outcome.verification.items` 是保存后重读证据。
 8. 手工编辑后需要显式落盘时调用 `cocos_document_save`。
 9. 需要视觉或交互验证时运行 Preview 工具，最后用 `cocos_preview_stop` 清理会话。
@@ -43,6 +43,8 @@ Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读
 
 `cocos_node_read` 的 `prefabInstance` 提供实例根、源 UUID、instanceFileId、state 和 sourceUrl。需要布局证据时传 `includeBounds`；可追加后代可视并集和 `relativeToPath`。`cocos_nodes_read` 最多读取 32 项，按 nodeUuids 后接 paths 的顺序逐项返回，单项错误和输出截断都会显式标记。
 
+`writeCapabilities` 是当前文档的写入适用性快照。Prefab 编辑模式下，嵌套实例根只开放 Creator 已确认有效的整实例与放置类操作，实例内容节点会关闭节点和组件写入，并通过 `nextAction` 指向 `cocos_prefab_open`。调用方应显式决定是否打开源 Prefab，Toolkit 不会自动切换文档；文档身份未知时仍由写后重读验证兜底。
+
 ## 4. Preview 与运行态验证
 
 常用顺序：
@@ -65,6 +67,7 @@ Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读
 | `MULTIPLE_EDITOR_INSTANCES` | 补传 `editorInstanceId`。 |
 | `NODE_ADDRESS_EXCLUSIVE` | UUID/path 只保留一个。 |
 | `NODE_NOT_FOUND` | 重新读取 hierarchy，不要复用旧 UUID。 |
+| `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` | 读取 `writeCapabilities` 和错误中的 `route`，确认后用 `cocos_prefab_open` 打开源 Prefab；不要原地重试。 |
 | `PREFAB_IDENTITY_MISMATCH` | 当前节点的源 Prefab 已变化；重新读取实例元数据后再决定是否解包。 |
 | `COMPONENT_NOT_FOUND` | 使用错误中返回的组件候选重新选择。 |
 | `ASSET_NOT_PREFAB` / `ASSET_NOT_SCENE` | 用 `cocos_asset_inspect` 核对 UUID 和资产类型。 |
@@ -88,6 +91,7 @@ E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0
 ```powershell
 & E:/xile-workspace/cocos-ai-toolkit/scripts/update-runtime.ps1
 & E:/xile-workspace/cocos-ai-toolkit/scripts/check-codex-mcp.ps1
+npm run smoke:creator:write-routing
 ```
 
 健康检查会验证 MCP 工具精确集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合以及项目 Bridge Junction 的运行时目标。Bridge 构建不匹配时刷新或重启 Creator 扩展，再重新检查。

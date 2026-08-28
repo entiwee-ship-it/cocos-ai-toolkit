@@ -51,11 +51,14 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件类型兼容 `cc.` 前缀（`Label` = `cc.Label`）。
 `cocos_node_read` 的 `prefabInstance` 直接给出实例根、源 UUID、instanceFileId、state 和 sourceUrl；`includeBounds` 可返回 local/world rect 与 anchor，按需追加后代并集和 `relativeToPath` 坐标。`cocos_nodes_read` 最多 32 项，单项失败不会丢失其它结果。
 
+`cocos_node_read` / `cocos_nodes_read` 的 `writeCapabilities` 会标明当前文档可直接执行的节点和组件写入。遇到关闭能力或 `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` 时，读取 `ownerPrefabUuid`、`ownerSourceUrl` 和 `nextAction`，确认后显式调用 `cocos_prefab_open` 打开源 Prefab；禁止自动切换文档。文档身份未知时继续依赖写后重读验证。
+
 ## 写入纪律
 
 - 直写没有事务和回滚：失败即停，已生效修改保留。误操作只能用 git 还原，动手前确认目标工作区状态。
 - 旧事务、Revision 前置、Undo 编排、inverse 和 transaction status 已彻底移除；禁止设计或调用兼容入口。
 - Creator 对部分写入会静默不生效（典型：预制体编辑模式下嵌套实例内部）。工具写完会逐项重读，重读不符报 `DIRECT_WRITE_VERIFY_FAILED`——看到这个错不要当成已写入，换路径（如打开内层 Prefab 直接改）再写。
+- `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT`——当前 Prefab 只承载嵌套实例，目标内容必须路由到源 Prefab；按错误中的 `route` 重新打开和读取，禁止原地重试。
 - `DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已执行但保存/验证结局未知；先重读当前文档状态，确认前禁止重试。
 - 运行期节点/组件 UUID 每次重开文档都会变，禁止缓存；每个编辑会话内现取 hierarchy。
 - 连续多处修改时按"先读后写、逐项确认"推进；`cocos_batch_write` 仅接受 `node.*` 与 `component.*` 操作，是单次请求直发多项操作，不是批量暂存、事务或回滚。
