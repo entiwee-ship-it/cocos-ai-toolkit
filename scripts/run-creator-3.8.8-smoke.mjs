@@ -58,8 +58,7 @@ try {
     args: [mcpEntry, '--enable-writes'],
     env: {
       ...process.env,
-      COCOS_AI_PROBE_SERVER_URL: probeUrl,
-      COCOS_AI_MCP_REPORT_ROOT: reportRoot
+      COCOS_AI_PROBE_SERVER_URL: probeUrl
     },
     stderr: 'pipe'
   });

@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join, resolve, sep } from 'node:path';
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
@@ -19,6 +19,9 @@ import { SessionRegistry, type SessionSelector } from './session-registry.js';
 
 export const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 180_000;
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_CAPTURE_FILES_PER_SESSION = 100;
+const DEFAULT_CAPTURE_MAX_SESSIONS = 50;
+const DEFAULT_CAPTURE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1_000;
 
 const BridgeHelloSchema = z.object({
   method: z.literal('bridge.hello'),
@@ -210,6 +213,10 @@ export interface ProbeServerOptions {
   captureRoot?: string;
   /** 每个 Preview 会话保留的截图数量，默认 100。 */
   captureFilesPerSession?: number;
+  /** 全局最多保留的截图会话数，默认 50。 */
+  captureMaxSessions?: number;
+  /** 截图会话最长保留时间（毫秒），默认 14 天。 */
+  captureMaxAgeMs?: number;
   /** 可选 WebSocket Bearer Token；配置后 Bridge 和控制客户端都必须携带。 */
   sessionToken?: string;
 }
@@ -861,17 +868,56 @@ export class ProbeServer {
     const timestamp = new Date().toISOString().replace(/[^0-9]/g, '');
     const filePath = join(directory, `${timestamp}-${index}.png`);
     await writeFile(filePath, buffer);
-    const retention = Number.isInteger(this.options.captureFilesPerSession)
-      && (this.options.captureFilesPerSession as number) > 0
-      ? this.options.captureFilesPerSession as number
-      : 100;
+    const retention = positiveIntegerOrDefault(
+      this.options.captureFilesPerSession,
+      DEFAULT_CAPTURE_FILES_PER_SESSION
+    );
     const files = (await readdir(directory))
       .filter((name) => name.endsWith('.png'))
       .sort();
     await Promise.all(files.slice(0, Math.max(0, files.length - retention)).map((name) => (
       unlink(join(directory, name)).catch(() => undefined)
     )));
+    await this.pruneCaptureSessions(root, safeSession).catch((error) => {
+      process.stderr.write(`${JSON.stringify({
+        event: 'cocos-ai.capture-retention-failed',
+        message: error instanceof Error ? error.message : String(error)
+      })}\n`);
+    });
     return filePath;
+  }
+
+  /** 清理超龄和超量截图会话；当前正在写入的会话始终保留。 */
+  private async pruneCaptureSessions(root: string, currentSession: string): Promise<void> {
+    const maxSessions = positiveIntegerOrDefault(
+      this.options.captureMaxSessions,
+      DEFAULT_CAPTURE_MAX_SESSIONS
+    );
+    const maxAgeMs = positiveIntegerOrDefault(
+      this.options.captureMaxAgeMs,
+      DEFAULT_CAPTURE_MAX_AGE_MS
+    );
+    const entries = await readdir(root, { withFileTypes: true });
+    const sessions = await Promise.all(entries
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map(async (entry) => {
+        const path = join(root, entry.name);
+        return { name: entry.name, path, mtimeMs: (await stat(path)).mtimeMs };
+      }));
+    const expired = sessions.filter((session) =>
+      session.name !== currentSession && session.mtimeMs <= Date.now() - maxAgeMs
+    );
+    await Promise.all(expired.map((session) => rm(session.path, { recursive: true, force: true })));
+
+    const expiredNames = new Set(expired.map((session) => session.name));
+    const remaining = sessions
+      .filter((session) => !expiredNames.has(session.name))
+      .sort((left, right) => left.mtimeMs - right.mtimeMs);
+    const overflow = Math.max(0, remaining.length - maxSessions);
+    const oldest = remaining
+      .filter((session) => session.name !== currentSession)
+      .slice(0, overflow);
+    await Promise.all(oldest.map((session) => rm(session.path, { recursive: true, force: true })));
   }
 
   /** Probe Server 主动 ping 所有连接，连续一个周期无 pong 时终止半开连接。 */
@@ -962,6 +1008,10 @@ export function resolveBridgeRequestTimeoutMs(method: string, fallbackMs: number
     || method === 'probe.openAsset'
   ) return Math.min(fallbackMs, 60_000);
   return fallbackMs;
+}
+
+function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 function slowRequestThresholdMs(method: string): number {

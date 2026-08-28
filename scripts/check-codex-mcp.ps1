@@ -2,7 +2,6 @@
 param(
     [string]$ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0',
     [string]$ProbeUrl = 'ws://127.0.0.1:32188',
-    [string]$ReportRoot = '',
     [switch]$Readonly
 )
 
@@ -40,10 +39,8 @@ try {
 } finally {
     $client.Dispose()
 }
-if (-not $ReportRoot) { $ReportRoot = Join-Path $ToolkitPath 'reports' }
 $env:COCOS_AI_MCP_ENTRY = $entry
 $env:COCOS_AI_PROBE_SERVER_URL = $ProbeUrl
-$env:COCOS_AI_MCP_REPORT_ROOT = [IO.Path]::GetFullPath($ReportRoot)
 $env:COCOS_AI_MCP_ENABLE_WRITES = if ($Readonly) { 'false' } else { 'true' }
 $sourceCommit = (& git -C $ToolkitPath rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $sourceCommit) {

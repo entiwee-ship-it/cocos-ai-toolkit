@@ -2,7 +2,6 @@
 param(
     [string]$ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0',
     [string]$ProbeUrl = 'ws://127.0.0.1:32188',
-    [string]$ReportRoot = '',
     [string]$NodePath = '',
     [switch]$SkipBuild,
     [switch]$Readonly
@@ -33,10 +32,6 @@ if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
     throw "MCP Server 构建产物不存在: $entry"
 }
 
-if (-not $ReportRoot) { $ReportRoot = Join-Path $ToolkitPath 'reports' }
-$ReportRoot = [IO.Path]::GetFullPath($ReportRoot)
-New-Item -ItemType Directory -Force -Path $ReportRoot | Out-Null
-
 $codexCommand = (Get-Command codex -ErrorAction Stop).Source
 $configPath = Join-Path $env:USERPROFILE '.codex/config.toml'
 $configDirectory = Split-Path -Parent $configPath
@@ -56,13 +51,11 @@ $serverArgs = @($entry)
 if (-not $Readonly) { $serverArgs += '--enable-writes' }
 & $codexCommand mcp add cocos_ai `
     --env "COCOS_AI_PROBE_SERVER_URL=$ProbeUrl" `
-    --env "COCOS_AI_MCP_REPORT_ROOT=$ReportRoot" `
     -- $NodePath @serverArgs
 if ($LASTEXITCODE -ne 0) { throw 'Codex MCP 配置写入失败' }
 
 Write-Output $(if ($Readonly) { '已安装 cocos_ai（只读模式）' } else { '已安装 cocos_ai（默认写入）' })
 Write-Output "Probe: $ProbeUrl"
-Write-Output "报告根: $ReportRoot"
 Write-Output "入口: $NodePath $entry"
 if (-not $Readonly) { Write-Output '写工具: 已开启（--enable-writes）' }
 if ($Readonly) { Write-Output '写工具: 已关闭（只读模式）' }

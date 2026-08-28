@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   readMcpRuntimeConfig,
@@ -90,21 +89,18 @@ describe('Cocos MCP stdio runtime', () => {
     expect(closeProbe).toBe(true);
   });
 
-  it('从环境变量读取 Probe 地址、会话 Token 和服务端授权报告根', () => {
+  it('从环境变量读取 Probe 地址和会话 Token', () => {
     expect(readMcpRuntimeConfig({
       COCOS_AI_PROBE_SERVER_URL: 'ws://127.0.0.1:40000',
-      COCOS_AI_MCP_REPORT_ROOT: 'E:/reports/cocos',
       COCOS_AI_SESSION_TOKEN: 'secret-token'
     })).toEqual({
       serverUrl: 'ws://127.0.0.1:40000',
-      reportRoot: resolve('E:/reports/cocos'),
       enableWrites: false,
       requestTimeoutMs: 180000,
       sessionToken: 'secret-token'
     });
     expect(readMcpRuntimeConfig({})).toEqual({
       serverUrl: 'ws://127.0.0.1:32188',
-      reportRoot: resolve('reports'),
       enableWrites: false,
       requestTimeoutMs: 180000,
       sessionToken: undefined

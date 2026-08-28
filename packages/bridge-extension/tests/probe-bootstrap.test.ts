@@ -1,11 +1,14 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import type { AddressInfo, Socket } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
 import {
   createProbeServerBootstrap,
   isProbeServerReachable,
+  rotateProbeLog,
   resolveProbeRuntimePaths,
   type ProbeServerBootstrapDependencies
 } from '../src/probe-bootstrap';
@@ -87,6 +90,28 @@ describe('Probe Server bootstrap', () => {
     expect(main).toContain("event.type === 'disconnected'");
     expect(main).toContain('bridgeClient.connect()');
     expect(main).toContain('void ensureProbeServer(bootstrap)');
+  });
+
+  it('Probe bootstrap 日志达到上限时保留最近三份', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cocos-ai-probe-log-'));
+    try {
+      const log = join(root, 'probe.log');
+      await Promise.all([
+        writeFile(log, 'base'),
+        writeFile(`${log}.1`, 'one'),
+        writeFile(`${log}.2`, 'two'),
+        writeFile(`${log}.3`, 'three')
+      ]);
+
+      rotateProbeLog(log, 1, 3);
+
+      await expect(readFile(log, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(`${log}.1`, 'utf8')).resolves.toBe('base');
+      await expect(readFile(`${log}.2`, 'utf8')).resolves.toBe('one');
+      await expect(readFile(`${log}.3`, 'utf8')).resolves.toBe('two');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

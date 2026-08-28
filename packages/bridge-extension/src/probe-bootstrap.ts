@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import WebSocket from 'ws';
 
 export type ProbeBootstrapResult = 'already-running' | 'started' | 'unsupported-url';
+
+const PROBE_LOG_MAX_BYTES = 5 * 1024 * 1024;
+const PROBE_LOG_BACKUPS = 3;
 
 export interface ProbeServerBootstrapConfig {
   url: string;
@@ -122,6 +125,22 @@ export async function isProbeServerReachable(url: string, token = process.env.CO
   });
 }
 
+/** 日志达到上限时按 `.1` 到 `.3` 轮转，避免 Bridge 自动拉起 Probe 后无限追加。 */
+export function rotateProbeLog(
+  path: string,
+  maxBytes = PROBE_LOG_MAX_BYTES,
+  backups = PROBE_LOG_BACKUPS
+): void {
+  if (!existsSync(path) || statSync(path).size < maxBytes) return;
+  for (let index = backups; index >= 1; index -= 1) {
+    const source = index === 1 ? path : `${path}.${index - 1}`;
+    if (!existsSync(source)) continue;
+    const target = `${path}.${index}`;
+    if (index === backups) rmSync(target, { force: true });
+    renameSync(source, target);
+  }
+}
+
 const nodeDependencies: ProbeServerBootstrapDependencies = {
   isReachable: isProbeServerReachable,
   startProbe: async (input) => {
@@ -129,8 +148,12 @@ const nodeDependencies: ProbeServerBootstrapDependencies = {
       throw new Error(`PROBE_ENTRY_NOT_FOUND:${input.probeEntry}`);
     }
     mkdirSync(input.reportRoot, { recursive: true });
-    const stdout = openSync(join(input.reportRoot, 'probe-server.out.log'), 'a');
-    const stderr = openSync(join(input.reportRoot, 'probe-server.err.log'), 'a');
+    const stdoutPath = join(input.reportRoot, 'probe-server.out.log');
+    const stderrPath = join(input.reportRoot, 'probe-server.err.log');
+    rotateProbeLog(stdoutPath);
+    rotateProbeLog(stderrPath);
+    const stdout = openSync(stdoutPath, 'a');
+    const stderr = openSync(stderrPath, 'a');
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(input.nodePath, [input.probeEntry], {

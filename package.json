@@ -1,6 +1,6 @@
 {
   "name": "cocos-ai-toolkit",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "engines": {
     "node": ">=20.19 <26"
@@ -10,10 +10,13 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run clean && npm run build --workspaces --if-present",
+    "build": "npm run clean && tsc -b --force --pretty false && node scripts/write-bridge-build-info.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "tsc -b --pretty false",
+    "reports:doctor": "node scripts/reports.mjs doctor",
+    "reports:archive": "node scripts/reports.mjs archive",
+    "reports:prune": "node scripts/reports.mjs prune",
     "smoke:creator": "node scripts/run-creator-3.8.8-smoke.mjs",
     "smoke:creator:write-routing": "node scripts/run-creator-3.8.8-smoke.mjs --project-path E:/xile-workspace/worktrees/cocos-ai-blank/Cocos-ai --target-prefab-uuid d55bd69a-ecad-460f-ba23-9b550749d7f7 --instantiate-prefab-uuid da620f42-4480-40ec-bde0-9a89396b863c --instance-name CocosAiWriteRoutingSmoke --write-applicability true",
     "codex:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-codex-mcp.ps1",
@@ -22,6 +25,6 @@
   "devDependencies": {
     "@types/node": "^20.17.0",
     "typescript": "^5.6.3",
-    "vitest": "^4.1.10"
+    "vitest": "4.1.11"
   }
 }

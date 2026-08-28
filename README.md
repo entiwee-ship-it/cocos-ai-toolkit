@@ -4,6 +4,8 @@
 
 0.3.0 起为**直写架构**：每个写工具映射为一到多个原子写操作（创建/删除节点、挂载组件、修改属性……），一次调用完成执行 + 自动保存 + 逐项重读回显。事务管理器、回滚、Revision 前置、声明式 diff 流水线和全量扫描已移除（0.2.x 文档见 `docs/`，归档保留）。
 
+0.6.3 继续冻结 39 个公开工具：根构建改用 TypeScript Project References；报告治理提供只读 doctor 和显式 dry-run/confirm 归档入口；运行态截图增加全局会话数与年龄上限，Probe bootstrap 日志按大小轮转；同时删除无生产消费者的旧报告配置并维护小版本依赖。
+
 0.6.2 继续冻结公开工具面：MCP stdio 不再依赖 Probe 首次在线，Probe/Creator 恢复后同一任务即可继续调用；批量节点读取使用并发 4，Bridge/Client 重连加入抖动，Probe Server 使用心跳和方法级超时；所有工具错误统一写入 `structuredContent.error`，慢请求只记录无业务载荷的本地指标。公开工具数仍为 39。
 
 0.6.1 是不扩工具面的 I/O 与冷启动优化：投影读取在 Bridge 内直接省略结构 `raw`，资产搜索在 Bridge 内分页并复用短缓存，精确资产检查/打开不再拉取全量索引，Playwright 只在首次 Preview launch 时加载。完整旧读取仍保留原始 Dump 兼容，并在 Bridge 发送前受 `maxOutputBytes` 预算保护；公开工具数保持 39。
@@ -64,6 +66,8 @@ Bridge Extension 加载时会先探测 loopback Probe Server；服务不存在�
 & scripts/start-probe-server.ps1 -Port 32188 -ReportRoot 'reports'
 ```
 
+运行态截图默认每个会话保留 100 张、全局保留 50 个会话且最长保留 14 天；可分别用 `COCOS_AI_CAPTURE_FILES_PER_SESSION`、`COCOS_AI_CAPTURE_MAX_SESSIONS` 和 `COCOS_AI_CAPTURE_MAX_AGE_DAYS` 调整。
+
 默认只监听 `127.0.0.1:32188`。Bridge 会自动连接和重连；CLI/MCP 通过同一 WebSocket Server 选择目标编辑器实例。不要把 Probe Server 暴露到外网。
 
 ## 启动 AI 正式入口 MCP Server
@@ -72,14 +76,12 @@ Bridge Extension 加载时会先探测 loopback Probe Server；服务不存在�
 
 ```powershell
 $env:COCOS_AI_PROBE_SERVER_URL = 'ws://127.0.0.1:32188'
-$env:COCOS_AI_MCP_REPORT_ROOT = (Resolve-Path 'reports').Path
 node packages/mcp-server/dist/run.js --enable-writes
 ```
 
 环境变量：
 
 - `COCOS_AI_PROBE_SERVER_URL`：Probe Server 地址，默认 `ws://127.0.0.1:32188`。
-- `COCOS_AI_MCP_REPORT_ROOT`：MCP 进程唯一授权的报告根目录，默认当前工作目录下的 `reports`。
 - `COCOS_AI_SESSION_TOKEN`：可选本机会话 Token；配置后 Probe、Bridge、CLI 和 MCP 必须使用相同值。
 
 启动参数只有 `--enable-writes`：裸启动只注册只读工具；写工具必须显式开启，环境变量不能开启写能力。0.2.x 的 `--profile` 参数已移除，传入会报 `MCP_PROFILE_REMOVED`。
@@ -246,6 +248,10 @@ CLI 只允许预定义命令，不提供任意 JavaScript 执行入口，写操�
 ```
 
 4. 复查业务项目 Git 状态。
+
+## 报告治理
+
+`npm run reports:doctor` 只读统计报告目录；`reports:archive` 和 `reports:prune` 默认只预览，只有显式追加 `-- --confirm` 才会分别移动旧报告或清理 `reports/archive`。`reports/mcp/` 不属于自动归档候选。
 
 ## 历史归档
 

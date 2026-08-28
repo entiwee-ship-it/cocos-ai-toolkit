@@ -2,7 +2,7 @@
   "package_version": 2,
   "name": "cocos-ai-bridge",
   "title": "Cocos AI Bridge",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Cocos Creator 3.8.x editor bridge for the Cocos AI probe server",
   "author": "李威-Enti",
   "date": "2026-07-17",
@@ -60,7 +60,7 @@
     }
   },
   "dependencies": {
-    "ws": "^8.18.3"
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@cocos/creator-types": "3.8.8",

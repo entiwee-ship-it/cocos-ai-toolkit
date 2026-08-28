@@ -1,9 +1,5 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
-import { ArtifactStore } from '../src/artifact-store.js';
 import { ProbeServer } from '../src/server.js';
 import * as probeServerModule from '../src/server.js';
 
@@ -43,20 +39,6 @@ describe('SessionRegistry', () => {
     });
 
     expect(() => registry.resolve({ projectId: 'project' })).toThrow('MULTIPLE_EDITOR_INSTANCES');
-  });
-});
-
-describe('ArtifactStore', () => {
-  it('只允许向报告根目录写入 JSON 文件', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'cocos-ai-artifacts-'));
-    const store = new ArtifactStore(root);
-
-    const savedPath = await store.save('editor-state.json', { ready: true });
-    const content = JSON.parse(await readFile(savedPath, 'utf8')) as { ready: boolean };
-
-    expect(content.ready).toBe(true);
-    await expect(store.save('../escape.json', {})).rejects.toThrow('INVALID_ARTIFACT_PATH');
-    await expect(store.save('E:/escape.json', {})).rejects.toThrow('INVALID_ARTIFACT_PATH');
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@cocos-ai/client",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -18,8 +18,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cocos-ai/protocol": "0.6.2",
-    "ws": "^8.18.3"
+    "@cocos-ai/protocol": "0.6.3",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1"

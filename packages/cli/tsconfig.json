@@ -3,10 +3,16 @@
   "compilerOptions": {
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "composite": true,
     "rootDir": "src",
     "outDir": "dist"
   },
   "include": [
     "src/**/*.ts"
+  ],
+  "references": [
+    { "path": "../protocol" },
+    { "path": "../client" },
+    { "path": "../core" }
   ]
 }

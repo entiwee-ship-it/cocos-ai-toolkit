@@ -2,9 +2,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ReadonlyProbeClient } from '../src/tools.js';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCocosMcpServer } from '../src/server.js';
 
@@ -90,24 +87,20 @@ function createRuntimeRespond(overrides: Record<string, unknown> = {}) {
 }
 
 const harnesses: Array<{ server: McpServer; client: Client }> = [];
-const temporaryRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(harnesses.splice(0).map(async ({ client, server }) => {
     await client.close();
     await server.close();
   }));
-  await Promise.all(temporaryRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
 async function createHarness(
   probeClient: ReadonlyProbeClient,
   options: { enableWrites?: boolean } = {}
 ) {
-  const reportRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-mcp-runtime-'));
-  temporaryRoots.push(reportRoot);
   const server = createCocosMcpServer(
-    { probeClient, reportRoot },
+    { probeClient },
     { enableWrites: options.enableWrites }
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

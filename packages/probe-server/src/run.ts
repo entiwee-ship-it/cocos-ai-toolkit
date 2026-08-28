@@ -19,6 +19,8 @@ const sessionToken = process.env.COCOS_AI_SESSION_TOKEN || undefined;
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const captureRoot = process.env.COCOS_AI_CAPTURE_ROOT ?? join(repoRoot, 'reports', 'runtime-captures');
 const captureFilesPerSession = Number(process.env.COCOS_AI_CAPTURE_FILES_PER_SESSION ?? '100');
+const captureMaxSessions = Number(process.env.COCOS_AI_CAPTURE_MAX_SESSIONS ?? '50');
+const captureMaxAgeMs = Number(process.env.COCOS_AI_CAPTURE_MAX_AGE_DAYS ?? '14') * 24 * 60 * 60 * 1_000;
 
 // 阶段五：装配运行态页面驱动（playwright-core + 系统 Chrome/Edge）。
 const runtimeDriver = new RuntimeDriver({
@@ -33,6 +35,8 @@ const server = new ProbeServer({
   runtimeDriver,
   captureRoot,
   captureFilesPerSession,
+  captureMaxSessions,
+  captureMaxAgeMs,
   sessionToken
 });
 const address = await server.start();

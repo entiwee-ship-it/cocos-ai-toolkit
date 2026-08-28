@@ -192,7 +192,6 @@ type AssetCursor = z.infer<typeof CursorSchema>;
 
 export interface CocosReadonlyToolServiceOptions {
   probeClient: ReadonlyProbeClient;
-  reportRoot: string;
 }
 
 /**

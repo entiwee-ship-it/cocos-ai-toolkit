@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/protocol" },
+    { "path": "packages/client" },
+    { "path": "packages/core" },
+    { "path": "packages/cli" },
+    { "path": "packages/mcp-server" },
+    { "path": "packages/probe-server" },
+    { "path": "packages/bridge-extension" }
+  ]
+}

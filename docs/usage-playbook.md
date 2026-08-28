@@ -61,7 +61,7 @@ Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读
 
 `cocos_runtime_run_scenario` 支持 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`。用 `stop(always:true)` 保证前序失败后仍关闭 Preview。
 
-截图写入运行 Worktree 的 `reports/runtime-captures`，每个会话默认只保留最近 100 张。关闭会话后工具会同时关闭页面、浏览器并移除会话记录。
+截图写入运行 Worktree 的 `reports/runtime-captures`，每个会话保留最近 100 张，全局最多保留 50 个会话且最长保留 14 天。关闭会话后工具会同时关闭页面、浏览器并移除会话记录。报告盘点使用只读 `npm run reports:doctor`；归档和清理默认 dry-run，只有显式 `--confirm` 才会修改 `reports/archive`。
 
 ## 5. 常见错误
 

@@ -4,7 +4,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const TOOLKIT_VERSION = '0.6.2';
+const TOOLKIT_VERSION = '0.6.3';
 const entry = process.env.COCOS_AI_MCP_ENTRY;
 if (!entry) throw new Error('COCOS_AI_MCP_ENTRY_REQUIRED');
 const sourceCommit = process.env.COCOS_AI_SOURCE_COMMIT;
@@ -33,8 +33,7 @@ const transport = new StdioClientTransport({
   args: [entry, ...(enableWrites ? ['--enable-writes'] : [])],
   env: {
     ...process.env,
-    COCOS_AI_PROBE_SERVER_URL: process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:32188',
-    COCOS_AI_MCP_REPORT_ROOT: process.env.COCOS_AI_MCP_REPORT_ROOT ?? 'reports'
+    COCOS_AI_PROBE_SERVER_URL: process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:32188'
   },
   stderr: 'pipe'
 });

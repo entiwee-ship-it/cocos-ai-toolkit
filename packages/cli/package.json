@@ -1,26 +1,24 @@
 {
   "name": "@cocos-ai/cli",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "type": "module",
   "bin": {
     "cocos-ai-probe": "./dist/index.js"
   },
   "scripts": {
-    "prebuild": "npm run build --workspace @cocos-ai/protocol && npm run build --workspace @cocos-ai/client && npm run build --workspace @cocos-ai/core",
     "build": "tsc -p tsconfig.json",
-    "pretypecheck": "npm run build --workspace @cocos-ai/protocol && npm run build --workspace @cocos-ai/client && npm run build --workspace @cocos-ai/core",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@cocos-ai/client": "0.6.2",
-    "@cocos-ai/core": "0.6.2",
-    "@cocos-ai/protocol": "0.6.2",
+    "@cocos-ai/client": "0.6.3",
+    "@cocos-ai/core": "0.6.3",
+    "@cocos-ai/protocol": "0.6.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
-    "ws": "^8.18.3"
+    "ws": "8.21.3"
   }
 }

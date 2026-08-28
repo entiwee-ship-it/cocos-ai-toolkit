@@ -69,6 +69,8 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 
 只读组：`cocos_preview_sessions`、`cocos_runtime_get_hierarchy`、`cocos_runtime_inspect_component`、`cocos_runtime_get_console`、`cocos_runtime_watch_property`、`cocos_runtime_capture`（Game 视图截图，支持多分辨率、裁剪、节点边界叠加）。
 
+截图默认每会话保留 100 张、全局保留 50 会话/14 天。报告盘点只运行 `npm run reports:doctor`；归档和清理必须显式确认。
+
 动作组（--enable-writes）：`cocos_preview_launch/stop`、`cocos_runtime_invoke_method`、`cocos_runtime_sample_window`、`cocos_runtime_dispatch_input`（坐标是画布 CSS 像素）、`cocos_runtime_instantiate_prefab`、`cocos_runtime_run_scenario`。Scenario 精确步骤为 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；用 `stop(always:true)` 确保前序失败后仍关闭 Preview。
 
 视觉结果仅作辅助证据；结构化状态以 Creator 编辑态重读为准。

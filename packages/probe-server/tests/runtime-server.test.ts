@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { PNG } from 'pngjs';
 import WebSocket from 'ws';
 import { RuntimeDriver, type RuntimeBrowser, type RuntimeBrowserPage } from '@cocos-ai/core';
@@ -556,6 +556,56 @@ describe('ProbeServer 运行态方法', () => {
 
     bridge.close();
     await server.stop();
+  });
+
+  it('runtimeCapture 全局清理超龄和超量会话，并保留当前会话', async () => {
+    const captureRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-capture-retention-'));
+    let server: ProbeServer | undefined;
+    let bridge: WebSocket | undefined;
+    try {
+      const now = Date.now();
+      for (const [name, modifiedAt] of [
+        ['expired', new Date(now - 2 * 24 * 60 * 60 * 1_000)],
+        ['oldest', new Date(now - 2 * 60 * 60 * 1_000)],
+        ['recent', new Date(now - 60 * 60 * 1_000)]
+      ] as const) {
+        const directory = join(captureRoot, name);
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, 'capture.png'), 'png');
+        await utimes(directory, modifiedAt, modifiedAt);
+      }
+
+      const { driver } = createFakeDriver();
+      server = new ProbeServer({
+        host: '127.0.0.1',
+        port: 0,
+        requestTimeoutMs: 2_000,
+        runtimeDriver: driver,
+        captureRoot,
+        captureMaxSessions: 2,
+        captureMaxAgeMs: 24 * 60 * 60 * 1_000
+      });
+      const address = await server.start();
+      const url = `ws://127.0.0.1:${address.port}`;
+      bridge = await connectFakeBridge({ url });
+      const launched = await callServer(url, 'server.previewLaunch', {
+        selector: { projectId: 'project-1' },
+        params: {}
+      });
+      const sessionId = (launched.payload as { sessionId: string }).sessionId;
+      const captured = await callServer(url, 'server.runtimeCapture', { sessionId });
+      const capturePath = (captured.payload as { files: Array<{ path: string }> }).files[0].path;
+
+      expect(captured.ok).toBe(true);
+      expect((await readdir(captureRoot)).sort()).toEqual([
+        basename(dirname(capturePath)),
+        'recent'
+      ].sort());
+    } finally {
+      bridge?.close();
+      await server?.stop();
+      await rm(captureRoot, { recursive: true, force: true });
+    }
   });
 
   it('runtimeRunScenario 全链路步骤编排并产出报告', async () => {

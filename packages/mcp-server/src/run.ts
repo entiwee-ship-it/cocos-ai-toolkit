@@ -2,12 +2,10 @@
 
 import { ProbeClient } from '@cocos-ai/client';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createCocosMcpServer } from './server.js';
 
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
-const DEFAULT_REPORT_ROOT = 'reports';
 /** 与 CLI 默认一致的单次请求等待超时毫秒数。 */
 const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
 
@@ -27,14 +25,13 @@ export interface McpRuntime {
 
 export interface McpRuntimeConfig {
   serverUrl: string;
-  reportRoot: string;
   enableWrites: boolean;
   requestTimeoutMs: number;
   sessionToken: string | undefined;
 }
 
 /**
- * 从进程环境和启动参数读取 Probe Server 地址、MCP 服务端授权报告根和写能力开关。
+ * 从进程环境和启动参数读取 Probe Server 地址、写能力开关和请求超时。
  * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力；
  * 直写架构已移除工具档机制，旧的 --profile 参数一律拒绝并提示。
  * 请求超时经 COCOS_AI_PROBE_TIMEOUT_MS 配置，与 CLI 共用同一环境变量。
@@ -49,7 +46,6 @@ export function readMcpRuntimeConfig(
 ): McpRuntimeConfig {
   return {
     serverUrl: environment.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL,
-    reportRoot: resolve(environment.COCOS_AI_MCP_REPORT_ROOT ?? DEFAULT_REPORT_ROOT),
     enableWrites: readEnableWrites(argv),
     requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_PROBE_TIMEOUT_MS),
     sessionToken: environment.COCOS_AI_SESSION_TOKEN || undefined
@@ -120,10 +116,7 @@ export async function runMcpServer(
     10_000,
     config.sessionToken
   );
-  const server = createCocosMcpServer(
-    { probeClient, reportRoot: config.reportRoot },
-    { enableWrites: config.enableWrites }
-  );
+  const server = createCocosMcpServer({ probeClient }, { enableWrites: config.enableWrites });
   const transport = new StdioServerTransport();
   patchTransportSchemaRefs(transport);
   return startMcpRuntime({ probeClient, server, transport });
