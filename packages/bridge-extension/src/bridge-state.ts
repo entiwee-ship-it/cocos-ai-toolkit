@@ -5,6 +5,7 @@ export const BRIDGE_CAPABILITIES = [
   'probe.editorState',
   'probe.assets',
   'probe.assetIndex',
+  'probe.assetSearch',
   'probe.openAsset',
   'probe.hierarchy',
   'probe.node',

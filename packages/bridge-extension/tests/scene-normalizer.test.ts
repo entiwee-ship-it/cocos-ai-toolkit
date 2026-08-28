@@ -27,6 +27,29 @@ describe('scene normalizer', () => {
     expect(node.raw).toEqual(raw);
   });
 
+  it('紧凑节点归一化不附加节点和组件原始 Dump', () => {
+    const node = normalizeNodeDump({
+      uuid: { value: 'node-1' },
+      name: { value: 'Panel' },
+      children: [],
+      __comps__: [{
+        value: {
+          uuid: { value: 'component-1' },
+          payload: { type: 'Object', value: { raw: { value: 'business-value' } } }
+        },
+        type: 'cc.Label'
+      }]
+    }, null, false);
+
+    expect(node).not.toHaveProperty('raw');
+    expect(node.components[0]).not.toHaveProperty('raw');
+    expect(node.components[0].properties.uuid).not.toHaveProperty('raw');
+    expect(node.components[0].schema).not.toHaveProperty('rawClassAttributes');
+    expect(node.components[0].schema.properties[0]).not.toHaveProperty('rawClassAttributes');
+    expect(node.components[0].schema.properties.find((property) => property.propertyPath === 'payload')?.currentValue)
+      .toEqual({ raw: 'business-value' });
+  });
+
   it('节点摘要直接返回 Prefab 实例根身份', () => {
     const summary = normalizePrefabInstanceSummary({
       uuid: { value: 'instance-node' },
@@ -55,6 +78,15 @@ describe('scene normalizer', () => {
     }, 1) as { children: Array<{ truncated: boolean; children: unknown[] }> };
 
     expect(hierarchy.children[0]).toMatchObject({ truncated: true, children: [] });
+  });
+
+  it('紧凑层级归一化不在递归节点中附加原始树', () => {
+    const hierarchy = normalizeHierarchyTree({
+      uuid: 'root', name: 'Root', children: [{ uuid: 'child', name: 'Child', children: [] }]
+    }, 1, false) as { raw?: unknown; children: Array<{ raw?: unknown }> };
+
+    expect(hierarchy).not.toHaveProperty('raw');
+    expect(hierarchy.children[0]).not.toHaveProperty('raw');
   });
 
   it('区分 Node、Component、Asset 引用并保留自定义组件信息', () => {

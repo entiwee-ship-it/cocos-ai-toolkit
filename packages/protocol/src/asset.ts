@@ -20,7 +20,7 @@ export const AssetRecordSchema = z.object({
   visible: z.boolean().nullable(),
   readonly: z.boolean().nullable(),
   available: z.boolean(),
-  raw: z.unknown()
+  raw: z.unknown().optional()
 });
 
 export const ScriptAssetRecordSchema = z.object({
@@ -29,7 +29,7 @@ export const ScriptAssetRecordSchema = z.object({
   filePath: z.string().nullable(),
   classNames: z.array(z.string()),
   available: z.boolean(),
-  raw: z.unknown()
+  raw: z.unknown().optional()
 });
 
 export const DocumentAssetRecordSchema = z.object({
@@ -38,7 +38,7 @@ export const DocumentAssetRecordSchema = z.object({
   filePath: z.string().nullable(),
   documentType: DocumentTypeSchema,
   available: z.boolean(),
-  raw: z.unknown()
+  raw: z.unknown().optional()
 });
 
 export type AssetRecord = z.infer<typeof AssetRecordSchema>;

@@ -1,5 +1,29 @@
-import { describe, expect, it } from 'vitest';
-import { buildAssetIndex, toSerializableAssetIndex } from '../src/asset-index';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  buildAssetIndex,
+  invalidateAssetIndexCache,
+  probeAssetIndex,
+  probeAssetSearch,
+  toSerializableAssetIndex
+} from '../src/asset-index';
+import {
+  AssetRecordSchema,
+  DocumentAssetRecordSchema,
+  ScriptAssetRecordSchema
+} from '../../protocol/src/asset';
+
+const originalEditorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Editor');
+
+afterEach(() => {
+  invalidateAssetIndexCache();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  if (originalEditorDescriptor) {
+    Object.defineProperty(globalThis, 'Editor', originalEditorDescriptor);
+    return;
+  }
+  Reflect.deleteProperty(globalThis, 'Editor');
+});
 
 describe('buildAssetIndex', () => {
   it('把脚本 UUID 稳定映射到 db 路径和磁盘路径', () => {
@@ -140,4 +164,127 @@ describe('buildAssetIndex', () => {
     expect(toSerializableAssetIndex(result)).not.toHaveProperty('assetsByUuid');
     expect(toSerializableAssetIndex(result)).not.toHaveProperty('scriptsByUuid');
   });
+
+  it('默认序列化省略重复 raw，显式 includeRaw 才返回完整诊断', () => {
+    const result = buildAssetIndex([{
+      uuid: 'prefab-uuid',
+      url: 'db://assets/ui/Test.prefab',
+      file: 'E:/project/assets/ui/Test.prefab',
+      type: 'cc.Prefab',
+      importer: 'prefab',
+      invalid: false,
+      raw: { uuid: 'prefab-uuid', extra: 'diagnostic' }
+    }]);
+
+    const compact = toSerializableAssetIndex(result);
+    expect(compact.assets[0]).not.toHaveProperty('raw');
+    expect(compact.documents[0]).not.toHaveProperty('raw');
+    expect(() => AssetRecordSchema.parse(compact.assets[0])).not.toThrow();
+    expect(() => DocumentAssetRecordSchema.parse(compact.documents[0])).not.toThrow();
+    expect(() => ScriptAssetRecordSchema.parse({
+      assetUuid: 'script-uuid',
+      scriptPath: 'db://assets/script/Test.ts',
+      filePath: 'E:/project/assets/script/Test.ts',
+      classNames: [],
+      available: true
+    })).not.toThrow();
+    expect(toSerializableAssetIndex(result, true)).toMatchObject({
+      assets: [{ raw: { uuid: 'prefab-uuid', extra: 'diagnostic' } }],
+      documents: [{ raw: { uuid: 'prefab-uuid', extra: 'diagnostic' } }]
+    });
+  });
+
+  it('Bridge 搜索保持大小写无关的包含匹配与稳定排序，只返回命中资产', async () => {
+    installEditorAssets([
+      {
+        uuid: 'script-uuid',
+        url: 'db://assets/script/UserInfoView.ts',
+        file: 'E:/project/assets/script/UserInfoView.ts',
+        type: 'cc.Script',
+        importer: 'typescript',
+        name: 'UserInfoView',
+        invalid: false,
+        internalOnly: 'hidden'
+      },
+      {
+        uuid: 'prefab-uuid',
+        url: 'db://assets/ui/UserInfoView.prefab',
+        file: 'E:/project/assets/ui/UserInfoView.prefab',
+        type: 'cc.Prefab',
+        importer: 'prefab',
+        displayName: 'UserInfoView',
+        invalid: false
+      },
+      {
+        uuid: 'other-uuid',
+        url: 'db://assets/ui/Other.prefab',
+        type: 'cc.Prefab',
+        invalid: false
+      }
+    ]);
+
+    const firstPage = await probeAssetSearch({ pattern: '  userinfoview  ', offset: 0, pageSize: 1 });
+    const secondPage = await probeAssetSearch({ pattern: '  userinfoview  ', offset: 1, pageSize: 1 });
+
+    expect(firstPage).toMatchObject({ total: 2, assets: [{ assetUuid: 'script-uuid' }] });
+    expect(secondPage).toMatchObject({ total: 2, assets: [{ assetUuid: 'prefab-uuid' }] });
+    expect(firstPage.assets.every((asset) => !('raw' in asset))).toBe(true);
+    expect(firstPage.revision).toMatch(/^[0-9a-f]{64}$/);
+    expect(secondPage.revision).toBe(firstPage.revision);
+  });
+
+  it('影响搜索或返回内容的字段变化会更新 cursor revision', async () => {
+    const assets = [{
+      uuid: 'prefab-uuid',
+      url: 'db://assets/ui/Test.prefab',
+      type: 'cc.Prefab',
+      importer: 'prefab',
+      name: 'Before',
+      invalid: false
+    }];
+    installEditorAssets(assets);
+    const before = await probeAssetSearch({ pattern: 'before' });
+
+    assets[0].name = 'After';
+    invalidateAssetIndexCache();
+    const after = await probeAssetSearch({ pattern: 'after' });
+
+    expect(after.revision).not.toBe(before.revision);
+  });
+
+  it('短 TTL 内共享一次全量查询，失效后重新读取 AssetDB', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const request = installEditorAssets([{
+      uuid: 'prefab-uuid',
+      url: 'db://assets/ui/Test.prefab',
+      type: 'cc.Prefab',
+      importer: 'prefab',
+      invalid: false
+    }]);
+
+    await Promise.all([probeAssetIndex(), probeAssetIndex(), probeAssetSearch({ pattern: 'test' })]);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(4_999);
+    await probeAssetIndex();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(5_001);
+    await probeAssetIndex();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    invalidateAssetIndexCache();
+    await probeAssetIndex();
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 });
+
+function installEditorAssets(assets: Array<Record<string, unknown>>) {
+  const request = vi.fn(async () => assets);
+  Object.defineProperty(globalThis, 'Editor', {
+    configurable: true,
+    value: { Message: { request } }
+  });
+  return request;
+}

@@ -57,7 +57,7 @@ export interface ComponentPropertySchemaResult {
   defaultValue: unknown;
   currentValue: unknown;
   inspectorMetadata: Record<string, unknown>;
-  rawClassAttributes: Record<string, unknown>;
+  rawClassAttributes?: Record<string, unknown>;
   rawConsumedKeys: string[];
   references: NormalizedReference[];
 }
@@ -71,7 +71,7 @@ export interface ComponentTypeSchemaResult {
   inheritance: string[];
   executionOrder: number | null;
   properties: ComponentPropertySchemaResult[];
-  rawClassAttributes: Record<string, unknown>;
+  rawClassAttributes?: Record<string, unknown>;
   unresolved: Array<{ path: string; reason: string; details?: unknown }>;
 }
 
@@ -91,11 +91,13 @@ export function isBuiltInComponentClass(className: string | null): boolean {
  *
  * @param rawValue Creator 返回的组件 Dump。
  * @param scriptPathsByUuid 脚本 UUID 到 db 路径的稳定映射。
- * @returns 完整组件类型、属性元数据、引用和未解析项。
+ * @param includeRaw 是否保留组件和属性的原始 Inspector 属性。
+ * @returns 组件类型、属性元数据、引用、未解析项和可选原始 Inspector 属性。
  */
 export function buildComponentTypeSchema(
   rawValue: unknown,
-  scriptPathsByUuid: ReadonlyMap<string, string> = new Map()
+  scriptPathsByUuid: ReadonlyMap<string, string> = new Map(),
+  includeRaw = true
 ): ComponentTypeSchemaResult {
   const raw = readObject(rawValue);
   const values = readObject(raw.value);
@@ -118,7 +120,7 @@ export function buildComponentTypeSchema(
         reason: 'DECLARED_TYPE_MISSING'
       });
     }
-    properties.push(buildPropertySchema(propertyPath, propertyValue));
+    properties.push(buildPropertySchema(propertyPath, propertyValue, includeRaw));
   }
 
   if (className === 'cc.MissingScript') {
@@ -150,7 +152,7 @@ export function buildComponentTypeSchema(
     inheritance,
     executionOrder: readNumber(raw.executionOrder),
     properties,
-    rawClassAttributes: raw,
+    ...(includeRaw ? { rawClassAttributes: raw } : {}),
     unresolved
   };
 }
@@ -186,9 +188,14 @@ export { normalizeSerializedReferences } from './reference-normalizer';
  *
  * @param propertyPath 属性在组件中的序列化路径。
  * @param rawValue Creator 返回的属性包装。
- * @returns 可直接进入组件 Schema 的属性描述。
+ * @param includeRaw 是否保留属性原始 Inspector 属性。
+ * @returns 可直接进入组件 Schema 的属性描述和可选原始 Inspector 属性。
  */
-function buildPropertySchema(propertyPath: string, rawValue: unknown): ComponentPropertySchemaResult {
+function buildPropertySchema(
+  propertyPath: string,
+  rawValue: unknown,
+  includeRaw: boolean
+): ComponentPropertySchemaResult {
   const property = readObject(rawValue);
   const declaredType = readString(property.type);
   const currentValue = readDumpValueDeep(property);
@@ -221,7 +228,7 @@ function buildPropertySchema(propertyPath: string, rawValue: unknown): Component
     defaultValue,
     currentValue,
     inspectorMetadata,
-    rawClassAttributes: property,
+    ...(includeRaw ? { rawClassAttributes: property } : {}),
     rawConsumedKeys,
     references
   };

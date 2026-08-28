@@ -4,10 +4,17 @@ export interface NormalizedProperty {
   value: unknown;
   visible: boolean | null;
   readonly: boolean | null;
-  raw: unknown;
+  raw?: unknown;
 }
 
-export function normalizeProperty(value: unknown): NormalizedProperty {
+/**
+ * 把 Creator 属性包装归一化为稳定值，并按需保留诊断 raw。
+ *
+ * @param value Creator 返回的属性包装。
+ * @param includeRaw 是否附加属性包装本身。
+ * @returns 属性类型、值、可见性和可选 raw。
+ */
+export function normalizeProperty(value: unknown, includeRaw = true): NormalizedProperty {
   const property = readObject(value);
   const declaredType = typeof property.type === 'string' ? property.type : null;
   const rawValue = readDumpValueDeep(value);
@@ -17,7 +24,7 @@ export function normalizeProperty(value: unknown): NormalizedProperty {
     value: rawValue,
     visible: typeof property.visible === 'boolean' ? property.visible : null,
     readonly: typeof property.readonly === 'boolean' ? property.readonly : null,
-    raw: value
+    ...(includeRaw ? { raw: value } : {})
   };
 }
 

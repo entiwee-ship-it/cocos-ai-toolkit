@@ -1,4 +1,4 @@
-import { chromium, type Browser, type Page } from 'playwright-core';
+import type { Browser, Page } from 'playwright-core';
 import type { RuntimeBrowser, RuntimeBrowserPage } from '@cocos-ai/core';
 
 /**
@@ -9,6 +9,7 @@ import type { RuntimeBrowser, RuntimeBrowserPage } from '@cocos-ai/core';
  * @returns 适配后的浏览器实例。
  */
 export async function launchPlaywrightBrowser(options: { channel: string; headless: boolean }): Promise<RuntimeBrowser> {
+  const { chromium } = await import('playwright-core');
   const browser = await chromium.launch({ channel: options.channel, headless: options.headless });
   return wrapBrowser(browser);
 }

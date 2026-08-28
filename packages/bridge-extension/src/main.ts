@@ -5,11 +5,16 @@ import type { CreatorDocumentIdentity } from './creator-document-identity';
 import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
 import { ProbeError } from './probe-errors';
 import { probeAssets } from './asset-probe';
-import { probeAssetIndex } from './asset-index';
+import {
+  invalidateAssetIndexCache,
+  probeAssetIndex,
+  probeAssetSearch,
+  probeScriptPathsByUuid
+} from './asset-index';
 import { importAsset } from './import-asset';
 import { createProbeServerBootstrap, type ProbeBootstrapResult } from './probe-bootstrap';
 
-const BRIDGE_VERSION = '0.6.0';
+const BRIDGE_VERSION = '0.6.1';
 const BRIDGE_BUILD_ID = readBridgeBuildId(__dirname);
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
@@ -24,7 +29,6 @@ const BRIDGE_LIFECYCLE_LOG_NAMES: Record<BridgeLifecycleEvent['type'], string> =
 };
 
 let client: BridgeClient | null = null;
-let cachedScriptPathsByUuid: Array<[string, string]> | null = null;
 
 type JsonObject = Record<string, unknown>;
 
@@ -35,7 +39,7 @@ const sceneMethods = {
 } as const;
 
 export function load(): void {
-  cachedScriptPathsByUuid = null;
+  invalidateAssetIndexCache();
   const project = Editor.Project as typeof Editor.Project & { uuid?: string };
   const app = Editor.App as typeof Editor.App & { version?: string };
   const projectPath = project.path;
@@ -46,7 +50,8 @@ export function load(): void {
   const handlers: Readonly<Record<string, (payload: unknown) => Promise<unknown>>> = {
       'probe.editorState': () => probeEditorStateWithDocumentIdentity(),
       'probe.assets': (payload) => probeAssets(payload),
-      'probe.assetIndex': () => probeAssetIndexWithScriptCache(),
+      'probe.assetIndex': (payload) => probeAssetIndex(payload),
+      'probe.assetSearch': (payload) => probeAssetSearch(payload),
       'probe.component': (payload) => probeComponent(payload),
       'probe.nodeSelect': (payload) => {
         const request = payload as { uuid?: unknown };
@@ -62,12 +67,12 @@ export function load(): void {
         return { opened: true, uuid: request.uuid };
       },
       // 直写入口：绕过已移除的事务层，直接驱动 Scene 写执行器（原子写 + 保存 + 逐项重读）。
-      'probe.directWrite': (payload) => forwardToScene('writeExecute', payload),
+      'probe.directWrite': (payload) => forwardDirectWrite(payload),
       'probe.saveDocument': () => forwardToScene('saveDocument', {}),
-      'probe.importAsset': (payload) => importAsset(payload),
-      'probe.createPrefab': (payload) => forwardToScene('createPrefabFromNode', payload),
-      'probe.deleteAsset': (payload) => forwardToScene('deleteAsset', payload),
-      'probe.refreshAsset': (payload) => forwardToScene('refreshAsset', payload),
+      'probe.importAsset': (payload) => invalidateAfterAssetWrite(importAsset(payload)),
+      'probe.createPrefab': (payload) => invalidateAfterAssetWrite(forwardToScene('createPrefabFromNode', payload)),
+      'probe.deleteAsset': (payload) => invalidateAfterAssetWrite(forwardToScene('deleteAsset', payload)),
+      'probe.refreshAsset': (payload) => invalidateAfterAssetWrite(forwardToScene('refreshAsset', payload)),
       'probe.previewOpen': () => openPreviewServer(editorPreviewMessageSource, nodeHttpPreviewProbe),
       'probe.previewStatus': () => readPreviewStatus(editorPreviewMessageSource),
       'probe.previewReload': () => reloadPreviewPages(editorPreviewMessageSource),
@@ -120,7 +125,7 @@ export function load(): void {
 export function unload(): void {
   client?.dispose();
   client = null;
-  cachedScriptPathsByUuid = null;
+  invalidateAssetIndexCache();
 }
 
 function logBridgeClientLifecycle(event: BridgeLifecycleEvent): void {
@@ -209,44 +214,28 @@ async function probeComponent(request: unknown): Promise<unknown> {
  * @returns 可跨 Creator 进程传输的 UUID、路径元组；索引不可用时返回空数组。
  */
 async function readScriptPathsBestEffort(): Promise<Array<[string, string]>> {
-  if (cachedScriptPathsByUuid !== null) {
-    return cachedScriptPathsByUuid;
-  }
   try {
-    await probeAssetIndexWithScriptCache();
-    return cachedScriptPathsByUuid ?? [];
+    return await probeScriptPathsByUuid();
   } catch {
     return [];
   }
 }
 
-async function probeAssetIndexWithScriptCache(): Promise<unknown> {
-  const index = await probeAssetIndex();
-  cachedScriptPathsByUuid = readScriptPathsByUuid(index);
-  return index;
+async function invalidateAfterAssetWrite<T>(operation: Promise<T>): Promise<T> {
+  return operation.finally(invalidateAssetIndexCache);
 }
 
-/**
- * 从可序列化资产索引中提取脚本 UUID 和稳定路径。
- *
- * @param value probeAssetIndex 返回的资产索引。
- * @returns 可跨 Creator 进程传输的 UUID、路径元组。
- */
-function readScriptPathsByUuid(value: unknown): Array<[string, string]> {
-  const index = readObject(value);
-  const scripts = Array.isArray(index.scripts) ? index.scripts : [];
-  const entries: Array<[string, string]> = [];
-  for (const scriptValue of scripts) {
-    const script = readObject(scriptValue);
-    const assetUuid = typeof script.assetUuid === 'string' ? script.assetUuid : null;
-    const scriptPath = typeof script.scriptPath === 'string'
-      ? script.scriptPath
-      : typeof script.filePath === 'string'
-        ? script.filePath
-        : null;
-    if (assetUuid && scriptPath) entries.push([assetUuid, scriptPath]);
-  }
-  return entries;
+async function forwardDirectWrite(payload: unknown): Promise<unknown> {
+  const operation = forwardToScene('writeExecute', payload);
+  return hasAssetIndexMutation(payload) ? invalidateAfterAssetWrite(operation) : operation;
+}
+
+function hasAssetIndexMutation(payload: unknown): boolean {
+  const operations = readObject(payload).operations;
+  return Array.isArray(operations) && operations.some((value) => {
+    const type = readObject(value).type;
+    return typeof type === 'string' && (type.startsWith('asset.') || type === 'prefab.create_from_node');
+  });
 }
 
 async function forwardToScene(method: string, request: unknown): Promise<unknown> {
@@ -275,12 +264,12 @@ function readObject(value: unknown): Record<string, unknown> {
 export const methods: Record<string, (request: JsonObject) => Promise<unknown>> = {
   'probe-editor-state': () => probeEditorStateWithDocumentIdentity(),
   'probe-assets': (request) => probeAssets(request),
-  'probe-asset-index': () => probeAssetIndexWithScriptCache(),
+  'probe-asset-index': (request) => probeAssetIndex(request),
   'probe-hierarchy': (request) => forwardToScene('probeHierarchy', request),
   'probe-node': (request) => forwardToScene('probeNode', request),
   'probe-component': (request) => probeComponent(request),
   'probe-prefab': (request) => forwardToScene('probePrefab', request),
-  'probe-direct-write': (request) => forwardToScene('writeExecute', request),
+  'probe-direct-write': (request) => forwardDirectWrite(request),
   'probe-save-document': () => forwardToScene('saveDocument', {}),
-  'probe-import-asset': (request) => importAsset(request)
+  'probe-import-asset': (request) => invalidateAfterAssetWrite(importAsset(request))
 };

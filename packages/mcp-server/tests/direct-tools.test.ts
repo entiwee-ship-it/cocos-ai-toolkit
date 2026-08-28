@@ -37,6 +37,7 @@ const ONLINE_EDITOR = {
   capabilities: [
     'probe.editorState',
     'probe.assetIndex',
+    'probe.assetSearch',
     'probe.assets',
     'probe.openAsset',
     'probe.hierarchy',
@@ -258,6 +259,9 @@ function createRespond(overrides: Record<string, unknown> = {}) {
     if (method === 'probe.assetIndex') {
       return { assets: [PREFAB_ASSET], scripts: [], documents: [], unresolved: [] };
     }
+    if (method === 'probe.assetSearch') {
+      return { assets: [PREFAB_ASSET], total: 1, revision: 'asset-revision-1', unresolved: [] };
+    }
     if (method === 'probe.editorState') return EDITOR_STATE;
     if (method === 'probe.openAsset') return { opened: true, uuid: 'prefab-uuid-1' };
     if (method === 'probe.hierarchy') return { data: HIERARCHY_TREE, raw: null, source: 'message-api' };
@@ -446,6 +450,61 @@ describe('直写档只读工具', () => {
     expect(probeClient.requests.at(-1)?.method).toBe('probe.editorState');
   });
 
+  it('cocos_asset_search 在 Bridge 内过滤资产，不拉取全量索引', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_asset_search',
+      arguments: { projectId: 'proj1', pattern: '  TEST  ' }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      query: { pattern: '  TEST  ' },
+      page: { total: 1, items: [{ assetUuid: 'prefab-uuid-1' }] }
+    });
+    expect(probeClient.requests).toContainEqual(expect.objectContaining({
+      method: 'probe.assetSearch',
+      payload: expect.objectContaining({
+        params: { pattern: 'test', includeRaw: false, offset: 0, pageSize: 50 }
+      })
+    }));
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.assetIndex');
+  });
+
+  it('cocos_asset_search cursor 只向 Bridge 请求下一页', async () => {
+    const fallback = createRespond();
+    const probeClient = new RecordingProbeClient((method, payload) => {
+      if (method !== 'probe.assetSearch') return fallback(method, payload);
+      const params = (payload as { params: { offset: number } }).params;
+      return {
+        assets: [params.offset === 0 ? PREFAB_ASSET : SCENE_ASSET],
+        total: 2,
+        revision: 'asset-revision-1',
+        unresolved: []
+      };
+    });
+    const { client } = await createHarness(probeClient);
+
+    const first = await client.callTool({
+      name: 'cocos_asset_search',
+      arguments: { projectId: 'proj1', pattern: 'asset', pageSize: 1 }
+    });
+    const nextCursor = (first.structuredContent as { page: { nextCursor: string } }).page.nextCursor;
+    const second = await client.callTool({
+      name: 'cocos_asset_search',
+      arguments: { projectId: 'proj1', pattern: 'asset', pageSize: 1, cursor: nextCursor }
+    });
+
+    expect(second.structuredContent).toMatchObject({
+      page: { offset: 1, total: 2, items: [{ assetUuid: 'scene-uuid-1' }] }
+    });
+    expect(probeClient.requests.at(-1)).toMatchObject({
+      method: 'probe.assetSearch',
+      payload: { params: { pattern: 'asset', includeRaw: false, offset: 1, pageSize: 1 } }
+    });
+  });
+
   it('cocos_asset_inspect 返回资产详情和引用关系', async () => {
     const probeClient = new RecordingProbeClient(createRespond({
       'probe.assets': { ...INSPECT_ASSET_RESPONSE, dependencies: ['script-uuid-1'], users: ['scene-uuid-1'] }
@@ -466,11 +525,30 @@ describe('直写档只读工具', () => {
         ])
       }
     });
+    expect(probeClient.requests).toContainEqual(expect.objectContaining({
+      method: 'probe.assets',
+      payload: expect.objectContaining({ params: { uuid: 'prefab-uuid-1' } })
+    }));
+    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.assetIndex');
   });
 
   it('cocos_scene_open 打开 Scene 并等待文档身份就绪', async () => {
     const probeClient = new RecordingProbeClient(createRespond({
-      'probe.assetIndex': { assets: [SCENE_ASSET], scripts: [], documents: [], unresolved: [] },
+      'probe.assets': {
+        ...INSPECT_ASSET_RESPONSE,
+        details: {
+          ...INSPECT_ASSET_RESPONSE.details,
+          uuid: SCENE_ASSET.assetUuid,
+          url: SCENE_ASSET.url,
+          file: SCENE_ASSET.filePath,
+          type: SCENE_ASSET.type,
+          importer: SCENE_ASSET.importer,
+          name: SCENE_ASSET.name,
+          displayName: SCENE_ASSET.displayName,
+          source: SCENE_ASSET.source,
+          path: SCENE_ASSET.path
+        }
+      },
       'probe.openAsset': { opened: true, uuid: 'scene-uuid-1' },
       'probe.editorState': { ...EDITOR_STATE, document: { assetUuid: 'scene-uuid-1', dirty: false } }
     }));
@@ -498,15 +576,19 @@ describe('直写档只读工具', () => {
     const methods = probeClient.requests.map((request) => request.method);
     expect(methods).toContain('probe.openAsset');
     expect(methods).toContain('probe.editorState');
+    expect(methods).toContain('probe.assets');
+    expect(methods).not.toContain('probe.assetIndex');
+    expect(probeClient.requests).toContainEqual(expect.objectContaining({
+      method: 'probe.assets',
+      payload: expect.objectContaining({ params: { uuid: 'prefab-uuid-1', detailsOnly: true } })
+    }));
   });
 
   it('cocos_prefab_open 对非 Prefab 资产拒绝', async () => {
     const probeClient = new RecordingProbeClient(createRespond({
-      'probe.assetIndex': {
-        assets: [{ ...PREFAB_ASSET, type: 'cc.ImageAsset' }],
-        scripts: [],
-        documents: [],
-        unresolved: []
+      'probe.assets': {
+        ...INSPECT_ASSET_RESPONSE,
+        details: { ...INSPECT_ASSET_RESPONSE.details, type: 'cc.ImageAsset' }
       }
     }));
     const { client } = await createHarness(probeClient);
@@ -532,7 +614,27 @@ describe('直写档只读工具', () => {
       method: 'probe.hierarchy',
       payload: { selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' }, params: { depth: 6 } }
     });
+    expect((probeClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({ depth: 6 });
     expect(JSON.stringify(result.structuredContent)).toContain('raw');
+  });
+
+  it('cocos_hierarchy 和 cocos_node_read 把完整读取预算转发给 Bridge', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    await client.callTool({
+      name: 'cocos_hierarchy',
+      arguments: { projectId: 'proj1', maxOutputBytes: 64 * 1024 }
+    });
+    await client.callTool({
+      name: 'cocos_node_read',
+      arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', maxOutputBytes: 64 * 1024 }
+    });
+
+    const hierarchyRequest = probeClient.requests.find((request) => request.method === 'probe.hierarchy');
+    const nodeRequest = probeClient.requests.find((request) => request.method === 'probe.node');
+    expect(hierarchyRequest).toMatchObject({ payload: { params: { maxOutputBytes: 64 * 1024 } } });
+    expect(nodeRequest).toMatchObject({ payload: { params: { uuid: 'panel-uuid', maxOutputBytes: 64 * 1024 } } });
   });
 
   it('cocos_hierarchy 的紧凑参数按子树和查询投影并移除所有 raw', async () => {
@@ -559,9 +661,9 @@ describe('直写档只读工具', () => {
     expect(JSON.stringify(result.structuredContent)).not.toContain('"raw"');
     const hierarchyRequests = probeClient.requests.filter((request) => request.method === 'probe.hierarchy');
     expect(hierarchyRequests).toHaveLength(2);
-    expect(hierarchyRequests[0]).toMatchObject({ payload: { params: { depth: 50 } } });
+    expect(hierarchyRequests[0]).toMatchObject({ payload: { params: { depth: 50, compact: true } } });
     expect(hierarchyRequests[1]).toMatchObject({
-      payload: { params: { depth: 50, rootUuid: 'root-uuid' } }
+      payload: { params: { depth: 50, rootUuid: 'root-uuid', compact: true } }
     });
   });
 
@@ -598,7 +700,7 @@ describe('直写档只读工具', () => {
     });
     const hierarchyRequests = probeClient.requests.filter((request) => request.method === 'probe.hierarchy');
     expect(hierarchyRequests[1]).toMatchObject({
-      payload: { params: { depth: 2, rootUuid: 'panel-uuid' } }
+      payload: { params: { depth: 2, rootUuid: 'panel-uuid', compact: true } }
     });
   });
 
@@ -612,6 +714,7 @@ describe('直写档只读工具', () => {
     });
     expect(result.structuredContent).toMatchObject({ hierarchy: { data: { name: 'Root' } } });
     expect(JSON.stringify(result.structuredContent)).toContain('"raw"');
+    expect((probeClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({});
   });
 
   it('cocos_hierarchy summary-only 不重复返回节点树', async () => {
@@ -626,6 +729,7 @@ describe('直写档只读工具', () => {
       hierarchy: { summary: { totalNodeCount: 2, scopedNodeCount: 2 } }
     });
     expect((result.structuredContent as { hierarchy: Record<string, unknown> }).hierarchy).not.toHaveProperty('nodes');
+    expect(probeClient.requests.at(-1)).toMatchObject({ payload: { params: { compact: true } } });
   });
 
   it('cocos_node_read 提供 componentType 时返回组件完整属性', async () => {
@@ -641,6 +745,8 @@ describe('直写档只读工具', () => {
       componentUuid: 'label-comp-uuid',
       component: { className: 'cc.Label' }
     });
+    const nodeRequest = probeClient.requests.find((request) => request.method === 'probe.node');
+    expect((nodeRequest?.payload as { params: unknown }).params).toEqual({ uuid: 'panel-uuid' });
   });
 
   it('cocos_node_read 返回 Prefab 摘要并转发编辑态 bounds 选项', async () => {
@@ -683,7 +789,8 @@ describe('直写档只读工具', () => {
           includeBounds: true,
           includeDescendantVisualUnion: true,
           relativeToUuid: 'root-uuid',
-          relativeToPath: 'Root'
+          relativeToPath: 'Root',
+          compact: true
         }
       }
     });
@@ -717,7 +824,14 @@ describe('直写档只读工具', () => {
       count: { requested: 3, returned: 3, found: 2, errors: 1, omitted: 0 },
       output: { truncated: false }
     });
-    expect(probeClient.requests.filter((request) => request.method === 'probe.hierarchy')).toHaveLength(1);
+    const hierarchyRequests = probeClient.requests.filter((request) => request.method === 'probe.hierarchy');
+    expect(hierarchyRequests).toHaveLength(1);
+    expect(hierarchyRequests[0]).toMatchObject({ payload: { params: { depth: 50, compact: true } } });
+    const nodeRequests = probeClient.requests.filter((request) => request.method === 'probe.node');
+    expect(nodeRequests).toHaveLength(3);
+    expect(nodeRequests.every((request) => (
+      (request.payload as { params: { compact?: boolean } }).params.compact === true
+    ))).toBe(true);
   });
 
   it('cocos_nodes_read 超出输出预算时显式截断', async () => {

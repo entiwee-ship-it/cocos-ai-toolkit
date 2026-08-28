@@ -19,9 +19,9 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 
 1. `cocos_editor_list` 发现在线项目（按 projectPath 选择；同项目多实例时传 editorInstanceId）。
 2. `cocos_editor_state` 确认当前文档 UUID、dirty 和 Scene/AssetDB ready。
-3. `cocos_asset_search` 按名称/路径找 Prefab、Scene 或脚本 UUID；`cocos_asset_inspect` 看类型、URL、依赖和 users。
+3. `cocos_asset_search` 按名称/路径找 Prefab、Scene 或脚本 UUID（Bridge 内分页并复用短缓存）；`cocos_asset_inspect` 按 UUID 直接看类型、URL、依赖和 users，不要先取全量索引。
 4. `cocos_prefab_open` / `cocos_scene_open` 打开目标文档，等待身份就绪。
-5. `cocos_hierarchy` 读节点树寻址；`cocos_node_read` 看单节点、Prefab 实例摘要和可选编辑态 bounds；多节点统一投影用 `cocos_nodes_read`。
+5. `cocos_hierarchy` 优先传 summary/fields/query 做紧凑寻址；`cocos_node_read` 优先用 summary/fields/propertyPaths 看节点；多节点用 `cocos_nodes_read`。这些投影会在 Bridge 内省略结构 raw；只有明确需要完整诊断时才使用无投影读取，必要时用 `maxOutputBytes` 调整 Bridge 发送前预算。
 6. 写入：每步自动保存并逐项重读回显，响应里的 `verification.items` 就是生效证据。
 7. 手工修改后显式落盘用 `cocos_document_save`。
 8. 需要视觉确认时：`cocos_preview_launch` 启动预览 → `cocos_runtime_capture` 截图 → `cocos_preview_stop` 收尾。

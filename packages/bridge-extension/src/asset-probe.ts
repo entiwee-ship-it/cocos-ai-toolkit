@@ -59,11 +59,16 @@ export async function probeAssets(request: unknown): Promise<unknown> {
   const input = readObject(request);
   const pattern = typeof input.pattern === 'string' ? input.pattern : undefined;
   const uuid = typeof input.uuid === 'string' ? input.uuid : undefined;
-  const options = pattern ? { pattern } : undefined;
-  const rawAssets = await Editor.Message.request('asset-db', 'query-assets', options, ASSET_DATA_KEYS as never);
-  const assets = (rawAssets as unknown[])
-    .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object')
-    .map(normalizeAssetInfo);
+  const detailsOnly = input.detailsOnly === true;
+  const shouldQueryAssets = !uuid || pattern !== undefined;
+  const assets = shouldQueryAssets
+    ? normalizeAssetList(await Editor.Message.request(
+        'asset-db',
+        'query-assets',
+        pattern ? { pattern } : undefined,
+        ASSET_DATA_KEYS as never
+      ))
+    : [];
 
   if (!uuid) {
     return { assets, details: null, meta: null, dependencies: null, users: null, unresolved: [] };
@@ -71,6 +76,18 @@ export async function probeAssets(request: unknown): Promise<unknown> {
 
   const unresolved: Array<{ path: string; reason: string }> = [];
   const details = await Editor.Message.request('asset-db', 'query-asset-info', uuid, ASSET_DATA_KEYS as never);
+  if (detailsOnly) {
+    return {
+      assets,
+      details: details && typeof details === 'object'
+        ? normalizeAssetInfo(details as unknown as Record<string, unknown>)
+        : null,
+      meta: null,
+      dependencies: null,
+      users: null,
+      unresolved
+    };
+  }
   const meta = await Editor.Message.request('asset-db', 'query-asset-meta', uuid);
   const dependencies = await optionalAssetQuery('query-asset-dependencies', uuid, unresolved);
   const users = await optionalAssetQuery('query-asset-users', uuid, unresolved);
@@ -82,6 +99,12 @@ export async function probeAssets(request: unknown): Promise<unknown> {
     users,
     unresolved
   };
+}
+
+function normalizeAssetList(value: unknown): NormalizedAssetInfo[] {
+  return (Array.isArray(value) ? value : [])
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map(normalizeAssetInfo);
 }
 
 async function optionalAssetQuery(

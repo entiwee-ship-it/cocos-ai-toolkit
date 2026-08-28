@@ -27,8 +27,12 @@ describe('asset index registration', () => {
     const mainSource = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
 
     expect(BRIDGE_CAPABILITIES).toContain('probe.assetIndex');
-    expect(mainSource).toContain("'probe.assetIndex': () => probeAssetIndexWithScriptCache()");
-    expect(mainSource).toContain("'probe-asset-index': () => probeAssetIndexWithScriptCache()");
+    expect(BRIDGE_CAPABILITIES).toContain('probe.assetSearch');
+    expect(mainSource).toContain("'probe.assetIndex': (payload) => probeAssetIndex(payload)");
+    expect(mainSource).toContain("'probe.assetSearch': (payload) => probeAssetSearch(payload)");
+    expect(mainSource).toContain("'probe-asset-index': (request) => probeAssetIndex(request)");
+    expect(mainSource).toContain('operation.finally(invalidateAssetIndexCache)');
+    expect(mainSource).not.toContain('cachedScriptPathsByUuid');
     expect(packageJson.contributions?.messages?.['probe-asset-index']).toEqual({
       methods: ['probe-asset-index']
     });

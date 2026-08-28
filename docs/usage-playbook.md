@@ -1,6 +1,6 @@
 # Cocos AI Toolkit 使用手册
 
-本文只描述当前 `0.5.x` 直写架构。旧事务、声明式预览确认链路、回滚和状态查询已彻底移除，不属于当前或后续兼容面。
+本文只描述当前 `0.6.x` 直写架构。旧事务、声明式预览确认链路、回滚和状态查询已彻底移除，不属于当前或后续兼容面。
 
 ## 1. 核心边界
 
@@ -14,10 +14,10 @@
 
 1. `cocos_editor_list`：选择在线 Creator；同项目多实例时记录 `editorInstanceId`。
 2. `cocos_editor_state`：确认当前文档 UUID、dirty、Scene/AssetDB ready。
-3. `cocos_asset_search`：按名称或路径寻找 Prefab、Scene、脚本 UUID。
-4. `cocos_asset_inspect`：读取资产类型、URL、依赖和反向使用者。
+3. `cocos_asset_search`：按名称或路径寻找 Prefab、Scene、脚本 UUID；搜索在 Bridge 内分页并复用短缓存，不再把全量索引传给 MCP。
+4. `cocos_asset_inspect`：按 UUID 直接读取资产类型、URL、依赖和反向使用者，不需要先调用或传输完整资产索引。
 5. `cocos_prefab_open` 或 `cocos_scene_open`：通过 Creator 打开目标文档并等待身份就绪。
-6. `cocos_hierarchy`：读取节点树；`cocos_node_read`：查看单节点、Prefab 实例摘要、`writeCapabilities` 和 bounds；多节点使用 `cocos_nodes_read`。
+6. `cocos_hierarchy`：优先传 `summary`、`fields` 或 `query` 读取紧凑节点树；`cocos_node_read` 优先使用 `summary/fields/propertyPaths` 查看单节点；多节点使用 `cocos_nodes_read`。这些投影会在 Bridge 内直接省略结构 raw；完整无投影调用仍保留旧返回，并可用 `maxOutputBytes` 调整 Bridge 发送前预算。
 7. 调用写工具；成功响应中的 `outcome.verification.items` 是保存后重读证据。
 8. 手工编辑后需要显式落盘时调用 `cocos_document_save`。
 9. 需要视觉或交互验证时运行 Preview 工具，最后用 `cocos_preview_stop` 清理会话。

@@ -6,14 +6,19 @@ import { normalizeProperty, readDumpValue, readObject } from './raw-reflection';
  *
  * @param rawValue Creator 返回的节点 Dump。
  * @param siblingIndex 节点在父节点中的顺序；未知时为 null。
- * @returns 保留完整原始 Dump 的节点结构。
+ * @param includeRaw 是否附加节点和组件原始 Dump；默认保留以兼容完整读取。
+ * @returns 稳定节点结构；includeRaw 为 true 时附带完整原始 Dump。
  */
-export function normalizeNodeDump(rawValue: unknown, siblingIndex: number | null = null) {
+export function normalizeNodeDump(
+  rawValue: unknown,
+  siblingIndex: number | null = null,
+  includeRaw = true
+) {
   const raw = readObject(rawValue);
   const rawPrefabInfo = readObject(raw.__prefab__);
   const children = Array.isArray(raw.children) ? raw.children : [];
   const components = Array.isArray(raw.__comps__)
-    ? raw.__comps__.map((component) => normalizeComponentDump(component))
+    ? raw.__comps__.map((component) => normalizeComponentDump(component, undefined, includeRaw))
     : [];
   return {
     identity: {
@@ -35,7 +40,7 @@ export function normalizeNodeDump(rawValue: unknown, siblingIndex: number | null
     components,
     prefabInstance: normalizePrefabInstanceSummary(raw),
     unresolved: [],
-    raw
+    ...(includeRaw ? { raw } : {})
   };
 }
 
@@ -66,19 +71,21 @@ export function normalizePrefabInstanceSummary(rawValue: unknown) {
  *
  * @param rawValue Creator 返回的组件 Dump。
  * @param scriptPathsByUuid 脚本资产 UUID 到 db URL 或磁盘路径的索引。
- * @returns 组件身份、类信息、属性摘要、完整 Schema、未解析项和原始 Dump。
+ * @param includeRaw 是否附加组件原始 Dump；默认保留以兼容完整读取。
+ * @returns 组件身份、类信息、属性摘要、完整 Schema 和未解析项；includeRaw 为 true 时附带原始 Dump。
  */
 export function normalizeComponentDump(
   rawValue: unknown,
-  scriptPathsByUuid: ReadonlyMap<string, string> = new Map()
+  scriptPathsByUuid: ReadonlyMap<string, string> = new Map(),
+  includeRaw = true
 ) {
   const raw = readObject(rawValue);
   const values = readObject(raw.value);
   const properties: Record<string, ReturnType<typeof normalizeProperty>> = {};
   for (const [name, property] of Object.entries(values)) {
-    properties[name] = normalizeProperty(property);
+    properties[name] = normalizeProperty(property, includeRaw);
   }
-  const schema = buildComponentTypeSchema(raw, scriptPathsByUuid);
+  const schema = buildComponentTypeSchema(raw, scriptPathsByUuid, includeRaw);
   return {
     identity: {
       objectUuid: readString(readDumpValue(values.uuid)),
@@ -95,7 +102,7 @@ export function normalizeComponentDump(
     properties,
     schema,
     unresolved: schema.unresolved,
-    raw
+    ...(includeRaw ? { raw } : {})
   };
 }
 
@@ -110,7 +117,15 @@ export function readComponentFileId(rawValue: unknown): string | null {
   return readPrefabFileId(raw, readObject(raw.value));
 }
 
-export function normalizeHierarchyTree(treeValue: unknown, depth: number): unknown {
+/**
+ * 把 Creator 节点树归一化，并按深度截断。
+ *
+ * @param treeValue Creator 返回的节点树。
+ * @param depth 允许展开的最大层级。
+ * @param includeRaw 是否在每个节点附加原始子树；默认保留以兼容完整读取。
+ * @returns 归一化节点树；includeRaw 为 false 时不会夹带递归原始树。
+ */
+export function normalizeHierarchyTree(treeValue: unknown, depth: number, includeRaw = true): unknown {
   const visit = (value: unknown, level: number, siblingIndex: number): unknown => {
     const tree = readObject(value);
     const sourceChildren = Array.isArray(tree.children) ? tree.children : [];
@@ -128,7 +143,7 @@ export function normalizeHierarchyTree(treeValue: unknown, depth: number): unkno
       components: Array.isArray(tree.components) ? tree.components : [],
       truncated: readBoolean(tree.truncated) === true || (level >= depth && sourceChildren.length > 0),
       children: children.map((child, index) => visit(child, level + 1, index)),
-      raw: tree
+      ...(includeRaw ? { raw: tree } : {})
     };
   };
   return visit(treeValue, 0, 0);

@@ -80,7 +80,11 @@ describe('assertWriteOperationsApplicable', () => {
     installCreatorMocks({ nodes: { 'nested-root': nestedNode('nested-root', true) } });
     const { methods } = await loadSceneModule();
 
-    await expect(methods.probeNode({ uuid: 'nested-root' })).resolves.toMatchObject({
+    const response = await methods.probeNode({ uuid: 'nested-root' }) as {
+      data: Record<string, unknown>;
+      raw?: unknown;
+    };
+    expect(response).toMatchObject({
       data: {
         prefabInstance: {
           isInstanceRoot: true,
@@ -96,12 +100,92 @@ describe('assertWriteOperationsApplicable', () => {
         }
       }
     });
+    expect(response).toHaveProperty('raw');
+    expect(response.data).toHaveProperty('raw');
+  });
+});
+
+describe('compact probe responses', () => {
+  it('probeNode 紧凑模式不返回信封和节点 raw', async () => {
+    installCreatorMocks({ nodes: { 'nested-root': nestedNode('nested-root', true) } });
+    const { methods } = await loadSceneModule();
+
+    const response = await methods.probeNode({ uuid: 'nested-root', compact: true }) as {
+      data: Record<string, unknown>;
+      raw?: unknown;
+    };
+
+    expect(response).not.toHaveProperty('raw');
+    expect(response.data).not.toHaveProperty('raw');
+  });
+
+  it('probeHierarchy 紧凑模式不返回信封和递归节点 raw', async () => {
+    installCreatorMocks({
+      nodes: {},
+      hierarchy: {
+        uuid: 'root',
+        name: 'Root',
+        children: [{ uuid: 'child', name: 'Child', children: [] }]
+      }
+    });
+    const { methods } = await loadSceneModule();
+
+    const response = await methods.probeHierarchy({ depth: 1, compact: true }) as {
+      data: { raw?: unknown; children: Array<{ raw?: unknown }> };
+      raw?: unknown;
+    };
+
+    expect(response).not.toHaveProperty('raw');
+    expect(response.data).not.toHaveProperty('raw');
+    expect(response.data.children[0]).not.toHaveProperty('raw');
+
+    const fullResponse = await methods.probeHierarchy({ depth: 1 }) as {
+      data: { raw?: unknown; children: Array<{ raw?: unknown }> };
+      raw?: unknown;
+    };
+    expect(fullResponse).toHaveProperty('raw');
+    expect(fullResponse.data).toHaveProperty('raw');
+    expect(fullResponse.data.children[0]).toHaveProperty('raw');
+  });
+
+  it('完整 hierarchy/node 超出预算时在 Bridge 发送前拒绝，紧凑模式仍可读取', async () => {
+    installCreatorMocks({
+      nodes: {
+        'nested-root': {
+          ...nestedNode('nested-root', true),
+          largeDiagnostic: { value: 'x'.repeat(20_000) }
+        }
+      },
+      hierarchy: {
+        uuid: 'root',
+        name: 'Root',
+        largeDiagnostic: 'x'.repeat(20_000),
+        children: []
+      }
+    });
+    const { methods } = await loadSceneModule();
+
+    for (const operation of [
+      methods.probeHierarchy({ depth: 1, maxOutputBytes: 16 * 1024 }),
+      methods.probeNode({ uuid: 'nested-root', maxOutputBytes: 16 * 1024 })
+    ]) {
+      const error = await operation.catch((caught: unknown) => caught);
+      expect(error).toMatchObject({
+        code: 'PROBE_OUTPUT_TOO_LARGE',
+        details: { tooLarge: true, maxOutputBytes: 16 * 1024 }
+      });
+      expect(error.details.estimatedBytes).toBeGreaterThan(16 * 1024);
+    }
+
+    await expect(methods.probeHierarchy({ depth: 1, compact: true, maxOutputBytes: 16 * 1024 })).resolves.toBeDefined();
+    await expect(methods.probeNode({ uuid: 'nested-root', compact: true, maxOutputBytes: 16 * 1024 })).resolves.toBeDefined();
   });
 });
 
 function installCreatorMocks(options: {
   nodes: Record<string, unknown>;
   components?: Record<string, unknown>;
+  hierarchy?: unknown;
 }) {
   const requests: unknown[][] = [];
   Object.defineProperty(globalThis, 'cce', {
@@ -121,6 +205,7 @@ function installCreatorMocks(options: {
           requests.push(args);
           const [channel, method, value] = args;
           if (channel === 'scene' && method === 'query-node') return options.nodes[String(value)];
+          if (channel === 'scene' && method === 'query-node-tree') return options.hierarchy;
           if (channel === 'scene' && method === 'query-component') return options.components?.[String(value)];
           if (channel === 'asset-db' && method === 'query-asset-info') {
             return { uuid: value, url: 'db://assets/Nested.prefab', type: 'cc.Prefab' };

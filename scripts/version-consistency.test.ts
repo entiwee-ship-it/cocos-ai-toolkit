@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const releaseVersion = '0.6.0';
+const releaseVersion = '0.6.1';
 const workspacePackagePaths = [
   'packages/bridge-extension',
   'packages/cli',
@@ -49,6 +49,12 @@ describe('发布版本一致性', () => {
         }
       }
     }
+
+    const bridgeManifest = await readJson('packages/bridge-extension/package.json') as {
+      devDependencies?: Record<string, string>;
+    };
+    expect(bridgeManifest.devDependencies?.['@cocos/creator-types']).toBe('3.8.8');
+    expect(packageLock.packages?.['node_modules/@cocos/creator-types']?.version).toBe('3.8.8');
   });
 
   it('Bridge、MCP 与健康检查握手都声明同一版本', async () => {

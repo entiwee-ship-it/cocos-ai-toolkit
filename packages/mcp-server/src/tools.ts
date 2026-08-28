@@ -3,10 +3,7 @@ import { z } from 'zod';
 import {
   AssetRecordSchema,
   ComponentTypeSchemaSchema,
-  DocumentAssetRecordSchema,
-  ScriptAssetRecordSchema,
-  UnresolvedItemSchema,
-  type AssetRecord
+  UnresolvedItemSchema
 } from '@cocos-ai/protocol';
 
 const SUPPORTED_CREATOR_VERSION = '3.8.8';
@@ -60,15 +57,15 @@ const EditorStateOutputSchema = z.object({
   state: EditorStateSchema
 });
 
-const AssetIndexSchema = z.object({
-  assets: z.array(AssetRecordSchema),
-  scripts: z.array(ScriptAssetRecordSchema),
-  documents: z.array(DocumentAssetRecordSchema),
-  unresolved: z.array(UnresolvedItemSchema)
-});
-
 const PublicAssetRecordSchema = AssetRecordSchema.omit({ raw: true }).extend({
   raw: z.unknown().optional()
+});
+
+const AssetSearchProbeResponseSchema = z.object({
+  assets: z.array(PublicAssetRecordSchema),
+  total: z.number().int().nonnegative(),
+  revision: z.string().min(1),
+  unresolved: z.array(UnresolvedItemSchema)
 });
 
 const NormalizedAssetInfoSchema = z.object({
@@ -286,30 +283,29 @@ export class CocosReadonlyToolService {
     includeRaw?: boolean;
   }) {
     const editor = await this.resolveEditor(input);
-    assertCapability(editor, 'probe.assetIndex');
-    const index = readAssetIndex(await this.options.probeClient.request('probe.assetIndex', {
-      selector: toSelector(editor),
-      params: {}
-    }));
+    assertCapability(editor, 'probe.assetSearch');
     const pattern = input.pattern.trim().toLowerCase();
     const includeRaw = input.includeRaw === true;
-    const revision = createAssetManifestHash(index.assets, index.documents);
-    const matching = index.assets
-      .filter((asset) => matchesAsset(asset, pattern))
-      .sort(compareAssets);
-    const pageState = readPageState({
+    const pageState = readAssetSearchPageRequestState({
       cursor: input.cursor,
-      kind: 'asset-search',
       editor,
       key: pattern,
       requestedPageSize: input.pageSize,
-      defaultPageSize: 50,
-      includeRaw,
-      revision
+      includeRaw
     });
-    const items = matching
-      .slice(pageState.offset, pageState.offset + pageState.pageSize)
-      .map((asset) => toPublicAssetRecord(asset, includeRaw));
+    const response = readAssetSearchProbeResponse(await this.options.probeClient.request('probe.assetSearch', {
+      selector: toSelector(editor),
+      params: {
+        pattern,
+        includeRaw,
+        offset: pageState.offset,
+        pageSize: pageState.pageSize
+      }
+    }));
+    if (pageState.cursorRevision && pageState.cursorRevision !== response.revision) {
+      throw new Error('MCP_CURSOR_STALE');
+    }
+    const items = response.assets.map((asset) => toPublicAssetRecord(asset, includeRaw));
     const nextOffset = pageState.offset + items.length;
     return AssetSearchOutputSchema.parse({
       editor,
@@ -317,9 +313,9 @@ export class CocosReadonlyToolService {
       page: {
         offset: pageState.offset,
         pageSize: pageState.pageSize,
-        total: matching.length,
+        total: response.total,
         items,
-        nextCursor: nextOffset < matching.length
+        nextCursor: nextOffset < response.total
           ? encodeCursor({
               version: 1,
               kind: 'asset-search',
@@ -329,11 +325,11 @@ export class CocosReadonlyToolService {
               pageSize: pageState.pageSize,
               offset: nextOffset,
               includeRaw,
-              revision
+              revision: response.revision
             })
           : null
       },
-      unresolved: index.unresolved
+      unresolved: response.unresolved
     });
   }
 
@@ -352,22 +348,12 @@ export class CocosReadonlyToolService {
     includeRaw?: boolean;
   }) {
     const editor = await this.resolveEditor(input);
-    assertCapability(editor, 'probe.assetIndex');
     assertCapability(editor, 'probe.assets');
-    const index = readAssetIndex(await this.options.probeClient.request('probe.assetIndex', {
-      selector: toSelector(editor),
-      params: {}
-    }));
-    const indexedAsset = index.assets.find((asset) => asset.assetUuid === input.uuid);
-    if (!indexedAsset) throw new Error('ASSET_NOT_FOUND');
     const response = readAssetProbeResponse(await this.options.probeClient.request('probe.assets', {
       selector: toSelector(editor),
-      params: {
-        pattern: indexedAsset.url ?? indexedAsset.path ?? indexedAsset.name ?? indexedAsset.assetUuid,
-        uuid: indexedAsset.assetUuid
-      }
+      params: { uuid: input.uuid }
     }));
-    if (!response.details) throw new Error('ASSET_DETAILS_UNAVAILABLE');
+    if (!response.details) throw new Error('ASSET_NOT_FOUND');
     if (response.details.uuid && response.details.uuid !== input.uuid) {
       throw new Error('ASSET_IDENTITY_MISMATCH');
     }
@@ -437,27 +423,29 @@ export class CocosReadonlyToolService {
     uuid: string;
   }) {
     const editor = await this.resolveEditor(input);
-    assertCapability(editor, 'probe.assetIndex');
+    assertCapability(editor, 'probe.assets');
     assertCapability(editor, 'probe.openAsset');
-    const index = readAssetIndex(await this.options.probeClient.request('probe.assetIndex', {
+    const inspected = readAssetProbeResponse(await this.options.probeClient.request('probe.assets', {
       selector: toSelector(editor),
-      params: {}
+      params: { uuid: input.uuid, detailsOnly: true }
     }));
-    const indexedAsset = index.assets.find((asset) => asset.assetUuid === input.uuid);
-    if (!indexedAsset) throw new Error('ASSET_NOT_FOUND');
+    if (!inspected.details) throw new Error('ASSET_NOT_FOUND');
+    if (!inspected.details.uuid) throw new Error('ASSET_IDENTITY_UNAVAILABLE');
+    if (inspected.details.uuid !== input.uuid) throw new Error('ASSET_IDENTITY_MISMATCH');
+    const asset = toAssetRecord(inspected.details);
     const response = readAssetOpenProbeResponse(await this.options.probeClient.request(
       'probe.openAsset',
       {
         selector: toSelector(editor),
-        params: { uuid: indexedAsset.assetUuid }
+        params: { uuid: asset.assetUuid }
       }
     ));
-    if (response.uuid !== indexedAsset.assetUuid) {
+    if (response.uuid !== asset.assetUuid) {
       throw new Error('ASSET_OPEN_IDENTITY_MISMATCH');
     }
     return AssetOpenOutputSchema.parse({
       editor,
-      asset: toPublicAssetRecord(indexedAsset, false),
+      asset,
       opened: response.opened
     });
   }
@@ -506,6 +494,8 @@ export class CocosReadonlyToolService {
     editorInstanceId?: string;
     depth?: number;
     rootUuid?: string;
+    compact?: boolean;
+    maxOutputBytes?: number;
   }) {
     const editor = await this.resolveEditor(input);
     assertCapability(editor, 'probe.hierarchy');
@@ -515,7 +505,9 @@ export class CocosReadonlyToolService {
         selector: toSelector(editor),
         params: {
           ...(typeof input.depth === 'number' ? { depth: input.depth } : {}),
-          ...(input.rootUuid ? { rootUuid: input.rootUuid } : {})
+          ...(input.rootUuid ? { rootUuid: input.rootUuid } : {}),
+          ...(input.compact === true ? { compact: true } : {}),
+          ...(typeof input.maxOutputBytes === 'number' ? { maxOutputBytes: input.maxOutputBytes } : {})
         }
       })
     };
@@ -535,6 +527,8 @@ export class CocosReadonlyToolService {
     includeDescendantVisualUnion?: boolean;
     relativeToUuid?: string;
     relativeToPath?: string;
+    compact?: boolean;
+    maxOutputBytes?: number;
   }) {
     const editor = await this.resolveEditor(input);
     assertCapability(editor, 'probe.node');
@@ -547,7 +541,9 @@ export class CocosReadonlyToolService {
           ...(input.includeBounds === true ? { includeBounds: true } : {}),
           ...(input.includeDescendantVisualUnion === true ? { includeDescendantVisualUnion: true } : {}),
           ...(input.relativeToUuid ? { relativeToUuid: input.relativeToUuid } : {}),
-          ...(input.relativeToPath ? { relativeToPath: input.relativeToPath } : {})
+          ...(input.relativeToPath ? { relativeToPath: input.relativeToPath } : {}),
+          ...(input.compact === true ? { compact: true } : {}),
+          ...(typeof input.maxOutputBytes === 'number' ? { maxOutputBytes: input.maxOutputBytes } : {})
         }
       })
     };
@@ -575,10 +571,10 @@ function readObject(value: unknown): Record<string, unknown> {
     : { value };
 }
 
-function readAssetIndex(value: unknown): z.infer<typeof AssetIndexSchema> {
-  const result = AssetIndexSchema.safeParse(value);
+function readAssetSearchProbeResponse(value: unknown): z.infer<typeof AssetSearchProbeResponseSchema> {
+  const result = AssetSearchProbeResponseSchema.safeParse(value);
   if (!result.success) {
-    throw new Error(`ASSET_INDEX_INVALID:${result.error.message}`);
+    throw new Error(`ASSET_SEARCH_INVALID:${result.error.message}`);
   }
   return result.data;
 }
@@ -639,30 +635,32 @@ function toSelector(editor: EditorSession): {
   };
 }
 
-function matchesAsset(asset: AssetRecord, pattern: string): boolean {
-  return [
-    asset.assetUuid,
-    asset.url,
-    asset.filePath,
-    asset.type,
-    asset.importer,
-    asset.name,
-    asset.displayName,
-    asset.source,
-    asset.path
-  ].some((value) => value?.toLowerCase().includes(pattern));
-}
-
-function compareAssets(left: AssetRecord, right: AssetRecord): number {
-  const leftKey = left.url ?? left.filePath ?? left.assetUuid;
-  const rightKey = right.url ?? right.filePath ?? right.assetUuid;
-  return leftKey.localeCompare(rightKey);
-}
-
-function toPublicAssetRecord(asset: AssetRecord, includeRaw: boolean) {
+function toPublicAssetRecord(asset: z.infer<typeof PublicAssetRecordSchema>, includeRaw: boolean) {
   if (includeRaw) return asset;
   const { raw: _raw, ...publicAsset } = asset;
   return publicAsset;
+}
+
+function toAssetRecord(asset: z.infer<typeof NormalizedAssetInfoSchema>) {
+  return PublicAssetRecordSchema.parse({
+    assetUuid: asset.uuid,
+    url: asset.url,
+    filePath: asset.file,
+    type: asset.type,
+    importer: asset.importer,
+    name: asset.name,
+    displayName: asset.displayName,
+    source: asset.source,
+    path: asset.path,
+    isSubAsset: asset.isSubAsset,
+    isBundle: asset.isBundle,
+    imported: asset.imported,
+    invalid: asset.invalid,
+    isDirectory: asset.isDirectory,
+    visible: asset.visible,
+    readonly: asset.readonly,
+    available: asset.invalid !== true
+  });
 }
 
 function toPublicAssetInfo(
@@ -672,6 +670,37 @@ function toPublicAssetInfo(
   if (includeRaw) return asset;
   const { raw: _raw, ...publicAsset } = asset;
   return publicAsset;
+}
+
+function readAssetSearchPageRequestState(input: {
+  cursor?: string;
+  editor: EditorSession;
+  key: string;
+  requestedPageSize?: number;
+  includeRaw: boolean;
+}): { offset: number; pageSize: number; cursorRevision: string | null } {
+  if (!input.cursor) {
+    const pageSize = input.requestedPageSize ?? 50;
+    if (pageSize <= 0 || pageSize > ASSET_SEARCH_PAGE_SIZE_MAX) {
+      throw new Error('MCP_CURSOR_INVALID:pageSize');
+    }
+    return { offset: 0, pageSize, cursorRevision: null };
+  }
+  const cursor = decodeCursor(input.cursor);
+  const pageSize = input.requestedPageSize ?? cursor.pageSize;
+  if (
+    cursor.kind !== 'asset-search'
+    || cursor.projectId !== input.editor.projectId
+    || cursor.editorInstanceId !== input.editor.editorInstanceId
+    || cursor.key !== input.key
+    || cursor.pageSize !== pageSize
+    || cursor.includeRaw !== input.includeRaw
+    || pageSize <= 0
+    || pageSize > ASSET_SEARCH_PAGE_SIZE_MAX
+  ) {
+    throw new Error('MCP_CURSOR_STALE');
+  }
+  return { offset: cursor.offset, pageSize, cursorRevision: cursor.revision };
 }
 
 /**
@@ -733,22 +762,4 @@ function decodeCursor(value: string): AssetCursor {
 
 function hashJson(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
-}
-
-/**
- * 为资产清单生成与顺序无关的指纹（cursor 数据版本）。
- *
- * @param assets AssetDB 返回的完整资产记录。
- * @param documents AssetDB 识别出的 Scene/Prefab 记录。
- * @returns 资产清单指纹。
- */
-function createAssetManifestHash(
-  assets: Array<{ assetUuid?: string | null; url?: string | null; type?: string | null }>,
-  documents: Array<{ assetUuid?: string | null }>
-): string {
-  const assetKeys = assets
-    .map((asset) => `${asset.assetUuid ?? ''}|${asset.url ?? ''}|${asset.type ?? ''}`)
-    .sort();
-  const documentKeys = documents.map((document) => document.assetUuid ?? '').sort();
-  return hashJson({ assets: assetKeys, documents: documentKeys });
 }

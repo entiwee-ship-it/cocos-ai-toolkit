@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { ProbeError } from './probe-errors';
 import { normalizeComponentDump, normalizeHierarchyTree, normalizeNodeDump, normalizePrefabDump, resolvePrefabOverrideValues } from './scene-probe';
 import { resolveCreatorDocumentIdentity } from './creator-document-identity';
@@ -25,6 +26,10 @@ const { director, Vec3 } = require('cc') as {
   Vec3: new (x?: number, y?: number, z?: number) => { x: number; y: number; z: number };
 };
 
+const DEFAULT_PROBE_OUTPUT_BYTES = 2 * 1024 * 1024;
+const MIN_PROBE_OUTPUT_BYTES = 16 * 1024;
+const MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024;
+
 function notImplemented(): never {
   throw new ProbeError('NOT_IMPLEMENTED');
 }
@@ -33,18 +38,24 @@ async function probeHierarchy(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const rootUuid = typeof input.rootUuid === 'string' ? input.rootUuid : undefined;
   const depth = typeof input.depth === 'number' ? input.depth : 4;
+  const includeRaw = input.compact !== true;
   const raw = await Editor.Message.request('scene', 'query-node-tree', ...(rootUuid ? [rootUuid] : []));
-  return { data: normalizeHierarchyTree(raw, depth), raw, source: 'message-api' };
+  return assertProbeOutputBudget('probe.hierarchy', {
+    data: normalizeHierarchyTree(raw, depth, includeRaw),
+    ...(includeRaw ? { raw } : {}),
+    source: 'message-api'
+  }, input);
 }
 
 async function probeNode(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const uuid = requireUuid(input);
+  const includeRaw = input.compact !== true;
   const [raw, documentIdentity] = await Promise.all([
     Editor.Message.request('scene', 'query-node', uuid),
     resolveCreatorDocumentIdentity(globalThis)
   ]);
-  const normalized = normalizeNodeDump(raw);
+  const normalized = normalizeNodeDump(raw, null, includeRaw);
   const sourceUrl = normalized.prefabInstance.prefabAssetUuid
     ? await readPrefabSourceUrl(normalized.prefabInstance.prefabAssetUuid)
     : null;
@@ -78,7 +89,49 @@ async function probeNode(request: unknown): Promise<unknown> {
       }, (x, y, z) => new Vec3(x, y, z))
     };
   }
-  return { data, raw, source: 'message-api' };
+  return assertProbeOutputBudget(
+    'probe.node',
+    { data, ...(includeRaw ? { raw } : {}), source: 'message-api' },
+    input
+  );
+}
+
+/**
+ * 在 Bridge 把读取结果送入 WebSocket 前限制序列化字节数，避免完整 raw 意外放大传输。
+ *
+ * @param method 当前内部探针方法名。
+ * @param response 即将返回给 Probe Server 的结果。
+ * @param input 调用参数；maxOutputBytes 未提供时使用安全默认值。
+ * @returns 未超出预算的原始响应。
+ */
+function assertProbeOutputBudget(
+  method: 'probe.hierarchy' | 'probe.node',
+  response: unknown,
+  input: Record<string, unknown>
+): unknown {
+  const maxOutputBytes = readMaxOutputBytes(input.maxOutputBytes);
+  const estimatedBytes = Buffer.byteLength(JSON.stringify(response), 'utf8');
+  if (estimatedBytes <= maxOutputBytes) return response;
+  throw new ProbeError('PROBE_OUTPUT_TOO_LARGE', {
+    method,
+    tooLarge: true,
+    estimatedBytes,
+    maxOutputBytes,
+    nextAction: '请改用 summary、fields、query、rootPath 或 propertyPaths 紧凑投影；确认必须读取完整 raw 时可提高 maxOutputBytes。'
+  });
+}
+
+/** 读取并校验单次 hierarchy/node 的 Bridge 输出预算。 */
+function readMaxOutputBytes(value: unknown): number {
+  if (value === undefined) return DEFAULT_PROBE_OUTPUT_BYTES;
+  if (!Number.isInteger(value) || (value as number) < MIN_PROBE_OUTPUT_BYTES || (value as number) > MAX_PROBE_OUTPUT_BYTES) {
+    throw new ProbeError('MAX_OUTPUT_BYTES_INVALID', {
+      maxOutputBytes: value,
+      minBytes: MIN_PROBE_OUTPUT_BYTES,
+      maxBytes: MAX_PROBE_OUTPUT_BYTES
+    });
+  }
+  return value as number;
 }
 
 async function readPrefabSourceUrl(prefabAssetUuid: string): Promise<string | null> {

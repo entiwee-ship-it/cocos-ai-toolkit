@@ -4,6 +4,8 @@
 
 0.3.0 起为**直写架构**：每个写工具映射为一到多个原子写操作（创建/删除节点、挂载组件、修改属性……），一次调用完成执行 + 自动保存 + 逐项重读回显。事务管理器、回滚、Revision 前置、声明式 diff 流水线和全量扫描已移除（0.2.x 文档见 `docs/`，归档保留）。
 
+0.6.1 是不扩工具面的 I/O 与冷启动优化：投影读取在 Bridge 内直接省略结构 `raw`，资产搜索在 Bridge 内分页并复用短缓存，精确资产检查/打开不再拉取全量索引，Playwright 只在首次 Preview launch 时加载。完整旧读取仍保留原始 Dump 兼容，并在 Bridge 发送前受 `maxOutputBytes` 预算保护；公开工具数保持 39。
+
 ## 架构
 
 ```text
@@ -52,7 +54,7 @@ Bridge 使用 Junction 指向运行时 Worktree 的 `packages/bridge-extension`�
 
 ## 启动 Probe Server
 
-Bridge Extension 加载时会先探测 loopback Probe Server；服务不存在时，Bridge 会从同一 Toolkit 检出自动启动 `packages/probe-server/dist/run.js`，连接断开后也会再次探测并拉起。Node 默认从 Creator 进程的 `PATH` 查找，可用 `COCOS_AI_NODE_PATH` 指定绝对路径。
+Bridge Extension 加载时会先探测 loopback Probe Server；服务不存在时，Bridge 会从同一 Toolkit 检出自动启动 `packages/probe-server/dist/run.js`，连接断开后也会再次探测并拉起。Node 默认从 Creator 进程的 `PATH` 查找，可用 `COCOS_AI_NODE_PATH` 指定绝对路径。Probe 冷启动不加载 Playwright；只有首次调用 Preview launch 时才动态加载浏览器驱动，后续调用复用 Node 模块缓存。
 
 手工诊断或不启动 Creator 时，仍可在独立终端运行：
 
@@ -99,11 +101,11 @@ node packages/mcp-server/dist/run.js --enable-writes
 | --- | --- |
 | `cocos_editor_list` | 列出当前连接 Probe Server 的 Creator；唯一不要求 `projectId` 的全局入口 |
 | `cocos_editor_state` | 读取当前文档 UUID、dirty、Scene/AssetDB ready、选择和 Preview 状态 |
-| `cocos_asset_search` | 在 AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），cursor 分页 |
-| `cocos_asset_inspect` | 按 UUID 读取资产详情、Meta、依赖和反向使用者，cursor 分页 |
-| `cocos_hierarchy` | 读取当前文档节点树；深层 `rootPath` 原生读取目标子树并保留 `truncated`，`query/fields/summary` 可紧凑投影 |
-| `cocos_node_read` | 读取单节点、`prefabInstance`、`writeCapabilities` 和可选编辑态 bounds；支持组件属性、后代并集及 `relativeToPath` |
-| `cocos_nodes_read` | 批量读取最多 32 个 UUID/path，逐项返回 found/error，统一组件投影并限制输出预算 |
+| `cocos_asset_search` | Bridge 内大小写无关包含搜索，短缓存复用全量索引；Bridge 只返回当前结果页，MCP cursor 仅编码分页位置和 revision |
+| `cocos_asset_inspect` | 按 UUID 直接读取资产详情、Meta、依赖和反向使用者，不再预拉全量索引 |
+| `cocos_hierarchy` | 读取当前文档节点树；深层 `rootPath` 原生读取目标子树并保留 `truncated`，`query/fields/summary` 在 Bridge 内直接走紧凑响应，完整读取可用 `maxOutputBytes` 调整预算 |
+| `cocos_node_read` | 读取单节点、`prefabInstance`、`writeCapabilities` 和可选编辑态 bounds；投影模式不传结构 raw，完整读取可用 `maxOutputBytes` 调整预算 |
+| `cocos_nodes_read` | 批量读取最多 32 个 UUID/path，逐项返回 found/error；内部节点与寻址层级均走紧凑响应并限制输出预算 |
 | `cocos_prefab_open` | 通过 Creator 打开 Prefab 并等待文档身份就绪 |
 | `cocos_scene_open` | 通过 Creator 打开 Scene 并等待文档身份就绪 |
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { normalizeAssetInfo } from './asset-probe';
 
 /**
@@ -9,6 +10,18 @@ const ASSET_INDEX_DATA_KEYS = [
   'name', 'displayName', 'source', 'path', 'url', 'file', 'uuid', 'importer',
   'imported', 'invalid', 'type', 'isDirectory', 'isBundle', 'visible', 'readonly'
 ] as const;
+
+const ASSET_INDEX_CACHE_TTL_MS = 5_000;
+
+interface CachedAssetIndexValue {
+  index: AssetIndexResult;
+  revision: string;
+  scriptPathsByUuid: Array<[string, string]>;
+}
+
+let assetIndexCacheGeneration = 0;
+let cachedAssetIndex: { expiresAt: number; value: CachedAssetIndexValue } | null = null;
+let assetIndexInFlight: Promise<CachedAssetIndexValue> | null = null;
 
 export interface AssetIndexInput {
   uuid?: string | null;
@@ -180,14 +193,11 @@ export function buildAssetIndex(values: AssetIndexInput[]): AssetIndexResult {
  * @param result 内部资产索引。
  * @returns 只包含数组和未解析项的资产索引。
  */
-export function toSerializableAssetIndex(result: AssetIndexResult): Omit<
-  AssetIndexResult,
-  'assetsByUuid' | 'scriptsByUuid'
-> {
+export function toSerializableAssetIndex(result: AssetIndexResult, includeRaw = false) {
   return {
-    assets: result.assets,
-    scripts: result.scripts,
-    documents: result.documents,
+    assets: result.assets.map((asset) => serializeIndexEntry(asset, includeRaw)),
+    scripts: result.scripts.map((script) => serializeIndexEntry(script, includeRaw)),
+    documents: result.documents.map((document) => serializeIndexEntry(document, includeRaw)),
     unresolved: result.unresolved
   };
 }
@@ -197,7 +207,68 @@ export function toSerializableAssetIndex(result: AssetIndexResult): Omit<
  *
  * @returns 可 JSON 序列化的资产、脚本、文档和未解析项。
  */
-export async function probeAssetIndex(): Promise<unknown> {
+export async function probeAssetIndex(request?: unknown): Promise<unknown> {
+  const includeRaw = readObject(request).includeRaw === true;
+  return toSerializableAssetIndex((await readCachedAssetIndex()).index, includeRaw);
+}
+
+/**
+ * 在 Bridge 内按 MCP 既有语义执行大小写无关的包含匹配，避免把全量索引传过 WebSocket。
+ *
+ * @param request 搜索文本和可选完整诊断标记。
+ * @returns 已排序的命中资产、兼容旧 cursor 的全量清单 revision 和未解析项。
+ */
+export async function probeAssetSearch(request: unknown) {
+  const input = readObject(request);
+  const pattern = typeof input.pattern === 'string' ? input.pattern.trim().toLowerCase() : '';
+  const includeRaw = input.includeRaw === true;
+  const offset = readNonnegativeInteger(input.offset, 0, 'offset');
+  const pageSize = readPositiveInteger(input.pageSize, 50, 'pageSize');
+  if (pageSize > 200) throw new Error('ASSET_SEARCH_PAGE_SIZE_INVALID');
+  const cached = await readCachedAssetIndex();
+  const matching = cached.index.assets.filter((asset) => matchesAsset(asset, pattern)).sort(compareAssets);
+  return {
+    assets: matching
+      .slice(offset, offset + pageSize)
+      .map((asset) => serializeIndexEntry(asset, includeRaw)),
+    total: matching.length,
+    revision: cached.revision,
+    unresolved: cached.index.unresolved
+  };
+}
+
+/** 读取组件 Schema 所需的脚本 UUID 路径；与全量索引共用 TTL、singleflight 和失效。 */
+export async function probeScriptPathsByUuid(): Promise<Array<[string, string]>> {
+  return (await readCachedAssetIndex()).scriptPathsByUuid;
+}
+
+/** 已知资产写入后主动失效；外部人工修改由短 TTL 收敛。 */
+export function invalidateAssetIndexCache(): void {
+  assetIndexCacheGeneration += 1;
+  cachedAssetIndex = null;
+  assetIndexInFlight = null;
+}
+
+async function readCachedAssetIndex(): Promise<CachedAssetIndexValue> {
+  const now = Date.now();
+  if (cachedAssetIndex && cachedAssetIndex.expiresAt > now) return cachedAssetIndex.value;
+  if (assetIndexInFlight) return assetIndexInFlight;
+
+  const generation = assetIndexCacheGeneration;
+  const request = readAssetIndexFromCreator();
+  assetIndexInFlight = request;
+  try {
+    const value = await request;
+    if (generation === assetIndexCacheGeneration) {
+      cachedAssetIndex = { expiresAt: Date.now() + ASSET_INDEX_CACHE_TTL_MS, value };
+    }
+    return value;
+  } finally {
+    if (assetIndexInFlight === request) assetIndexInFlight = null;
+  }
+}
+
+async function readAssetIndexFromCreator(): Promise<CachedAssetIndexValue> {
   const rawAssets = await Editor.Message.request(
     'asset-db',
     'query-assets',
@@ -208,7 +279,67 @@ export async function probeAssetIndex(): Promise<unknown> {
   const values = assetValues
     .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object')
     .map(normalizeAssetInfo);
-  return toSerializableAssetIndex(buildAssetIndex(values));
+  const index = buildAssetIndex(values);
+  return {
+    index,
+    revision: createAssetManifestHash(index.assets, index.documents),
+    scriptPathsByUuid: index.scripts.flatMap((script): Array<[string, string]> => {
+      const scriptPath = script.scriptPath ?? script.filePath;
+      return scriptPath ? [[script.assetUuid, scriptPath]] : [];
+    })
+  };
+}
+
+function serializeIndexEntry<T extends { raw: Record<string, unknown> }>(value: T, includeRaw: boolean) {
+  if (includeRaw) return value;
+  const { raw: _raw, ...compact } = value;
+  return compact;
+}
+
+function matchesAsset(asset: IndexedAsset, pattern: string): boolean {
+  return [
+    asset.assetUuid,
+    asset.url,
+    asset.filePath,
+    asset.type,
+    asset.importer,
+    asset.name,
+    asset.displayName,
+    asset.source,
+    asset.path
+  ].some((value) => value?.toLowerCase().includes(pattern));
+}
+
+function compareAssets(left: IndexedAsset, right: IndexedAsset): number {
+  const leftKey = left.url ?? left.filePath ?? left.assetUuid;
+  const rightKey = right.url ?? right.filePath ?? right.assetUuid;
+  return leftKey.localeCompare(rightKey);
+}
+
+function createAssetManifestHash(assets: IndexedAsset[], documents: IndexedDocument[]): string {
+  const assetKeys = assets
+    .map((asset) => JSON.stringify([
+      asset.assetUuid,
+      asset.url,
+      asset.filePath,
+      asset.type,
+      asset.importer,
+      asset.name,
+      asset.displayName,
+      asset.source,
+      asset.path,
+      asset.isSubAsset,
+      asset.isBundle,
+      asset.imported,
+      asset.invalid,
+      asset.isDirectory,
+      asset.visible,
+      asset.readonly,
+      asset.available
+    ]))
+    .sort();
+  const documentKeys = documents.map((document) => document.assetUuid).sort();
+  return createHash('sha256').update(JSON.stringify({ assets: assetKeys, documents: documentKeys })).digest('hex');
 }
 
 function isScriptAsset(asset: IndexedAsset): boolean {
@@ -261,4 +392,22 @@ function readString(value: unknown): string | null {
 
 function readBoolean(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readNonnegativeInteger(value: unknown, fallback: number, field: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || (value as number) < 0) throw new Error(`ASSET_SEARCH_${field.toUpperCase()}_INVALID`);
+  return value as number;
+}
+
+function readPositiveInteger(value: unknown, fallback: number, field: string): number {
+  const parsed = readNonnegativeInteger(value, fallback, field);
+  if (parsed === 0) throw new Error(`ASSET_SEARCH_${field.toUpperCase()}_INVALID`);
+  return parsed;
 }
