@@ -3,8 +3,6 @@
   "version": "0.6.3",
   "private": true,
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "bin": {
     "cocos-ai-mcp": "dist/run.js"
   },
@@ -15,7 +13,6 @@
   },
   "dependencies": {
     "@cocos-ai/client": "0.6.3",
-    "@cocos-ai/core": "0.6.3",
     "@cocos-ai/protocol": "0.6.3",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "^4.3.6"

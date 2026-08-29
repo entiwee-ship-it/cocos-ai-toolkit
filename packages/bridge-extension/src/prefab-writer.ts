@@ -2,7 +2,7 @@ import { ProbeError } from './probe-errors';
 import { createHash } from 'node:crypto';
 import type { WriteOperation } from './write-types';
 
-/** 预制体实例节点的可序列化证据快照（对齐 Phase 1 只读模型的 __prefab__ 结构）。 */
+/** 预制体实例节点的可序列化证据快照（对齐当前只读模型的 __prefab__ 结构）。 */
 export interface PrefabInstanceInfo {
   nodeUuid: string;
   name: string;
@@ -503,7 +503,7 @@ async function deleteAsset(
     assetUuid: null,
     before: null,
     after: null,
-    // 资产删除不可由逆操作还原（内容已丢失），回滚链路到此前为止。
+    // 资产删除不可恢复，调用方必须在执行前完成精确确认。
   };
 }
 

@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 
 /**
- * 运行态属性监听（阶段五）：server 侧有界轮询，变化时返回。
+ * 运行态属性监听：server 侧有界轮询，变化时返回。
  * 拉取式语义适配现有请求-响应通道，无需新增推送通道。
  */
 

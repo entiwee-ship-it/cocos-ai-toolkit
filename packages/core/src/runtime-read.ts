@@ -1,7 +1,7 @@
 import { RuntimeNodeSnapshotSchema, type RuntimeNodeSnapshot } from '@cocos-ai/protocol';
 
 /**
- * 运行态读取装配（阶段五）：把页面注入脚本返回的原始树装配为协议快照。
+ * 运行态读取装配：把页面注入脚本返回的原始树装配为协议快照。
  * Schema 校验在此收口——页面返回的数据不可信，必须过协议。
  */
 

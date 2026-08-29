@@ -113,7 +113,7 @@ async function createHarness(
   return { client };
 }
 
-describe('运行态 MCP 工具（阶段五）', () => {
+describe('运行态 MCP 工具', () => {
   it('默认注册运行态只读工具，门控工具仅 enableWrites 时注册', async () => {
     const probeClient = new RecordingProbeClient(createRuntimeRespond());
     const { client } = await createHarness(probeClient);

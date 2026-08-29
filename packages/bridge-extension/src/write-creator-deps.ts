@@ -728,7 +728,7 @@ export function buildPrefabWriterDependencies(): PrefabWriterDependencies {
         const index = instance.propertyOverrides.indexOf(remaining);
         if (index >= 0) instance.propertyOverrides.splice(index, 1);
       }
-      // 这里只删除覆盖记录；运行时源值由事务保存后的 softReloadScene 统一恢复。
+      // 这里只删除覆盖记录；运行时源值由保存后的 softReloadScene 统一恢复。
       focusAndLog(instanceRootUuid, `预制体实例覆盖 ${propertyPath} 已精确还原`);
       return { targetLocalIds, previous };
     },

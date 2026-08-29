@@ -46,26 +46,14 @@ describe('parseCommand', () => {
     });
   });
 
-  it('解析原子只读命令并映射到 Bridge 方法', () => {
+  it('解析资产索引命令并映射到 Bridge 方法', () => {
     const assetIndex = parseCommand(['asset-index', '--project-id', 'project-1']);
-    const componentSchema = parseCommand([
-      'component-schema', '--project-id', 'project-1', '--uuid', 'component-1'
-    ]);
 
     expect(assetIndex).toEqual({ command: 'asset-index', projectId: 'project-1' });
-    expect(componentSchema).toEqual({
-      command: 'component-schema',
-      projectId: 'project-1',
-      uuid: 'component-1'
-    });
 
     expect(toRequest(assetIndex)).toEqual([
       'probe.assetIndex',
       { selector: { projectId: 'project-1' }, params: {} }
-    ]);
-    expect(toRequest(componentSchema)).toEqual([
-      'probe.component',
-      { selector: { projectId: 'project-1' }, params: { uuid: 'component-1' } }
     ]);
   });
 
@@ -85,7 +73,9 @@ describe('parseCommand', () => {
       ['scan-project', '--project-id', 'project-1'],
       ['prefab-graph', '--project-id', 'project-1'],
       ['document-snapshot', '--project-id', 'project-1'],
-      ['write-revision', '--project-id', 'project-1']
+      ['write-revision', '--project-id', 'project-1'],
+      ['save-report', '--project-id', 'project-1', '--sample', 'legacy'],
+      ['component-schema', '--project-id', 'project-1', '--uuid', 'component-1']
     ]) {
       expect(() => parseCommand(removed)).toThrow('UNKNOWN_COMMAND');
     }
@@ -104,7 +94,7 @@ describe('local readonly commands', () => {
     const commands = [
       parseCommand(['asset-index', '--project-id', 'project-1']),
       parseCommand([
-        'component-schema',
+        'component',
         '--project-id', 'project-1',
         '--uuid', 'component-1'
       ])

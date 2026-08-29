@@ -13,7 +13,7 @@ import {
   ScenarioStepSchema
 } from '../src/runtime.js';
 
-describe('运行态协议（阶段五）', () => {
+describe('运行态协议', () => {
   it('接受带数据来源与动态节点标注的运行时节点快照', () => {
     expect(RuntimeNodeSnapshotSchema.parse({
       source: 'preview-runtime',

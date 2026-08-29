@@ -66,7 +66,7 @@ export function load(): void {
         await Editor.Message.request('asset-db', 'open-asset', request.uuid);
         return { opened: true, uuid: request.uuid };
       },
-      // 直写入口：绕过已移除的事务层，直接驱动 Scene 写执行器（原子写 + 保存 + 逐项重读）。
+  // 直写入口：直接驱动 Scene 写执行器（原子写 + 保存 + 逐项重读）。
       'probe.directWrite': (payload) => forwardDirectWrite(payload),
       'probe.saveDocument': () => forwardToScene('saveDocument', {}),
       'probe.importAsset': (payload) => invalidateAfterAssetWrite(importAsset(payload)),

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * 运行态与视觉验证协议（阶段五）。
+ * 运行态与视觉验证协议。
  * 运行态数据一律携带 `source: 'preview-runtime'` 标记，与编辑态序列化数据严格区分；
  * 运行时结果不应用回编辑态。视觉结果仅作辅助证据，结构化数据是真值基础。
  */
@@ -166,7 +166,7 @@ export const CaptureOverlaySchema = z.object({
   anchors: z.union([z.boolean(), z.array(z.string().min(1))]).optional()
 });
 
-/** 截图选项：阶段五仅 Game 视图（Scene 视图为已知限制）。 */
+/** 截图选项：当前仅 Game 视图（Scene 视图为已知限制）。 */
 export const RuntimeCaptureOptionsSchema = z.object({
   view: z.literal('game'),
   /** 单张截图的请求分辨率。 */

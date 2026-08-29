@@ -24,7 +24,7 @@ export type VerifiedOperation = (NodeWriteOpResult | ComponentWriteOpResult | Pr
 
 /**
  * 重读验证依赖。saveDocument/reloadDocument 复用 Creator 保存与关闭重开（或等价刷新），
- * 读取依赖复用 Phase 1 文档快照链路（Scene query-node/query-component）。
+ * 读取依赖复用当前文档快照链路（Scene query-node/query-component）。
  */
 export interface WriteVerifierDependencies {
   saveDocument(): Promise<void>;

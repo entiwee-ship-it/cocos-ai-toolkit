@@ -103,7 +103,12 @@ async function collectArchiveCandidates() {
   const entries = await readDirectoryEntries(reportRoot);
   const candidates = [];
   for (const entry of entries) {
-    if (entry.name === 'archive' || entry.name === 'mcp' || entry.mtimeMs > cutoffMs) continue;
+    if (
+      entry.name === 'archive'
+      || entry.name === 'mcp'
+      || entry.name.endsWith('.patch')
+      || entry.mtimeMs > cutoffMs
+    ) continue;
     if (
       entry.name.startsWith('phase-')
       || entry.name.startsWith('debug-')
@@ -175,6 +180,7 @@ function classify(relativePath) {
   if (normalized.startsWith('runtime-captures/')) return 'runtime-captures';
   if (normalized.startsWith('mcp/')) return 'mcp';
   if (normalized.startsWith('archive/')) return 'archive';
+  if (normalized.endsWith('.patch')) return 'recovery';
   if (normalized.startsWith('phase-')) return 'phase';
   if (normalized.startsWith('debug-')) return 'debug';
   if (normalized.endsWith('.log')) return 'logs';

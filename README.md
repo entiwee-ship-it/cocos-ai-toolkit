@@ -2,13 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI、Probe Server 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-0.3.0 起为**直写架构**：每个写工具映射为一到多个原子写操作（创建/删除节点、挂载组件、修改属性……），一次调用完成执行 + 自动保存 + 逐项重读回显。事务管理器、回滚、Revision 前置、声明式 diff 流水线和全量扫描已移除（0.2.x 文档见 `docs/`，归档保留）。
-
-0.6.3 继续冻结 39 个公开工具：根构建改用 TypeScript Project References；报告治理提供只读 doctor 和显式 dry-run/confirm 归档入口；运行态截图增加全局会话数与年龄上限，Probe bootstrap 日志按大小轮转；同时删除无生产消费者的旧报告配置并维护小版本依赖。
-
-0.6.2 继续冻结公开工具面：MCP stdio 不再依赖 Probe 首次在线，Probe/Creator 恢复后同一任务即可继续调用；批量节点读取使用并发 4，Bridge/Client 重连加入抖动，Probe Server 使用心跳和方法级超时；所有工具错误统一写入 `structuredContent.error`，慢请求只记录无业务载荷的本地指标。公开工具数仍为 39。
-
-0.6.1 是不扩工具面的 I/O 与冷启动优化：投影读取在 Bridge 内直接省略结构 `raw`，资产搜索在 Bridge 内分页并复用短缓存，精确资产检查/打开不再拉取全量索引，Playwright 只在首次 Preview launch 时加载。完整旧读取仍保留原始 Dump 兼容，并在 Bridge 发送前受 `maxOutputBytes` 预算保护；公开工具数保持 39。
+当前版本提供 39 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -48,9 +42,9 @@ npm run build
 ## 安装 Bridge
 
 ```powershell
-& scripts/create-xy-client-worktree.ps1
+
 & scripts/install-bridge.ps1 `
-  -ProjectPath 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe' `
+  -ProjectPath 'E:/xile-workspace/worktrees/cocos-ai-blank/Cocos-ai' `
   -ToolkitPath 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0'
 ```
 
@@ -84,7 +78,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 - `COCOS_AI_PROBE_SERVER_URL`：Probe Server 地址，默认 `ws://127.0.0.1:32188`。
 - `COCOS_AI_SESSION_TOKEN`：可选本机会话 Token；配置后 Probe、Bridge、CLI 和 MCP 必须使用相同值。
 
-启动参数只有 `--enable-writes`：裸启动只注册只读工具；写工具必须显式开启，环境变量不能开启写能力。0.2.x 的 `--profile` 参数已移除，传入会报 `MCP_PROFILE_REMOVED`。
+启动参数只接受可选的 `--enable-writes`：裸启动注册只读工具，写工具必须显式开启，环境变量不能开启写能力；其它参数以稳定错误拒绝。
 
 本机 Codex 可以用仓库脚本重复安装：
 
@@ -106,7 +100,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_editor_list` | 列出当前连接 Probe Server 的 Creator；唯一不要求 `projectId` 的全局入口 |
 | `cocos_editor_state` | 读取当前文档 UUID、dirty、Scene/AssetDB ready、选择和 Preview 状态 |
 | `cocos_asset_search` | Bridge 内大小写无关包含搜索，短缓存复用全量索引；Bridge 只返回当前结果页，MCP cursor 仅编码分页位置和 revision |
-| `cocos_asset_inspect` | 按 UUID 直接读取资产详情、Meta、依赖和反向使用者，不再预拉全量索引 |
+| `cocos_asset_inspect` | 按 UUID 直接读取资产详情、Meta、依赖和反向使用者 |
 | `cocos_hierarchy` | 读取当前文档节点树；深层 `rootPath` 原生读取目标子树并保留 `truncated`，`query/fields/summary` 在 Bridge 内直接走紧凑响应，完整读取可用 `maxOutputBytes` 调整预算 |
 | `cocos_node_read` | 读取单节点、`prefabInstance`、`writeCapabilities` 和可选编辑态 bounds；投影模式不传结构 raw，完整读取可用 `maxOutputBytes` 调整预算 |
 | `cocos_nodes_read` | 批量读取最多 32 个 UUID/path，逐项返回 found/error；内部节点与寻址层级均走紧凑响应并限制输出预算 |
@@ -160,14 +154,14 @@ AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-works
 当前直写架构的真实 Creator 3.8.8 smoke 使用隔离项目执行只读发现和一次 `cc.UITransform` no-op 直写，前后 Git 状态必须完全一致：
 
 ```powershell
-npm run smoke:creator -- --project-path E:/xile-workspace/worktrees/xy-client-cocos-ai-probe
+npm run smoke:creator -- --project-path E:/xile-workspace/worktrees/cocos-ai-blank/Cocos-ai
 ```
 
-需要验证编辑态 Prefab 实例化时，可在一次性隔离 Worktree 中追加目标/源 Prefab UUID。脚本会实例化、显式重开验证关联、删除探针节点，并比较调用前后的 Git 状态与完整 tracked diff：
+需要验证编辑态 Prefab 实例化时，在固定的空白隔离项目中追加目标/源 Prefab UUID；不要再使用已删除的临时 Probe Worktree。脚本会实例化、显式重开验证关联、删除探针节点，并比较调用前后的 Git 状态与完整 tracked diff：
 
 ```powershell
 npm run smoke:creator -- `
-  --project-path E:/xile-workspace/worktrees/xy-client-cocos-ai-prefab-probe `
+  --project-path E:/xile-workspace/worktrees/cocos-ai-blank/Cocos-ai `
   --target-prefab-uuid <承载探针的 Prefab UUID> `
   --instantiate-prefab-uuid <待实例化的 Prefab UUID> `
   --instance-name CocosAiPrefabSmoke
@@ -180,6 +174,13 @@ npm run smoke:creator:write-routing
 ```
 
 在上述命令末尾追加 `--unpack-mode current` 或 `--unpack-mode complete`，可分别验证“仅移除当前关联”和“递归移除嵌套关联”；两种模式应分开运行并保留各自报告。
+
+完整 Preview/runtime 验收使用：
+
+```powershell
+& scripts/run-runtime-validation.ps1 `
+  -ProjectPath E:/xile-workspace/worktrees/cocos-ai-blank/Cocos-ai
+```
 
 ## 安装 AI 使用技能
 
@@ -204,7 +205,6 @@ node packages/cli/dist/index.js node --project-id <project-id> --editor-instance
 node packages/cli/dist/index.js component --project-id <project-id> --editor-instance-id <editor-id> --uuid <component-uuid>
 node packages/cli/dist/index.js prefab --project-id <project-id> --editor-instance-id <editor-id> --node-uuid <nested-prefab-node-uuid>
 node packages/cli/dist/index.js asset-index --project-id <project-id> --editor-instance-id <editor-id>
-node packages/cli/dist/index.js component-schema --project-id <project-id> --editor-instance-id <editor-id> --uuid <component-uuid>
 
 # Preview 与运行时读取/动作
 node packages/cli/dist/index.js preview-launch --project-id <project-id> [--resolution 720x1280]
@@ -217,7 +217,7 @@ node packages/cli/dist/index.js runtime-capture --session-id <session-id>
 node packages/cli/dist/index.js runtime-instantiate --session-id <session-id> --asset-uuid <prefab-uuid> --parent-path <node-path> [--x 0 --y 0]
 ```
 
-CLI 只允许预定义命令，不提供任意 JavaScript 执行入口，写操作请使用 MCP 直写工具。0.2.x 的事务、声明式和扫描命令（`write-*`、`transaction-*`、`design-*`、`scan-project`、`prefab-graph`、`document-snapshot`）已移除。
+CLI 只允许本文列出的只读诊断命令，不提供任意 JavaScript 执行入口；未知命令会返回稳定错误，写操作统一使用 MCP。
 
 ## 运行期节点和组件 UUID
 
@@ -227,12 +227,11 @@ CLI 只允许预定义命令，不提供任意 JavaScript 执行入口，写操�
 
 - Bridge 仅连接 `127.0.0.1`。
 - 不允许执行任意 JavaScript。
-- 正式 Bridge 不注册任意 `Editor.Message` 或 cce 门面调试入口；阶段探针不属于运行时能力。
+- 正式 Bridge 不注册任意 `Editor.Message` 或 cce 门面调试入口；临时调试探针不属于运行时能力。
 - 裸启动只暴露只读工具；写工具仅当显式 `--enable-writes` 启动时注册。
 - **直写不提供事务和回滚**：每个写操作执行 + 自动保存 + 逐项重读即结束；失败即停，已生效的修改保留在文档中。误操作的还原手段是 git。
 - 写后逐项重读是唯一生效性防线：Creator 对部分写入会静默不生效（如预制体编辑模式下嵌套实例内部），重读不符会显式报错。
 - 外部进程不得直接修改 `.prefab`、`.scene` 或 `.meta` JSON 内容；只有 `.prefab` 删除必须经过 Creator/MCP，非 Prefab 资源文件可直接删除并同时删除同名 `.meta`。
-- MCP 报告路径受服务端授权根约束，AI 不能提供绝对路径或越过根目录。
 - Creator 3.8.x 小版本变化必须通过真实验证，不允许推测兼容；当前结论严格限定 3.8.8。
 
 ## 清理顺序
@@ -251,15 +250,8 @@ CLI 只允许预定义命令，不提供任意 JavaScript 执行入口，写操�
 
 ## 报告治理
 
-`npm run reports:doctor` 只读统计报告目录；`reports:archive` 和 `reports:prune` 默认只预览，只有显式追加 `-- --confirm` 才会分别移动旧报告或清理 `reports/archive`。`reports/mcp/` 不属于自动归档候选。
+`npm run reports:doctor` 只读统计报告目录；`reports:archive` 和 `reports:prune` 默认只预览，只有显式追加 `-- --confirm` 才会分别移动旧报告或清理 `reports/archive`。`reports/mcp/` 和 recovery `.patch` 不属于自动归档候选。
 
-## 历史归档
+## 文档
 
-`docs/` 中的 phase-0 ~ phase-5 findings、能力矩阵、可用性缺口报告和 superpowers 计划是历史证据，继续保留供查阅。依赖旧事务、声明式和扫描命令的 Phase 0 ~ Phase 4 验证脚本及其合同测试已经删除；`scripts/run-phase-5-runtime-validation.ps1` 仍作为当前 Preview/runtime 扩展验收入口保留。
-
-## 详细结论
-
-- [阶段 0 最终发现](docs/phase-0-findings.md)（归档）
-- [阶段 1 最终发现](docs/phase-1-findings.md)（归档）
-- [Creator 3.8.8 能力来源矩阵](docs/creator-3.8.8-capability-matrix.md)（归档）
-- [使用手册（直写档）](docs/usage-playbook.md)
+- [当前使用手册](docs/usage-playbook.md)

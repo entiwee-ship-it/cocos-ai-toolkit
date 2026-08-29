@@ -4,14 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const validationScriptPath = fileURLToPath(
-  new URL('../../../scripts/run-phase-5-runtime-validation.ps1', import.meta.url)
+  new URL('../../../scripts/run-runtime-validation.ps1', import.meta.url)
 );
 const gitignorePath = fileURLToPath(new URL('../../../.gitignore', import.meta.url));
 
 /**
  * 通过 pwsh 解析脚本 AST，返回语法错误数与消息。
  *
- * @param scriptPath 待解析的阶段五 PowerShell 脚本绝对路径。
+ * @param scriptPath 待解析的运行态 PowerShell 脚本绝对路径。
  * @returns PowerShell 语法错误数量和带行号的消息。
  */
 function parsePowerShellAst(scriptPath: string): { errorCount: number; messages: string[] } {
@@ -30,7 +30,7 @@ function parsePowerShellAst(scriptPath: string): { errorCount: number; messages:
   return JSON.parse(stdout) as { errorCount: number; messages: string[] };
 }
 
-describe('Phase 5 运行态统一验证脚本', () => {
+describe('运行态统一验证脚本', () => {
   it('通过 PowerShell AST 解析，无语法错误', { timeout: 90000 }, () => {
     expect(parsePowerShellAst(validationScriptPath)).toEqual({ errorCount: 0, messages: [] });
   });

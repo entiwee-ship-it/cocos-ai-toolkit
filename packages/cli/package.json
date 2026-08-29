@@ -13,12 +13,7 @@
   },
   "dependencies": {
     "@cocos-ai/client": "0.6.3",
-    "@cocos-ai/core": "0.6.3",
     "@cocos-ai/protocol": "0.6.3",
     "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "@types/ws": "^8.18.1",
-    "ws": "8.21.3"
   }
 }

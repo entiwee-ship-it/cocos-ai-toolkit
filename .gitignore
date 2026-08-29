@@ -9,7 +9,9 @@ reports/*.log
 reports/*.png
 .env
 *.tsbuildinfo
-reports/write-journal/
 reports/*.txt
 reports/runtime-captures/
 reports/creator-smoke/
+reports/archive/
+reports/mcp/
+reports/*.patch

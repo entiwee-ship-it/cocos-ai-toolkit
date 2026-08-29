@@ -207,7 +207,7 @@ export interface ProbeServerOptions {
   heartbeatIntervalMs?: number;
   /** WebSocket 单条消息的最大接收字节数。 */
   maxPayload?: number;
-  /** 运行态页面驱动（阶段五）；未装配时运行态方法返回 RUNTIME_DRIVER_UNAVAILABLE。 */
+  /** 运行态页面驱动；未装配时运行态方法返回 RUNTIME_DRIVER_UNAVAILABLE。 */
   runtimeDriver?: RuntimeDriver;
   /** 截图落盘根目录（默认 `<cwd>/reports/runtime-captures`）。 */
   captureRoot?: string;
@@ -490,7 +490,7 @@ export class ProbeServer {
   }
 
   /**
-   * 处理运行态控制方法（阶段五）：Preview 会话生命周期、运行时读取与页面内采样。
+   * 处理运行态控制方法：Preview 会话生命周期、运行时读取与页面内采样。
    *
    * @param method 运行态方法名（server.previewLaunch 等）。
    * @param payload 方法参数。

@@ -14,8 +14,6 @@ export type CliCommand =
   | { command: 'component'; projectId: string; editorInstanceId?: string; uuid: string }
   | { command: 'prefab'; projectId: string; editorInstanceId?: string; nodeUuid: string }
   | { command: 'asset-index'; projectId: string; editorInstanceId?: string }
-  | { command: 'component-schema'; projectId: string; editorInstanceId?: string; uuid: string }
-  | { command: 'save-report'; projectId: string; editorInstanceId?: string; sample: string }
   | { command: 'preview-launch'; projectId: string; editorInstanceId?: string; resolution?: { width: number; height: number }; channel?: string }
   | { command: 'preview-stop'; sessionId: string }
   | { command: 'preview-sessions'; projectId?: string }
@@ -62,8 +60,6 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   component: [...PROJECT_SELECTOR_FLAGS, 'uuid'],
   prefab: [...PROJECT_SELECTOR_FLAGS, 'node-uuid'],
   'asset-index': PROJECT_SELECTOR_FLAGS,
-  'component-schema': [...PROJECT_SELECTOR_FLAGS, 'uuid'],
-  'save-report': [...PROJECT_SELECTOR_FLAGS, 'sample'],
   'preview-launch': [...PROJECT_SELECTOR_FLAGS, 'resolution', 'channel'],
   'preview-stop': ['session-id'],
   'preview-sessions': ['project-id'],
@@ -245,7 +241,6 @@ export function parseCommand(argv: string[]): CliCommand {
     }
     case 'node':
     case 'component':
-    case 'component-schema':
     case 'open-asset':
       return {
         command,
@@ -257,12 +252,6 @@ export function parseCommand(argv: string[]): CliCommand {
         command,
         ...selector,
         nodeUuid: requireFlag(flags, 'node-uuid', 'NODE_UUID_REQUIRED')
-      };
-    case 'save-report':
-      return {
-        command,
-        ...selector,
-        sample: requireFlag(flags, 'sample', 'SAMPLE_REQUIRED')
       };
     default:
       throw new Error('UNKNOWN_COMMAND');

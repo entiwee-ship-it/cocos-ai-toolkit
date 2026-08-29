@@ -28,9 +28,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# 阶段五脚本依赖 ConvertFrom-Json -AsHashtable 和稳定的原生进程参数行为。
+# 运行态验收依赖 ConvertFrom-Json -AsHashtable 和稳定的原生进程参数行为。
 if ($PSVersionTable.PSVersion.Major -lt 7) {
-    throw "阶段五运行态统一验证脚本必须在 pwsh 7+ 运行，当前宿主版本为 $($PSVersionTable.PSVersion)"
+    throw "运行态统一验证脚本必须在 pwsh 7+ 运行，当前宿主版本为 $($PSVersionTable.PSVersion)"
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -46,7 +46,7 @@ $nodeExe = (Get-Command node -ErrorAction Stop).Source
 $npmExe = (Get-Command npm.cmd -ErrorAction Stop).Source
 $gitExe = (Get-Command git -ErrorAction Stop).Source
 $runId = '{0}-{1}' -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ'), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
-$reportPrefix = "phase-5-$runId"
+$reportPrefix = "runtime-$runId"
 $startedAt = (Get-Date).ToUniversalTime().ToString('o')
 $script:managedServer = $null
 $script:previewSessionId = $null
@@ -60,7 +60,6 @@ $mainCompletedSuccessfully = $false
 
 $env:COCOS_AI_PROBE_SERVER_URL = "ws://127.0.0.1:$Port"
 $env:COCOS_AI_PROBE_TIMEOUT_MS = [string]($RequestTimeoutSeconds * 1000)
-$env:COCOS_AI_REPORT_ROOT = $reportsRoot
 $env:COCOS_AI_PROBE_HOST = '127.0.0.1'
 $env:COCOS_AI_PROBE_PORT = [string]$Port
 New-Item -ItemType Directory -Force -Path $reportsRoot | Out-Null
@@ -416,7 +415,7 @@ try {
     $editorsPath = Write-RawJsonReport -Name "$reportPrefix-editors.json" -RawJson $connection.raw
     Assert-Condition -Condition ($selectedEditor.creatorVersion -eq '3.8.8') -Message "当前只认证 Creator 3.8.8，实际为 $($selectedEditor.creatorVersion)"
     foreach ($capability in @('probe.previewOpen', 'probe.previewStatus')) {
-        Assert-Condition -Condition ($selectedEditor.capabilities -contains $capability) -Message "Bridge 缺少阶段五所需能力: $capability"
+        Assert-Condition -Condition ($selectedEditor.capabilities -contains $capability) -Message "Bridge 缺少运行态验收所需能力: $capability"
     }
     $script:selectorArguments = @('--project-id', [string]$selectedEditor.projectId, '--editor-instance-id', [string]$selectedEditor.editorInstanceId)
     Add-PassedStep -Name 'Bridge 连接与运行态能力检查' -DurationMs $connection.command.durationMs -Evidence $editorsPath
@@ -595,7 +594,7 @@ try {
 
     $summary = [ordered]@{
         runId = $runId
-        phase = 'phase-5-runtime-visual'
+        suite = 'runtime-visual'
         status = $runStatus
         project = $project
         startedAt = $startedAt
@@ -609,7 +608,7 @@ try {
         previewSessionId = $script:previewSessionId
     }
     $summaryPath = Write-JsonReport -Name "$reportPrefix-summary.json" -Value $summary
-    Write-Host "阶段五运行态统一验证 $runStatus，报告: $summaryPath"
+    Write-Host "运行态统一验证 $runStatus，报告: $summaryPath"
     if (-not $mainCompletedSuccessfully) {
         exit 1
     }

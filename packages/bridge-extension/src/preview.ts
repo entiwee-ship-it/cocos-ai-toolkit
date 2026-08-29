@@ -2,8 +2,8 @@ import { get } from 'node:http';
 import { ProbeError } from './probe-errors';
 
 /**
- * Preview 生命周期封装（阶段五）。
- * 基于探针结论（docs/phase-5-probe-findings.md）：
+ * Preview 生命周期封装。
+ * Creator 3.8.8 实测结论：
  * preview/open 启动 server 但不打开页面；页面停止无公开消息；
  * query-preview-url/query-connect-num 可用。核心逻辑与 Editor 绑定解耦（依赖注入便于测试）。
  */

@@ -29,7 +29,7 @@ describe('运行工作树同步合同', () => {
     const readme = await readFile(readmePath, 'utf8');
 
     expect(readme).not.toContain("-ProjectPath 'E:/xile-workspace/qyProject/xy-client'");
-    expect(readme).toContain("-ProjectPath 'E:/xile-workspace/worktrees/xy-client-cocos-ai-probe'");
+    expect(readme).toContain("-ProjectPath 'E:/xile-workspace/worktrees/cocos-ai-blank/Cocos-ai'");
     expect(readme).toContain("-ToolkitPath 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0'");
     expect(installer).toContain('[string]$WorktreeRoot');
     expect(installer).toContain('[switch]$AllowSavedProject');

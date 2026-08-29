@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { ProbeClient } from './client.js';
+import { ProbeClient } from '@cocos-ai/client';
 import { parseCommand, type CliCommand } from './commands.js';
 import { pathToFileURL } from 'node:url';
 
@@ -24,8 +24,6 @@ const HELP = `用法:
   cocos-ai-probe component --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe prefab --project-id <id> --node-uuid <uuid> [--editor-instance-id <id>]
   cocos-ai-probe asset-index --project-id <id> [--editor-instance-id <id>]
-  cocos-ai-probe component-schema --project-id <id> --uuid <component-uuid> [--editor-instance-id <id>]
-  cocos-ai-probe save-report --project-id <id> --sample <name> [--editor-instance-id <id>]
   cocos-ai-probe preview-launch --project-id <id> [--editor-instance-id <id>] [--resolution <宽x高>] [--channel chrome|msedge]
   cocos-ai-probe preview-stop --session-id <id>
   cocos-ai-probe preview-sessions [--project-id <id>]
@@ -247,14 +245,10 @@ export function toRequest(command: CliCommand): [string, unknown] {
       return ['probe.component', { selector, params: { uuid: command.uuid } }];
     case 'asset-index':
       return ['probe.assetIndex', { selector, params: {} }];
-    case 'component-schema':
-      return ['probe.component', { selector, params: { uuid: command.uuid } }];
     case 'open-asset':
       return ['probe.openAsset', { selector, params: { uuid: command.uuid } }];
     case 'prefab':
       return ['probe.prefab', { selector, params: { nodeUuid: command.nodeUuid } }];
-    case 'save-report':
-      return ['probe.saveReport', { selector, params: { sample: command.sample } }];
   }
 }
 

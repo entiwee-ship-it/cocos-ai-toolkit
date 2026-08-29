@@ -27,13 +27,19 @@ describe('TypeScript project references', () => {
     ]);
   });
 
-  it('CLI 和 MCP 不再重复构建共享包', async () => {
-    for (const path of ['packages/cli/package.json', 'packages/mcp-server/package.json']) {
-      const manifest = JSON.parse(await readFile(new URL(path, root), 'utf8')) as {
+  it('CLI 和 MCP 只声明实际使用的共享包', async () => {
+    for (const packageRoot of ['packages/cli', 'packages/mcp-server']) {
+      const manifest = JSON.parse(await readFile(new URL(`${packageRoot}/package.json`, root), 'utf8')) as {
         scripts?: Record<string, string>;
+        dependencies?: Record<string, string>;
       };
-      expect(manifest.scripts?.prebuild, path).toBeUndefined();
-      expect(manifest.scripts?.pretypecheck, path).toBeUndefined();
+      const tsconfig = JSON.parse(await readFile(new URL(`${packageRoot}/tsconfig.json`, root), 'utf8')) as {
+        references?: Array<{ path: string }>;
+      };
+      expect(manifest.scripts?.prebuild, packageRoot).toBeUndefined();
+      expect(manifest.scripts?.pretypecheck, packageRoot).toBeUndefined();
+      expect(manifest.dependencies?.['@cocos-ai/core'], packageRoot).toBeUndefined();
+      expect(tsconfig.references?.map((item) => item.path), packageRoot).not.toContain('../core');
     }
   });
 });

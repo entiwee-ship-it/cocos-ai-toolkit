@@ -1,7 +1,7 @@
 import { ScenarioReportSchema, type Resolution, type ScenarioReport, type ScenarioStep, type ScenarioStepResult } from '@cocos-ai/protocol';
 
 /**
- * 自动场景验证编排（阶段五）：按步骤序列驱动 Preview 运行时，
+ * 自动场景验证编排：按步骤序列驱动 Preview 运行时，
  * 逐步产出 expected/actual/passed 证据。结构化数据为真值，截图为辅助证据。
  * 运行时操作经 ScenarioRuntime 注入（Probe Server 以 driver + Bridge 装配）。
  */

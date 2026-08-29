@@ -12,7 +12,6 @@
   ],
   "references": [
     { "path": "../protocol" },
-    { "path": "../client" },
-    { "path": "../core" }
+    { "path": "../client" }
   ]
 }

@@ -2,7 +2,7 @@ import { ProbeError } from './probe-errors';
 import { isBuiltInComponentClass } from './component-schema';
 import type { WriteOperation } from './write-types';
 
-/** 组件属性写入校验所需的最小 Schema（来自 Phase 1 组件 Schema）。 */
+/** 组件属性写入校验所需的最小 Schema。 */
 export interface ComponentPropertyWriteSchema {
   propertyPath: string;
   declaredType: string | null;
@@ -49,7 +49,7 @@ export interface ScriptMountGuardDependencies {
   isScriptClassRegistered(componentType: string, scriptUuid: string): Promise<boolean>;
   /** 脚本刚变更时触发重编译并等待类注册完成；无编译 pending 时返回 null。 */
   waitForScriptCompilation(scriptUuid: string, componentType: string): Promise<ScriptCompilationResult | null>;
-  /** Phase 1 组件 Schema 是否可取（属性校验和重读验证的前提）。 */
+  /** 组件 Schema 是否可取（属性校验和重读验证的前提）。 */
   isComponentSchemaAvailable(componentType: string): Promise<boolean>;
 }
 
@@ -337,7 +337,7 @@ async function resizeComponentArray(
 
 /**
  * 自定义脚本挂载守卫：核对脚本资产存在、类已注册（必要时事件驱动等待编译完成）、
- * Phase 1 Schema 可取。任何一步失败都抛稳定错误码，调用方保证不产生 MissingScript。
+ * 组件 Schema 可取。任何一步失败都抛稳定错误码，调用方保证不产生 MissingScript。
  */
 async function assertScriptMountable(
   guard: ScriptMountGuardDependencies | undefined,

@@ -2,7 +2,7 @@ import { ConsoleEntrySchema, PreviewSessionSchema, ResolutionSchema, type Consol
 import { randomUUID } from 'node:crypto';
 
 /**
- * 运行态浏览器驱动（阶段五）。
+ * 运行态浏览器驱动。
  * 管理工具自 launch 的 Preview 页面会话：浏览器启动、URL 规范化、游戏就绪有界轮询、
  * console 事件缓冲与页面 evaluate 通道。与具体浏览器自动化库解耦（launcher 依赖注入）。
  */

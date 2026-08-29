@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseCommand } from '../src/commands.js';
 import { toRequest } from '../src/index.js';
 
-describe('preview 命令解析（阶段五）', () => {
+describe('preview 命令解析', () => {
   it('preview-launch 解析项目选择器、分辨率与浏览器通道', () => {
     const command = parseCommand([
       'preview-launch',

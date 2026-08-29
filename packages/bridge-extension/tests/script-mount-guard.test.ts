@@ -58,7 +58,7 @@ describe('自定义脚本挂载守卫', () => {
     expect(order).toEqual(['check-registered', 'wait-compilation', 'check-registered', 'add-component']);
   });
 
-  it('编译失败返回完整诊断且不挂载，事务按策略回滚', async () => {
+  it('编译失败返回完整诊断且不挂载，写入链路立即停止', async () => {
     const addComponent = vi.fn(async () => 'comp-new-1');
     const dependencies = createDependencies({
       guard: {
@@ -105,7 +105,7 @@ describe('自定义脚本挂载守卫', () => {
     expect(addComponent).not.toHaveBeenCalled();
   });
 
-  it('Phase 1 组件 Schema 不可取时拒绝挂载', async () => {
+  it('组件 Schema 不可取时拒绝挂载', async () => {
     const addComponent = vi.fn(async () => 'comp-new-1');
     const dependencies = createDependencies({
       guard: {

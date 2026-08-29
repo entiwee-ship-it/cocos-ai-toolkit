@@ -14,12 +14,18 @@ describe('reports governance', () => {
       const capture = join(root, 'runtime-captures', 'preview-old');
       await mkdir(capture, { recursive: true });
       await writeFile(join(root, 'phase-old.json'), '{"documentUuid":"doc-1"}');
+      await writeFile(join(root, 'phase-recovery.patch'), 'keep');
       await writeFile(join(root, 'debug-old.json'), '{}');
       await mkdir(join(root, 'mcp'), { recursive: true });
       await writeFile(join(root, 'mcp', 'keep.json'), '{}');
       await writeFile(join(capture, 'capture.png'), 'png');
       const old = new Date('2020-01-01T00:00:00.000Z');
-      for (const path of [join(root, 'phase-old.json'), join(root, 'debug-old.json'), capture]) {
+      for (const path of [
+        join(root, 'phase-old.json'),
+        join(root, 'phase-recovery.patch'),
+        join(root, 'debug-old.json'),
+        capture
+      ]) {
         await utimes(path, old, old);
       }
 
@@ -27,10 +33,11 @@ describe('reports governance', () => {
       expect(doctor).toMatchObject({
         command: 'doctor',
         currentDocumentUuid: 'doc-1',
-        totals: { files: 4 }
+        totals: { files: 5 }
       });
       expect(doctor.categories).toEqual(expect.arrayContaining([
         expect.objectContaining({ category: 'phase', referencedFiles: 1 }),
+        expect.objectContaining({ category: 'recovery', staleFiles: 1 }),
         expect.objectContaining({ category: 'mcp', staleFiles: 0 })
       ]));
 
@@ -41,12 +48,14 @@ describe('reports governance', () => {
       const archived = run('archive', '--root', root, '--older-than-days', '30', '--confirm');
       expect(archived.moved).toBe(3);
       await expect(stat(join(root, 'phase-old.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, 'phase-recovery.patch'), 'utf8')).resolves.toBe('keep');
       await expect(stat(join(root, 'mcp', 'keep.json'))).resolves.toBeDefined();
 
       const dryPrune = run('prune', '--root', root, '--older-than-days', '0');
       expect(dryPrune.removed).toBe(0);
       const pruned = run('prune', '--root', root, '--older-than-days', '0', '--confirm');
       expect(pruned.removed).toBeGreaterThanOrEqual(1);
+      await expect(readFile(join(root, 'phase-recovery.patch'), 'utf8')).resolves.toBe('keep');
       await expect(readFile(join(root, 'mcp', 'keep.json'), 'utf8')).resolves.toBe('{}');
     } finally {
       await rm(root, { recursive: true, force: true });
