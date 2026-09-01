@@ -3,9 +3,9 @@
   "name": "cocos-ai-bridge",
   "title": "Cocos AI Bridge",
   "version": "0.6.4",
-  "description": "Cocos Creator 3.8.x editor bridge for the Cocos AI probe server",
+  "description": "i18n:cocos-ai-bridge.description",
   "author": "李威-Enti",
-  "date": "2026-07-17",
+  "date": "2026-09-01",
   "platform": [
     "win32"
   ],
