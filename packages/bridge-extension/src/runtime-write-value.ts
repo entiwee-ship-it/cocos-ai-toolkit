@@ -1,3 +1,5 @@
+import { ProbeError } from './probe-errors';
+
 /** 运行时引用写值的最小形态。 */
 export interface RuntimeWriteReference {
   kind: string;
@@ -59,7 +61,14 @@ export async function resolveRuntimeWriteValue(
     )));
   }
   if (!isRecord(value)) return value;
-  if (typeof value.kind === 'string') {
+  const referenceKind = value.kind;
+  if (referenceKind === 'node'
+    || referenceKind === 'component'
+    || referenceKind === 'asset'
+    || referenceKind === 'missing') {
+    if (!isRuntimeWriteReference(value)) {
+      throw new ProbeError('REFERENCE_VALUE_INVALID', { propertyPath, kind: referenceKind });
+    }
     return dependencies.resolveReference(value as RuntimeWriteReference, propertyPath);
   }
   const specialValue = await dependencies.resolveSpecialValue?.(value, currentValue, propertyPath);
@@ -72,12 +81,26 @@ export async function resolveRuntimeWriteValue(
   for (const [key, item] of Object.entries(value)) {
     result[key] = await resolveRuntimeWriteValue(
       item,
-      isRecord(currentValue) ? currentValue[key] : undefined,
+      result[key],
       `${propertyPath}.${key}`,
       dependencies
     );
   }
   return result;
+}
+
+function isRuntimeWriteReference(value: Record<string, unknown>): value is RuntimeWriteReference {
+  switch (value.kind) {
+    case 'node':
+    case 'component':
+      return typeof value.available === 'boolean' && 'objectUuid' in value;
+    case 'asset':
+      return typeof value.available === 'boolean' && typeof value.assetUuid === 'string';
+    case 'missing':
+      return typeof value.expectedKind === 'string' && typeof value.reason === 'string';
+    default:
+      return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

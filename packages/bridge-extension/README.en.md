@@ -4,7 +4,7 @@ Cocos AI Bridge is a project-local editor extension for Cocos Creator 3.8.x. It 
 
 | Item | Value |
 | --- | --- |
-| Current version | V0.6.8 |
+| Current version | V0.6.9 |
 | Release date | 2026-09-01 |
 | Author | 李威-Enti |
 | Creator version requirement | `>=3.8.0 <3.9.0` |

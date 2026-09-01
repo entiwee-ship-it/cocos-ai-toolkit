@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   readRuntimeWriteClassAttributes,
   readRuntimeWriteObjectConstructor,
@@ -7,6 +7,20 @@ import {
 
 class VmData {
   mode = 0;
+  target: unknown = null;
+}
+
+class TestVec3 {
+  constructor(
+    public x = 0,
+    public y = 0,
+    public z = 0
+  ) {}
+}
+
+class NestedVmData {
+  kind = 'slot';
+  position = new TestVec3();
   target: unknown = null;
 }
 
@@ -47,6 +61,61 @@ describe('resolveRuntimeWriteValue', () => {
 
     expect(result[0]).toBeInstanceOf(VmData);
     expect(result[0]).toMatchObject({ mode: 1, target: null });
+  });
+
+  it('嵌套数组新建 ccclass 时保留 Vec3 原型并解析节点引用', async () => {
+    const targetNode = { uuid: 'node-a' };
+    const resolvedPaths: string[] = [];
+
+    const result = await resolveRuntimeWriteValue(
+      [[{
+        kind: 'slot',
+        position: { x: 1, y: 2, z: 3 },
+        target: {
+          kind: 'node',
+          objectUuid: 'node-a',
+          fileId: null,
+          nodePath: null,
+          available: true
+        }
+      }]],
+      [],
+      'groups',
+      {
+        resolveReference: async (reference, propertyPath) => {
+          if (reference.kind !== 'node') throw new Error(`UNEXPECTED_REFERENCE:${reference.kind}`);
+          resolvedPaths.push(propertyPath);
+          return targetNode;
+        },
+        createObject: (_value, propertyPath) => (
+          propertyPath === 'groups[0][0]' ? new NestedVmData() : undefined
+        ),
+        resolveSpecialValue: (value, currentValue) => (
+          currentValue instanceof TestVec3
+            ? new TestVec3(value.x as number, value.y as number, value.z as number)
+            : undefined
+        )
+      }
+    ) as NestedVmData[][];
+
+    expect(result[0][0]).toBeInstanceOf(NestedVmData);
+    expect(result[0][0].position).toBeInstanceOf(TestVec3);
+    expect(result[0][0].position).toEqual(new TestVec3(1, 2, 3));
+    expect(result[0][0].target).toBe(targetNode);
+    expect(resolvedPaths).toEqual(['groups[0][0].target']);
+  });
+
+  it('保留引用 kind 缺少必要字段时在赋值前拒绝', async () => {
+    const resolveReference = vi.fn();
+
+    await expect(resolveRuntimeWriteValue(
+      { kind: 'node', objectUuid: 'node-a' },
+      null,
+      'items[0].target',
+      { resolveReference }
+    )).rejects.toThrow('REFERENCE_VALUE_INVALID');
+
+    expect(resolveReference).not.toHaveBeenCalled();
   });
 
   it('从 Creator Class Attr 的 ctor 字段读取 ccclass 构造器', () => {

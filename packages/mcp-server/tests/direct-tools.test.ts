@@ -29,7 +29,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.6.8',
+  bridgeVersion: '0.6.9',
   bridgeBuildId: 'sha256:bridge-build',
   capabilities: [
     'probe.editorState',
@@ -330,7 +330,7 @@ async function createHarness(
     { enableWrites: options.enableWrites }
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'direct-test-client', version: '0.6.8' });
+  const client = new Client({ name: 'direct-test-client', version: '0.6.9' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)

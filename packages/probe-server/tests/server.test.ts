@@ -26,7 +26,7 @@ describe('SessionRegistry', () => {
       projectId: 'project',
       projectPath: 'E:/project-a',
       creatorVersion: '3.8.8',
-      bridgeVersion: '0.6.8',
+      bridgeVersion: '0.6.9',
       capabilities: []
     });
     registry.register({
@@ -34,7 +34,7 @@ describe('SessionRegistry', () => {
       projectId: 'project',
       projectPath: 'E:/project-b',
       creatorVersion: '3.8.8',
-      bridgeVersion: '0.6.8',
+      bridgeVersion: '0.6.9',
       capabilities: []
     });
 
@@ -237,7 +237,7 @@ describe('ProbeServer', () => {
             projectId: 'project-1',
             projectPath: 'E:/project',
             creatorVersion: '3.8.8',
-            bridgeVersion: '0.6.8',
+            bridgeVersion: '0.6.9',
             capabilities: ['probe.editorState']
           }
         }));
