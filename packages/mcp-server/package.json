@@ -1,6 +1,6 @@
 {
   "name": "@cocos-ai/mcp-server",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "private": true,
   "type": "module",
   "bin": {
@@ -12,8 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cocos-ai/client": "0.6.4",
-    "@cocos-ai/protocol": "0.6.4",
+    "@cocos-ai/client": "0.6.5",
+    "@cocos-ai/protocol": "0.6.5",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "^4.3.6"
   }

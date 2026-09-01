@@ -10,6 +10,7 @@ export const BRIDGE_CAPABILITIES = [
   'probe.hierarchy',
   'probe.node',
   'probe.nodeSelect',
+  'probe.extensionManagerOpen',
   'probe.component',
   'probe.prefab',
   'probe.directWrite',
@@ -37,6 +38,16 @@ export function selectEditorNode(nodeUuid: string) {
     nodeUuid,
     selected: selection.length === 1 && selection[0] === nodeUuid,
     selection
+  };
+}
+
+/** 直接打开 Creator 内置扩展管理器，并回读确认面板已经存在。 */
+export async function openExtensionManager() {
+  const panel = 'extension.manager';
+  await Editor.Panel.open(panel);
+  return {
+    panel,
+    opened: await Editor.Panel.has(panel)
   };
 }
 

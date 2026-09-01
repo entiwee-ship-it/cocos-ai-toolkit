@@ -1,6 +1,6 @@
 import { BridgeClient, type BridgeLifecycleEvent } from './bridge-client';
 import { readBridgeBuildId } from './bridge-build-info';
-import { buildBridgeHello, probeEditorState, selectEditorNode } from './bridge-state';
+import { buildBridgeHello, openExtensionManager, probeEditorState, selectEditorNode } from './bridge-state';
 import type { CreatorDocumentIdentity } from './creator-document-identity';
 import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
 import { ProbeError } from './probe-errors';
@@ -14,7 +14,7 @@ import {
 import { importAsset } from './import-asset';
 import { createProbeServerBootstrap, type ProbeBootstrapResult } from './probe-bootstrap';
 
-const BRIDGE_VERSION = '0.6.4';
+const BRIDGE_VERSION = '0.6.5';
 const BRIDGE_BUILD_ID = readBridgeBuildId(__dirname);
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
@@ -53,14 +53,19 @@ export function load(): void {
       'probe.assetIndex': (payload) => probeAssetIndex(payload),
       'probe.assetSearch': (payload) => probeAssetSearch(payload),
       'probe.component': (payload) => probeComponent(payload),
-      'probe.nodeSelect': (payload) => {
+    'probe.nodeSelect': (payload) => {
         const request = payload as { uuid?: unknown };
         if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');
         const result = selectEditorNode(request.uuid);
         if (!result.selected) throw new ProbeError('NODE_SELECTION_VERIFY_FAILED', result);
-        return Promise.resolve(result);
-      },
-      'probe.openAsset': async (payload) => {
+      return Promise.resolve(result);
+    },
+    'probe.extensionManagerOpen': async () => {
+      const result = await openExtensionManager();
+      if (!result.opened) throw new ProbeError('EXTENSION_MANAGER_OPEN_FAILED', result);
+      return result;
+    },
+    'probe.openAsset': async (payload) => {
         const request = payload as { uuid?: unknown };
         if (typeof request.uuid !== 'string' || !request.uuid) throw new ProbeError('UUID_REQUIRED');
         await Editor.Message.request('asset-db', 'open-asset', request.uuid);

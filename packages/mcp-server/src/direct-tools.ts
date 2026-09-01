@@ -77,6 +77,7 @@ const DELETE_ANNOTATIONS = {
 export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
   'cocos_editor_list',
   'cocos_editor_state',
+  'cocos_extension_manager_open',
   'cocos_asset_search',
   'cocos_asset_inspect',
   'cocos_hierarchy',
@@ -163,6 +164,21 @@ export class CocosDirectToolService {
 
   async readEditorState(input: ProjectSelector) {
     return this.readonlyService.readEditorState(input);
+  }
+
+  /** 打开目标 Creator 的内置扩展管理器，不修改项目内容。 */
+  async openExtensionManager(input: ProjectSelector) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    if (!editor.capabilities.includes('probe.extensionManagerOpen')) {
+      throw new Error('EDITOR_CAPABILITY_MISSING:probe.extensionManagerOpen');
+    }
+    const result = asRecord(await this.readonlyService.requestBridge(
+      editor,
+      'probe.extensionManagerOpen',
+      {}
+    ));
+    if (result.opened !== true) throw new Error('EXTENSION_MANAGER_OPEN_FAILED');
+    return { editor, ...result };
   }
 
   async searchAssets(input: ProjectSelector & {
@@ -1372,6 +1388,13 @@ export function registerCocosDirectReadonlyTools(
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
   }, async (input) => toToolResult(service.readEditorState(input)));
+
+  server.registerTool('cocos_extension_manager_open', {
+    description: '直接打开目标 Creator 的扩展管理器面板；不修改项目内容或扩展启用状态。',
+    inputSchema: ProjectSelectorInput,
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(service.openExtensionManager(input)));
 
   server.registerTool('cocos_asset_search', {
     description: '在 Creator AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），按 cursor 分页。',

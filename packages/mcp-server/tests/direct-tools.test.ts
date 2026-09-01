@@ -40,6 +40,7 @@ const ONLINE_EDITOR = {
     'probe.hierarchy',
     'probe.node',
     'probe.nodeSelect',
+    'probe.extensionManagerOpen',
     'probe.component'
   ]
 };
@@ -263,7 +264,8 @@ function createRespond(overrides: Record<string, unknown> = {}) {
     if (method === 'probe.openAsset') return { opened: true, uuid: 'prefab-uuid-1' };
     if (method === 'probe.hierarchy') return { data: HIERARCHY_TREE, raw: null, source: 'message-api' };
     if (method === 'probe.node') return { data: NODE_DETAIL, raw: null, source: 'message-api' };
-    if (method === 'probe.nodeSelect') return { nodeUuid: 'panel-uuid', selected: true, selection: ['panel-uuid'] };
+  if (method === 'probe.nodeSelect') return { nodeUuid: 'panel-uuid', selected: true, selection: ['panel-uuid'] };
+  if (method === 'probe.extensionManagerOpen') return { opened: true, panel: 'extension.manager' };
     if (method === 'probe.component') {
       return { data: { schema: COMPONENT_SCHEMA, raw: null }, raw: null, source: 'message-api' };
     }
@@ -319,6 +321,7 @@ describe('直写档工具注册', () => {
     for (const expected of [
       'cocos_editor_list',
       'cocos_editor_state',
+      'cocos_extension_manager_open',
       'cocos_asset_search',
       'cocos_asset_inspect',
       'cocos_hierarchy',
@@ -468,6 +471,26 @@ describe('直写档只读工具', () => {
       }
     });
     expect(probeClient.requests.at(-1)?.method).toBe('probe.editorState');
+  });
+
+  it('cocos_extension_manager_open 直接打开 Creator 扩展管理器', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_extension_manager_open',
+      arguments: { projectId: 'proj1' }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      editor: { projectId: 'proj1' },
+      opened: true,
+      panel: 'extension.manager'
+    });
+    expect(probeClient.requests.at(-1)).toMatchObject({
+      method: 'probe.extensionManagerOpen',
+      payload: { params: {} }
+    });
   });
 
   it('cocos_asset_search 在 Bridge 内过滤资产，不拉取全量索引', async () => {

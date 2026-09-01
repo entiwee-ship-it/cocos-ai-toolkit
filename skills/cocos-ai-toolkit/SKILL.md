@@ -38,6 +38,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 
 | Intent | Tool |
 | --- | --- |
+| 打开扩展管理器 | `cocos_extension_manager_open`（直接打开目标 Creator 的内置扩展管理器；不修改项目或扩展启用状态） |
 | 创建节点 | `cocos_node_create`（parentUuid 或 parentPath，二选一） |
 | 重命名节点 | `cocos_node_rename`（nodeUuid 或 path 二选一） |
 | 修改节点局部变换 | `cocos_node_set_transform`（nodeUuid 或 path 二选一；position/rotation/scale 至少一项） |

@@ -22,7 +22,7 @@
 8. 手工编辑后需要显式落盘时调用 `cocos_document_save`。
 9. 需要视觉或交互验证时运行 Preview 工具，最后用 `cocos_preview_stop` 清理会话。
 
-Probe 未启动时 MCP 仍会正常注册 39 个工具；`cocos_editor_list` 返回空 `editors` 和 `backend` 连接状态。Creator Bridge 拉起 Probe 后，同一 MCP 任务会自动恢复，不需要重新加载工具表。其它工具在后端离线时通过 `structuredContent.error.code=PROBE_SERVER_UNAVAILABLE` 返回可重试错误。
+Probe 未启动时 MCP 仍会正常注册 40 个工具；`cocos_editor_list` 返回空 `editors` 和 `backend` 连接状态。Creator Bridge 拉起 Probe 后，同一 MCP 任务会自动恢复，不需要重新加载工具表。其它工具在后端离线时通过 `structuredContent.error.code=PROBE_SERVER_UNAVAILABLE` 返回可重试错误。
 
 `cocos_nodes_read` 默认并发 4，仍保持输入顺序、单项错误隔离、32 项上限和输出预算。所有工具失败都同时提供兼容文本与 `structuredContent.error`；优先读取 `code/details/stage/nextAction/retryable`，不要再从文本中拆错误码。
 
@@ -30,7 +30,7 @@ Probe 未启动时 MCP 仍会正常注册 39 个工具；`cocos_editor_list` 返
 
 只读工具：
 
-- `cocos_editor_list`、`cocos_editor_state`
+- `cocos_editor_list`、`cocos_editor_state`、`cocos_extension_manager_open`
 - `cocos_asset_search`、`cocos_asset_inspect`
 - `cocos_prefab_open`、`cocos_scene_open`
 - `cocos_hierarchy`、`cocos_node_read`、`cocos_nodes_read`

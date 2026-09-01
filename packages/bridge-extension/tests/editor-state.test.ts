@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BRIDGE_CAPABILITIES, buildBridgeHello, selectEditorNode } from '../src/bridge-state.js';
+import { BRIDGE_CAPABILITIES, buildBridgeHello, openExtensionManager, selectEditorNode } from '../src/bridge-state.js';
 import { normalizeAssetInfo } from '../src/asset-probe.js';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -25,6 +25,7 @@ describe('buildBridgeHello', () => {
     expect(BRIDGE_CAPABILITIES).toContain('probe.saveDocument');
     expect(BRIDGE_CAPABILITIES).toContain('probe.importAsset');
     expect(BRIDGE_CAPABILITIES).toContain('probe.nodeSelect');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.extensionManagerOpen');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.documentSnapshot');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.writePrepare');
     expect(BRIDGE_CAPABILITIES).not.toContain('probe.writeRevision');
@@ -60,6 +61,21 @@ describe('selectEditorNode', () => {
       selection: ['node-1']
     });
     expect(calls).toEqual(['clear:node', 'select:node:node-1']);
+  });
+});
+
+describe('openExtensionManager', () => {
+  it('通过 Creator Panel API 打开并回读扩展管理器', async () => {
+    const open = vi.fn(async () => true);
+    const has = vi.fn(async () => true);
+    vi.stubGlobal('Editor', { Panel: { open, has } });
+
+    await expect(openExtensionManager()).resolves.toEqual({
+      panel: 'extension.manager',
+      opened: true
+    });
+    expect(open).toHaveBeenCalledWith('extension.manager');
+    expect(has).toHaveBeenCalledWith('extension.manager');
   });
 });
 
