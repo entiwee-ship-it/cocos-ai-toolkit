@@ -89,6 +89,14 @@ describe('Cocos AI Toolkit 技能契约', () => {
     expect(skill).toContain('不是批量暂存、事务或回滚');
   });
 
+  it('固定 Sprite 默认使用原图尺寸且关闭 Trim', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+
+    expect(skill).toContain('`Sprite.SizeMode.RAW`（写入值 `2`）');
+    expect(skill).toContain('把 `trim` 设为 `false`');
+    expect(skill).toContain('不得自行修改 `UITransform.contentSize`');
+  });
+
   it('技能和 README 都明确 batch 只允许节点与组件操作', async () => {
     const [skill, readme] = await Promise.all([
       readFile(skillPath, 'utf8'),

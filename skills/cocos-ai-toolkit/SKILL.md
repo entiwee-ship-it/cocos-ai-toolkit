@@ -26,6 +26,14 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 7. 手工修改后显式落盘用 `cocos_document_save`。
 8. 需要视觉确认时：`cocos_preview_launch` 启动预览 → `cocos_runtime_capture` 截图 → `cocos_preview_stop` 收尾。
 
+## Sprite 默认配置
+
+创建 Sprite 节点、挂载 `cc.Sprite` 或设置 `spriteFrame` 时，除非用户明确要求固定/自定义尺寸或裁剪，否则必须：
+
+1. 先设置 `spriteFrame`，再把 `sizeMode` 设为 `Sprite.SizeMode.RAW`（写入值 `2`），使用图片原始尺寸。
+2. 把 `trim` 设为 `false`，确保 Inspector 中的 `Trim` 不勾选。
+3. 不得自行修改 `UITransform.contentSize`，也不得改用 `CUSTOM` 或 `TRIMMED`；写后重读 `cc.Sprite.sizeMode` 和 `cc.Sprite.trim`，确认值分别为 `2` 和 `false`。
+
 ## 写入工具
 
 | Intent | Tool |
