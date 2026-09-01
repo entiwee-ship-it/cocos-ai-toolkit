@@ -35,7 +35,7 @@ export async function toToolResult(operation: unknown | Promise<unknown>) {
   }
 }
 
-/** 把 Probe、Bridge 和遗留 Error 统一为机器可读错误。 */
+/** 把 Probe、Bridge 和本地 Error 统一为机器可读错误。 */
 export function normalizeToolError(error: unknown, fallbackCode = 'TOOL_EXECUTION_FAILED'): StructuredToolError {
   if (error instanceof ProbeClientError) {
     return {

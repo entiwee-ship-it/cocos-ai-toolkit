@@ -27,9 +27,6 @@ if (-not $Readonly -and $configText -notmatch '--enable-writes') {
 if ($Readonly -and $configText -match '--enable-writes') {
     throw 'Codex cocos_ai 当前启用了写工具，不能按只读模式检查'
 }
-if ($configText -match '--profile') {
-    throw 'Codex cocos_ai 仍携带已移除的 --profile 参数，请用 scripts/install-codex-mcp.ps1 重新安装'
-}
 $uri = [Uri]$ProbeUrl
 $client = [Net.Sockets.TcpClient]::new()
 try {

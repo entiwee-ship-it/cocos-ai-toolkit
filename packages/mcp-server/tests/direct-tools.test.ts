@@ -29,7 +29,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.3.0',
+  bridgeVersion: '0.6.8',
   bridgeBuildId: 'sha256:bridge-build',
   capabilities: [
     'probe.editorState',
@@ -300,7 +300,6 @@ function createRespond(overrides: Record<string, unknown> = {}) {
     }
     if (method === 'probe.assets') return INSPECT_ASSET_RESPONSE;
     if (method === 'probe.directWrite') return DIRECT_WRITE_SUCCESS;
-    if (method === 'probe.createPrefab') return { created: true, assetUuid: 'new-prefab-uuid' };
     if (method === 'probe.deleteAsset') return { deleted: true, assetUrl: 'db://assets/ui/Test.prefab', verified: true };
     if (method === 'probe.saveDocument') return { saved: true };
     if (method === 'probe.importAsset') {
@@ -331,7 +330,7 @@ async function createHarness(
     { enableWrites: options.enableWrites }
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'direct-test-client', version: '0.1.0' });
+  const client = new Client({ name: 'direct-test-client', version: '0.6.8' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)
@@ -382,21 +381,6 @@ describe('直写档工具注册', () => {
     ]) {
       expect(names).not.toContain(gated);
     }
-    // 事务/声明式/全量扫描工具一律不再存在
-    for (const removed of [
-      'cocos_write_prepare',
-      'cocos_write_confirm',
-      'cocos_transaction_rollback',
-      'cocos_design_apply',
-      'cocos_prefab_edit',
-      'cocos_project_scan',
-      'cocos_prefab_graph',
-      'cocos_document_snapshot',
-      'cocos_asset_create',
-      'cocos_asset_update_text'
-    ]) {
-      expect(names).not.toContain(removed);
-    }
     const hierarchyTool = readonlyTools.find((tool) => tool.name === 'cocos_hierarchy');
     const nodeReadTool = readonlyTools.find((tool) => tool.name === 'cocos_node_read');
     expect(hierarchyTool?.description).toContain('结构/信封层重复 raw');
@@ -442,7 +426,6 @@ describe('直写档工具注册', () => {
     expect(batchSchema).toContain('component.set_property');
     const transformTool = writeTools.find((tool) => tool.name === 'cocos_node_set_transform');
     expect(transformTool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
-    expect(writeNames).not.toContain('cocos_prefab_save');
   });
 });
 
@@ -1521,7 +1504,6 @@ describe('直写档写工具', () => {
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
       expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
-      expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.createPrefab');
     }
   });
 
@@ -1922,7 +1904,7 @@ describe('直写档写工具', () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const serviceOptions = { probeClient };
     const readonlyService = new CocosReadonlyToolService(serviceOptions);
-    const service = new CocosDirectToolService(serviceOptions, readonlyService);
+    const service = new CocosDirectToolService(readonlyService);
 
     for (const operation of [
       {
@@ -1999,7 +1981,6 @@ describe('直写档写工具', () => {
     const methods = probeClient.requests.map((request) => request.method);
     expect(methods).toContain('probe.saveDocument');
     expect(methods.at(-1)).toBe('probe.editorState');
-    expect(methods).not.toContain('probe.createPrefab');
   });
 
   it('cocos_prefab_create 在创建后 dirty 未清除时返回稳定错误', async () => {

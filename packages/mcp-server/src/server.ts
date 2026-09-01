@@ -34,11 +34,11 @@ export function createCocosMcpServer(
 ): McpServer {
   const server = new McpServer({
     name: 'cocos-ai-toolkit',
-    version: '0.6.7'
+    version: '0.6.8'
   });
   const readonlyService = new CocosReadonlyToolService(options);
   const runtimeService = new CocosRuntimeToolService(options, readonlyService);
-  const directService = new CocosDirectToolService(options, readonlyService);
+  const directService = new CocosDirectToolService(readonlyService);
   registerCocosDirectReadonlyTools(server, directService);
   registerCocosRuntimeReadonlyTools(server, runtimeService);
   if (runtime.enableWrites === true) {

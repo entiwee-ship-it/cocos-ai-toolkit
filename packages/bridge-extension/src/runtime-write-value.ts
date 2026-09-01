@@ -29,11 +29,11 @@ export function readRuntimeWriteObjectConstructor(
 }
 
 export function readRuntimeWriteClassAttributes(
-  legacyClass: unknown,
+  classApi: unknown,
   ownerConstructor: unknown
 ): Record<string, unknown> | null {
-  if (!isObjectLike(legacyClass)) return null;
-  const attributeApi = legacyClass.Attr;
+  if (!isObjectLike(classApi)) return null;
+  const attributeApi = classApi.Attr;
   if (!isObjectLike(attributeApi) || typeof attributeApi.getClassAttrs !== 'function') return null;
   const attributes = attributeApi.getClassAttrs(ownerConstructor) as unknown;
   return isRecord(attributes) ? attributes : null;

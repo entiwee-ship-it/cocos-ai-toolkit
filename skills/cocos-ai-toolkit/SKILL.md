@@ -55,26 +55,25 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | 删除 Prefab | `cocos_prefab_delete`（不可回滚；传精确 `confirmAssetUrl`，有引用时再传 `confirmReferenced:true`） |
 | 导入外部文件 | `cocos_asset_import`（图片/音频等，复制进 assets 并导入） |
 | 重导入+触发编译 | `cocos_asset_refresh`（脚本改动后调用） |
-| 一次直发多项写操作 | `cocos_batch_write`（仅接受 `node.*` 与 `component.*`；`asset.*` / `prefab.*` 会以 `BATCH_WRITE_OPERATION_NOT_ALLOWED` 拒绝；只减少往返，不是事务、无回滚，失败时已执行项可能已生效） |
+| 一次直发多项写操作 | `cocos_batch_write`（仅接受 `node.*` 与 `component.*`；`asset.*` / `prefab.*` 会以 `BATCH_WRITE_OPERATION_NOT_ALLOWED` 拒绝；只减少往返，失败时已执行项可能已生效） |
 
-节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件类型兼容 `cc.` 前缀（`Label` = `cc.Label`）。
+节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件类型接受有无 `cc.` 前缀的写法（`Label` = `cc.Label`）。
 `cocos_node_read` 的 `prefabInstance` 直接给出实例根、源 UUID、instanceFileId、state 和 sourceUrl；`includeBounds` 可返回 local/world rect 与 anchor，按需追加后代并集和 `relativeToPath` 坐标。`cocos_nodes_read` 最多 32 项、默认并发 4，保持输入顺序且单项失败不会丢失其它结果。
 
 `cocos_node_read` / `cocos_nodes_read` 的 `writeCapabilities` 会标明当前文档可直接执行的节点和组件写入。遇到关闭能力或 `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` 时，读取 `ownerPrefabUuid`、`ownerSourceUrl` 和 `nextAction`，确认后显式调用 `cocos_prefab_open` 打开源 Prefab；禁止自动切换文档。文档身份未知时继续依赖写后重读验证。
 
 ## 写入纪律
 
-- 直写没有事务和回滚：失败即停，已生效修改保留。误操作只能用 git 还原，动手前确认目标工作区状态。
-- 旧事务、Revision 前置、Undo 编排、inverse 和 transaction status 已彻底移除；禁止设计或调用兼容入口。
+- 直写失败即停，已生效修改保留且不会自动恢复。误操作只能用 git 还原，动手前确认目标工作区状态。
 - Creator 对部分写入会静默不生效（典型：预制体编辑模式下嵌套实例内部）。工具写完会逐项重读，重读不符报 `DIRECT_WRITE_VERIFY_FAILED`——看到这个错不要当成已写入，换路径（如打开内层 Prefab 直接改）再写。
 - `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT`——当前 Prefab 只承载嵌套实例，目标内容必须路由到源 Prefab；按错误中的 `route` 重新打开和读取，禁止原地重试。
 - `DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已执行但保存/验证结局未知；先重读当前文档状态，确认前禁止重试。
 - `DOCUMENT_SAVE_REQUIRED` 表示当前文档 dirty，打开工具尚未切换目标文档；先保存，确认 clean 后再重试。
 - `cocos_prefab_create` 重开后若仍 dirty 会自动补保存；补保存后仍 dirty 才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`DOCUMENT_DIRTY_AFTER_SAVE` 同样不能当成成功；先重读并处理当前文档，确认前不要重复创建同一路径 Prefab。
 - 运行期节点/组件 UUID 每次重开文档都会变，禁止缓存；每个编辑会话内现取 hierarchy。
-- 连续多处修改时按"先读后写、逐项确认"推进；`cocos_batch_write` 仅接受 `node.*` 与 `component.*` 操作，是单次请求直发多项操作，不是批量暂存、事务或回滚。
+- 连续多处修改时按"先读后写、逐项确认"推进；`cocos_batch_write` 仅接受 `node.*` 与 `component.*` 操作，失败时先检查 `executedOps` 再决定后续动作。
 - 错误码都带下一步指引：`NODE_NOT_FOUND` 重取 hierarchy、`COMPONENT_NOT_FOUND` 会附可用组件清单、`ASSET_NOT_PREFAB` / `ASSET_NOT_SCENE` 用 asset_inspect 核对类型、`ASSET_ALREADY_EXISTS` 换 URL；Prefab 删除先处理 `PREFAB_DELETE_CONFIRMATION_REQUIRED`，有引用再处理 `PREFAB_REFERENCES_CONFIRMATION_REQUIRED`。
-- 工具失败优先读取 `structuredContent.error` 的 `code/details/stage/nextAction/retryable`；文本块只用于人读兼容，不要按冒号拆错误码。
+- 工具失败读取 `structuredContent.error` 的 `code/details/stage/nextAction/retryable`；文本块仅供人读。
 
 ## 运行态工具
 

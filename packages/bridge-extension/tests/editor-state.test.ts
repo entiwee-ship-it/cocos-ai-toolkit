@@ -11,7 +11,7 @@ describe('buildBridgeHello', () => {
       projectPath: 'E:/project',
       projectId: 'project-uuid',
       creatorVersion: '3.8.8',
-      bridgeVersion: '0.1.0',
+      bridgeVersion: '0.6.8',
       bridgeBuildId: 'sha256:bridge-build'
     });
 
@@ -26,14 +26,6 @@ describe('buildBridgeHello', () => {
     expect(BRIDGE_CAPABILITIES).toContain('probe.importAsset');
     expect(BRIDGE_CAPABILITIES).toContain('probe.nodeSelect');
     expect(BRIDGE_CAPABILITIES).toContain('probe.extensionManagerOpen');
-    expect(BRIDGE_CAPABILITIES).not.toContain('probe.documentSnapshot');
-    expect(BRIDGE_CAPABILITIES).not.toContain('probe.writePrepare');
-    expect(BRIDGE_CAPABILITIES).not.toContain('probe.writeRevision');
-    expect(BRIDGE_CAPABILITIES).not.toContain('probe.writeConfirm');
-    expect(BRIDGE_CAPABILITIES).not.toContain('probe.transactionStatus');
-    expect(BRIDGE_CAPABILITIES).not.toContain('probe.transactionList');
-    expect(BRIDGE_CAPABILITIES).not.toContain('probe.transactionRollback');
-    expect(BRIDGE_CAPABILITIES).not.toContain('probe.createAsset');
   });
 });
 

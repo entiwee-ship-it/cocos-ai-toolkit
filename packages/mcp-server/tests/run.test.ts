@@ -120,8 +120,7 @@ describe('Cocos MCP stdio runtime', () => {
     expect(readMcpRuntimeConfig({ COCOS_AI_MCP_ENABLE_WRITES: 'true' }, []).enableWrites).toBe(false);
   });
 
-  it('旧的 --profile 参数一律拒绝并提示已移除', () => {
-    expect(() => readMcpRuntimeConfig({}, ['--profile=prefab'])).toThrow('MCP_PROFILE_REMOVED');
-    expect(() => readMcpRuntimeConfig({}, ['--profile', 'full'])).toThrow('MCP_PROFILE_REMOVED');
+  it('拒绝当前启动面之外的参数', () => {
+    expect(() => readMcpRuntimeConfig({}, ['--unknown'])).toThrow('MCP_ARGUMENT_INVALID');
   });
 });

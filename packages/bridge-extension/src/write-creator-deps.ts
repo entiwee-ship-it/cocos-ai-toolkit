@@ -292,7 +292,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       focusAndLog(ownerUuid, `节点 ${describeNode(ownerUuid)} 移除组件 ${componentType}`);
     },
     setComponentEnabled: async (componentUuid, enabled) => {
-      // enabled 直接写运行时对象：set-property(record:true) 对组件 enabled 实测不生效（0.1.4 验证）。
+      // enabled 直接写运行时对象：set-property(record:true) 对组件 enabled 在 Creator 3.8.8 实测不生效。
       const runtime = findRuntimeComponent(componentUuid);
       if (!runtime) {
         throw new ProbeError('COMPONENT_NOT_FOUND', { componentUuid });
@@ -309,7 +309,7 @@ export function buildComponentWriterDependencies(): ComponentWriterDependencies 
       return readDumpValueAtPath(raw, parsePropertyPath(propertyPath));
     },
     setComponentProperty: async (componentUuid, propertyPath, value) => {
-      // 组件属性写入走运行时对象：scene/set-property 对组件属性实测不生效（3.8.8，0.1.10 验证）。
+      // 组件属性写入走运行时对象：scene/set-property 对组件属性在 Creator 3.8.8 实测不生效。
       // 引用值按 kind 解析为运行时对象；资产引用暂不支持运行时写入。
       const runtime = findRuntimeComponent(componentUuid);
       if (!runtime) {

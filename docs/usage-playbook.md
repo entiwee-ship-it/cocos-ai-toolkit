@@ -1,12 +1,12 @@
 # Cocos AI Toolkit 使用手册
 
-本文只描述当前 `0.6.x` 直写架构。旧事务、声明式预览确认链路、回滚和状态查询已彻底移除，不属于当前或后续兼容面。
+本文描述当前 `0.6.x` 直写架构。
 
 ## 1. 核心边界
 
 - Prefab、Scene、Meta 的序列化内容禁止直接手写，必须通过 Creator Bridge。
 - 只有 Prefab 整文件删除必须走 `cocos_prefab_delete`。普通资源文件可直接通过文件系统删除，并同时删除同名 `.meta`；这是整文件删除，不是编辑 Meta JSON。
-- 每次直写按顺序执行操作，随后保存并逐项重读验证；没有事务、暂存、回滚或 Undo 编排。
+- 每次直写按顺序执行操作，随后保存并逐项重读验证；失败即停，已执行项不会自动恢复。
 - `DIRECT_WRITE_OUTCOME_UNKNOWN` 表示写入可能已经生效。先用 `cocos_editor_state`、`cocos_hierarchy`、`cocos_node_read` 或 `cocos_asset_inspect` 重读，确认前禁止重试。
 - 节点寻址严格要求 UUID 或 path 二选一。运行期 UUID 会随文档重开变化，跨会话使用 path 或重新读取 hierarchy。
 
@@ -17,7 +17,7 @@
 3. `cocos_asset_search`：按名称或路径寻找 Prefab、Scene、脚本 UUID；搜索在 Bridge 内分页并复用短缓存，不再把全量索引传给 MCP。
 4. `cocos_asset_inspect`：按 UUID 直接读取资产类型、URL、依赖和反向使用者，不需要先调用或传输完整资产索引。
 5. `cocos_prefab_open` 或 `cocos_scene_open`：仅在当前文档 clean 时打开目标文档；收到 `DOCUMENT_SAVE_REQUIRED` 时先调用 `cocos_document_save`，确认 dirty 已清除后再重试。
-6. `cocos_hierarchy`：优先传 `summary`、`fields` 或 `query` 读取紧凑节点树；`cocos_node_read` 优先使用 `summary/fields/propertyPaths` 查看单节点；多节点使用 `cocos_nodes_read`。这些投影会在 Bridge 内直接省略结构 raw；完整无投影调用仍保留旧返回，并可用 `maxOutputBytes` 调整 Bridge 发送前预算。
+6. `cocos_hierarchy`：优先传 `summary`、`fields` 或 `query` 读取紧凑节点树；`cocos_node_read` 优先使用 `summary/fields/propertyPaths` 查看单节点；多节点使用 `cocos_nodes_read`。这些投影会在 Bridge 内直接省略结构 raw；完整无投影调用返回完整结构，并可用 `maxOutputBytes` 调整 Bridge 发送前预算。
 7. 调用写工具；成功响应中的 `outcome.verification.items` 是保存后重读证据。
 8. 手工编辑后需要显式落盘时调用 `cocos_document_save`；工具会重读并确认 dirty 已清除。
 
@@ -26,7 +26,7 @@
 
 Probe 未启动时 MCP 仍会正常注册 40 个工具；`cocos_editor_list` 返回空 `editors` 和 `backend` 连接状态。Creator Bridge 拉起 Probe 后，同一 MCP 任务会自动恢复，不需要重新加载工具表。其它工具在后端离线时通过 `structuredContent.error.code=PROBE_SERVER_UNAVAILABLE` 返回可重试错误。
 
-`cocos_nodes_read` 默认并发 4，仍保持输入顺序、单项错误隔离、32 项上限和输出预算。所有工具失败都同时提供兼容文本与 `structuredContent.error`；优先读取 `code/details/stage/nextAction/retryable`，不要再从文本中拆错误码。
+`cocos_nodes_read` 默认并发 4，仍保持输入顺序、单项错误隔离、32 项上限和输出预算。所有工具失败都同时提供人读文本与 `structuredContent.error`；程序应读取 `code/details/stage/nextAction/retryable`。
 
 ## 3. 编辑态工具
 
@@ -75,7 +75,7 @@ Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读
 | `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE` | Prefab 直写已执行，但文档 clean 校验失败；先保存并重读，确认前不要重复创建同一路径。 |
 | `DOCUMENT_DIRTY_AFTER_SAVE` | Creator 接受了保存请求但 dirty 未清除；检查当前文档与原生保存提示后再保存。 |
 | `NODE_ADDRESS_EXCLUSIVE` | UUID/path 只保留一个。 |
-| `NODE_NOT_FOUND` | 重新读取 hierarchy，不要复用旧 UUID。 |
+| `NODE_NOT_FOUND` | 重新读取 hierarchy，不要复用过期 UUID。 |
 | `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` | 读取 `writeCapabilities` 和错误中的 `route`，确认后用 `cocos_prefab_open` 打开源 Prefab；不要原地重试。 |
 | `PREFAB_IDENTITY_MISMATCH` | 当前节点的源 Prefab 已变化；重新读取实例元数据后再决定是否解包。 |
 | `COMPONENT_NOT_FOUND` | 使用错误中返回的组件候选重新选择。 |
@@ -98,8 +98,8 @@ E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0
 更新和验证：
 
 ```powershell
-& E:/xile-workspace/cocos-ai-toolkit/scripts/update-runtime.ps1
-& E:/xile-workspace/cocos-ai-toolkit/scripts/check-codex-mcp.ps1
+& E:/xile-workspace/GitHub/cocos-ai-toolkit/scripts/update-runtime.ps1
+& E:/xile-workspace/GitHub/cocos-ai-toolkit/scripts/check-codex-mcp.ps1
 npm run smoke:creator:write-routing
 ```
 

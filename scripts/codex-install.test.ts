@@ -23,16 +23,9 @@ describe('Codex MCP 安装入口', () => {
     expect(checker).toContain('E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0');
   });
 
-  it('安装和健康检查使用直写单一工具档，旧 profile 机制已移除', async () => {
-    const installer = await readFile(installerPath, 'utf8');
-    const checker = await readFile(checkerPath, 'utf8');
+  it('健康检查锁定当前直写工具面与 Bridge 身份', async () => {
     const checkerRuntime = await readFile(checkerRuntimePath, 'utf8');
 
-    expect(installer).not.toContain('$Profile');
-    expect(installer).not.toContain('--profile');
-    expect(checker).not.toContain('$Profile');
-    expect(checker).toContain('仍携带已移除的 --profile 参数');
-    expect(checkerRuntime).not.toContain('COCOS_AI_MCP_PROFILE');
     expect(checkerRuntime).toContain('direct-tools.js');
     expect(checkerRuntime).toContain('COCOS_DIRECT_READONLY_TOOL_NAMES');
     expect(checkerRuntime).toContain('COCOS_DIRECT_WRITE_TOOL_NAMES');

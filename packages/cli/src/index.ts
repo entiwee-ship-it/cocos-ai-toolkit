@@ -42,7 +42,7 @@ const HELP = `用法:
   COCOS_AI_PROBE_TIMEOUT_MS  单次请求等待毫秒数，默认 60000
   COCOS_AI_SESSION_TOKEN     Probe Server 启用认证时使用的 Bearer Token
 
-说明: CLI 定位为只读诊断入口；写操作请使用 MCP 直写工具（事务、回滚、扫描和声明式命令已移除）。`;
+说明: CLI 定位为只读诊断入口；写操作请使用 MCP 直写工具。`;
 
 export async function runCli(
   argv: string[],

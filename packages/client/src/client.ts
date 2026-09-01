@@ -437,7 +437,6 @@ function isPotentialWriteMethod(method: string): boolean {
   return method === 'probe.directWrite'
     || method === 'probe.saveDocument'
     || method === 'probe.importAsset'
-    || method === 'probe.createPrefab'
     || method === 'probe.deleteAsset'
     || method === 'probe.refreshAsset';
 }

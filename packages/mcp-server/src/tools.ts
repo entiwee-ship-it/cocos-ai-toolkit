@@ -27,10 +27,6 @@ const EditorSessionSchema = z.object({
   capabilities: z.array(z.string())
 });
 
-const EditorListOutputSchema = z.object({
-  editors: z.array(EditorSessionSchema)
-});
-
 const EditorStateSchema = z.object({
   creatorVersion: z.string().min(1),
   projectPath: z.string().min(1),
@@ -152,12 +148,16 @@ const AssetOpenOutputSchema = z.object({
   opened: z.literal(true)
 });
 
-// Bridge 场景进程返回信封 {data:{…,schema,raw}, raw, source}；readComponentProbeResponse 先解包 data，
-// 再按这里的内层形状校验，因此信封形状与无信封的旧形状均可接受。
 const ComponentProbeResponseSchema = z.object({
   schema: ComponentTypeSchemaSchema,
   raw: z.unknown()
 }).passthrough();
+
+const ComponentProbeEnvelopeSchema = z.object({
+  data: ComponentProbeResponseSchema,
+  raw: z.unknown(),
+  source: z.literal('message-api')
+});
 
 const ComponentSchemaOutputSchema = z.object({
   editor: EditorSessionSchema,
@@ -176,16 +176,6 @@ const CursorSchema = z.object({
   includeRaw: z.boolean(),
   revision: z.string()
 });
-
-const ProjectSelectorInput = {
-  projectId: z.string().min(1),
-  editorInstanceId: z.string().min(1).optional()
-};
-
-const READONLY_ANNOTATIONS = {
-  readOnlyHint: true,
-  destructiveHint: false
-} as const;
 
 export type EditorSession = z.infer<typeof EditorSessionSchema>;
 type AssetCursor = z.infer<typeof CursorSchema>;
@@ -572,12 +562,6 @@ export class CocosReadonlyToolService {
   }
 }
 
-function readObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : { value };
-}
-
 function readAssetSearchProbeResponse(value: unknown): z.infer<typeof AssetSearchProbeResponseSchema> {
   const result = AssetSearchProbeResponseSchema.safeParse(value);
   if (!result.success) {
@@ -611,19 +595,11 @@ function readAssetOpenProbeResponse(value: unknown): z.infer<typeof AssetOpenPro
 }
 
 function readComponentProbeResponse(value: unknown): z.infer<typeof ComponentProbeResponseSchema> {
-  // Bridge 场景进程返回信封 {data:{…,schema,raw}, raw, source}：先解包 data 作为校验对象；
-  // raw 优先取解包对象的 raw，缺省时回落信封顶层 raw；无 data 字段时按旧形状直接校验。
-  const envelope = readObject(value);
-  const data = envelope.data;
-  const inner = data && typeof data === 'object' && !Array.isArray(data)
-    ? data as Record<string, unknown>
-    : envelope;
-  const candidate = inner.raw !== undefined ? inner : { ...inner, raw: envelope.raw };
-  const result = ComponentProbeResponseSchema.safeParse(candidate);
+  const result = ComponentProbeEnvelopeSchema.safeParse(value);
   if (!result.success) {
     throw new Error(`COMPONENT_SCHEMA_INVALID:${result.error.message}`);
   }
-  return result.data;
+  return result.data.data;
 }
 
 function assertCapability(editor: EditorSession, capability: string): void {

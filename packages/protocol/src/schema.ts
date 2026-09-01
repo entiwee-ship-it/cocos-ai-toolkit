@@ -1,7 +1,18 @@
 import { z } from 'zod';
 import { PropertyValueKindSchema } from './component.js';
-import { UnresolvedItemSchema } from './envelope.js';
 import { ReferenceSchema } from './reference.js';
+
+export const UnresolvedItemSchema = z.object({
+  path: z.string(),
+  reason: z.string(),
+  code: z.string().optional(),
+  scope: z.string().optional(),
+  severity: z.enum(['info', 'warning', 'error']).optional(),
+  source: z.string().optional(),
+  details: z.unknown().optional()
+});
+
+export type UnresolvedItem = z.infer<typeof UnresolvedItemSchema>;
 
 const RequiredCurrentValueSchema = z.custom<unknown>(
   (value) => value !== undefined,

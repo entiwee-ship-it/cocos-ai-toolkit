@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe('probeAssets', () => {
-  it('无 UUID 时继续返回资产列表兼容结果', async () => {
+  it('无 UUID 时返回资产列表', async () => {
     const request = vi.fn(async (_channel: string, method: string) => {
       if (method === 'query-assets') {
         return [{ uuid: 'prefab-uuid', url: 'db://assets/ui/Test.prefab', type: 'cc.Prefab' }];
@@ -52,7 +52,7 @@ describe('probeAssets', () => {
     expect(request.mock.calls.map((call) => call[1])).not.toContain('query-assets');
   });
 
-  it('同时提供 pattern 和 UUID 时保留列表与详情兼容返回', async () => {
+  it('同时提供 pattern 和 UUID 时返回列表与详情', async () => {
     const request = vi.fn(async (_channel: string, method: string) => {
       if (method === 'query-assets') {
         return [{ uuid: 'prefab-uuid', url: 'db://assets/ui/Test.prefab', type: 'cc.Prefab' }];

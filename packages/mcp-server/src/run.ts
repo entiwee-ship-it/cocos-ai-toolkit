@@ -32,8 +32,7 @@ export interface McpRuntimeConfig {
 
 /**
  * 从进程环境和启动参数读取 Probe Server 地址、写能力开关和请求超时。
- * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力；
- * 直写架构已移除工具档机制，旧的 --profile 参数一律拒绝并提示。
+ * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力。
  * 请求超时经 COCOS_AI_PROBE_TIMEOUT_MS 配置，与 CLI 共用同一环境变量。
  *
  * @param environment 环境变量键值；缺失值使用本机默认配置。
@@ -52,11 +51,9 @@ export function readMcpRuntimeConfig(
   };
 }
 
-/** 读取写能力开关；直写架构下 --profile 已移除，传入即报错提示。 */
 function readEnableWrites(argv: readonly string[]): boolean {
-  if (argv.includes('--profile') || argv.some((argument) => argument.startsWith('--profile='))) {
-    throw new Error('MCP_PROFILE_REMOVED：工具档机制已移除，启动参数只保留 --enable-writes');
-  }
+  const invalid = argv.find((argument) => argument !== '--enable-writes');
+  if (invalid) throw new Error(`MCP_ARGUMENT_INVALID:${invalid}`);
   return argv.includes('--enable-writes');
 }
 

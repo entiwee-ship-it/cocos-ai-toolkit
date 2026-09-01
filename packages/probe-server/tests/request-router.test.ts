@@ -43,10 +43,16 @@ describe('RequestRouter structured errors', () => {
     });
   });
 
-  it('写请求超时继续返回 OUTCOME_UNKNOWN 并禁止盲重试', async () => {
+  it.each([
+    'probe.directWrite',
+    'probe.saveDocument',
+    'probe.importAsset',
+    'probe.deleteAsset',
+    'probe.refreshAsset'
+  ])('%s 超时返回 OUTCOME_UNKNOWN 并禁止盲重试', async (method) => {
     const router = new RequestRouter();
     const error = await router.wait('request-write', 5, {
-      method: 'probe.directWrite',
+      method,
       editorInstanceId: 'editor-1'
     }).catch((caught: unknown) => caught) as RequestRouterError;
 
@@ -57,7 +63,7 @@ describe('RequestRouter structured errors', () => {
     });
   });
 
-  it('Server 遗留 CODE:details 异常在边界转换为稳定 code', () => {
+  it('Server 本地 CODE:details 异常在边界转换为稳定 code', () => {
     expect(toServerErrorPayload(new Error('RUNTIME_HIERARCHY_UNAVAILABLE:{"found":false}')))
       .toMatchObject({ code: 'RUNTIME_HIERARCHY_UNAVAILABLE' });
   });

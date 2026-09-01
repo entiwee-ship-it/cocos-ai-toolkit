@@ -166,7 +166,7 @@ describe('BridgeClient WebSocket transport', () => {
           projectId: 'project-1',
           projectPath: 'E:/project',
           creatorVersion: '3.8.8',
-          bridgeVersion: '0.1.0',
+          bridgeVersion: '0.6.8',
           capabilities: []
         }
       }),

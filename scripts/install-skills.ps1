@@ -66,7 +66,7 @@ if (Test-Path -LiteralPath $dest) {
         throw "目标已存在且不是本仓库挂接: $dest（如需覆盖请加 -Force）"
     }
     Remove-Item -LiteralPath $dest -Recurse -Force
-    Write-Output "已移除旧安装: $dest"
+    Write-Output "已移除现有安装: $dest"
 }
 
 if ($Copy) {

@@ -10,7 +10,6 @@ import {
 import { z } from 'zod';
 import {
   CocosReadonlyToolService,
-  type CocosReadonlyToolServiceOptions,
   type EditorSession
 } from './tools.js';
 import { normalizeToolError, toToolResult } from './tool-result.js';
@@ -148,10 +147,7 @@ const MAX_SINGLE_READ_OUTPUT_BYTES = 8 * 1024 * 1024;
  * 无事务、无回滚；失败即停，已生效的修改保留在文档中。
  */
 export class CocosDirectToolService {
-  constructor(
-    private readonly options: CocosReadonlyToolServiceOptions,
-    private readonly readonlyService: CocosReadonlyToolService
-  ) {}
+  constructor(private readonly readonlyService: CocosReadonlyToolService) {}
 
   async listEditors() {
     const backend = this.readonlyService.readBackendStatus();
@@ -358,7 +354,7 @@ export class CocosDirectToolService {
       ...(typeof input.maxOutputBytes === 'number' ? { maxOutputBytes: input.maxOutputBytes } : {}),
       ...bounds
     });
-    const nodeData = unwrapData(node);
+    const nodeData = readProbeData(node, 'NODE_RESPONSE_INVALID');
     const prefabInstance = nodeData.prefabInstance ?? null;
     const writeCapabilities = nodeData.writeCapabilities ?? null;
     const nodeBounds = nodeData.bounds;
@@ -955,12 +951,7 @@ export class CocosDirectToolService {
    * 类型匹配兼容 cc. 前缀（Label 与 cc.Label 等价）；零匹配给出可用组件清单。
    */
   private resolveComponentUuid(node: unknown, componentType: string): string {
-    const record = node && typeof node === 'object' && !Array.isArray(node)
-      ? node as Record<string, unknown>
-      : {};
-    const data = record.data && typeof record.data === 'object' && !Array.isArray(record.data)
-      ? record.data as Record<string, unknown>
-      : record;
+    const data = readProbeData(node, 'NODE_RESPONSE_INVALID');
     const components = Array.isArray(data.components) ? data.components : [];
     const candidates: Array<{ uuid: string; className: string }> = [];
     for (const component of components) {
@@ -1292,9 +1283,13 @@ function projectHierarchyResult(
   return stripRawDeep({ editor: result.editor, hierarchy });
 }
 
-function unwrapData(value: unknown): Record<string, unknown> {
+function readProbeData(value: unknown, errorCode: string): Record<string, unknown> {
   const record = asRecord(value);
-  return asRecord(record.data ?? value);
+  const data = record.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error(errorCode);
+  }
+  return data as Record<string, unknown>;
 }
 
 function compactNodeData(node: Record<string, unknown>, fields?: string[]): Record<string, unknown> {
@@ -1375,7 +1370,7 @@ function projectNodeResult(
   },
   input: NodeProjectionInput
 ) {
-  const node = unwrapData(result.node);
+  const node = readProbeData(result.node, 'NODE_RESPONSE_INVALID');
   const components = Array.isArray(node.components) ? node.components : [];
   const summary = {
     name: node.name ?? null,
@@ -1411,12 +1406,8 @@ function projectNodeResult(
   });
 }
 
-/** probe.hierarchy 响应信封解包：优先 data 字段，兼容无信封形状。 */
 function readHierarchyRoot(hierarchy: unknown): unknown {
-  const record = hierarchy && typeof hierarchy === 'object' && !Array.isArray(hierarchy)
-    ? hierarchy as Record<string, unknown>
-    : {};
-  return record.data ?? hierarchy;
+  return readProbeData(hierarchy, 'HIERARCHY_RESPONSE_INVALID');
 }
 
 function componentTypeMatches(actual: string, wanted: string): boolean {

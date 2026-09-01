@@ -37,7 +37,7 @@ async function connectFakeBridge(options: {
           projectId: options.projectId ?? 'project-1',
           projectPath: 'E:/project',
           creatorVersion: '3.8.8',
-          bridgeVersion: '0.1.27',
+          bridgeVersion: '0.6.8',
           capabilities: ['probe.previewOpen']
         }
       }));

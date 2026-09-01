@@ -48,25 +48,10 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 describe('Cocos AI Toolkit 技能契约', () => {
-  it('教授直写档全部四十个工具，且不含已移除的旧工具', async () => {
+  it('教授当前直写档全部四十个工具', async () => {
     const skill = await readFile(skillPath, 'utf8');
     const names = [...new Set(skill.match(/\bcocos_[a-z0-9_]+\b/g) ?? [])].sort();
     expect(names).toEqual(EXPECTED_TOOL_NAMES);
-    for (const removed of [
-      'cocos_prefab_edit',
-      'cocos_prefab_inspect',
-      'cocos_prefab_verify',
-      'cocos_prefab_search',
-      'cocos_asset_create',
-      'cocos_asset_move',
-      'cocos_asset_write_meta',
-      'cocos_asset_delete',
-      'cocos_write_prepare',
-      'cocos_design_apply',
-      'cocos_prefab_save'
-    ]) {
-      expect(names).not.toContain(removed);
-    }
   });
 
   it('只强制 Creator 删除 Prefab，并允许普通资源直接删除', async () => {
@@ -82,12 +67,11 @@ describe('Cocos AI Toolkit 技能契约', () => {
       expect(document).toContain('整文件删除，不是手改 `.meta` JSON');
     }
     expect(skill).toContain('停下并报告阻塞');
-    expect(skill).toContain('直写没有事务和回滚');
+    expect(skill).toContain('直写失败即停');
     expect(skill).toContain('DIRECT_WRITE_VERIFY_FAILED');
     expect(skill).toContain('DIRECT_WRITE_OUTCOME_UNKNOWN');
     expect(skill).toContain('PREFAB_DELETE_CONFIRMATION_REQUIRED');
     expect(skill).toContain('PREFAB_REFERENCES_CONFIRMATION_REQUIRED');
-    expect(skill).toContain('不是批量暂存、事务或回滚');
   });
 
   it('固定 Sprite 默认使用原图尺寸且关闭 Trim', async () => {

@@ -16,7 +16,6 @@ export const BRIDGE_CAPABILITIES = [
   'probe.directWrite',
   'probe.saveDocument',
   'probe.importAsset',
-  'probe.createPrefab',
   'probe.deleteAsset',
   'probe.refreshAsset',
   'probe.previewOpen',

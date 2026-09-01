@@ -22,11 +22,11 @@
 
 .EXAMPLE
     # 从主仓库检出执行（推荐）
-    & E:/xile-workspace/cocos-ai-toolkit/scripts/update-runtime.ps1
+    & E:/xile-workspace/GitHub/cocos-ai-toolkit/scripts/update-runtime.ps1
 
 .EXAMPLE
     # 只同步代码和构建，不动正在运行的 Probe Server
-    & E:/xile-workspace/cocos-ai-toolkit/scripts/update-runtime.ps1 -SkipProbeRestart
+    & E:/xile-workspace/GitHub/cocos-ai-toolkit/scripts/update-runtime.ps1 -SkipProbeRestart
 #>
 param(
     # 运行时 Worktree 路径，与 mcp.json / install-bridge.ps1 的默认约定一致

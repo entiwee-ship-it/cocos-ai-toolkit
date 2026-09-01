@@ -60,10 +60,10 @@ describe('resolveRuntimeWriteValue', () => {
 
   it('从函数形式的 cclegacy.Class 读取属性元数据', () => {
     const attributes = { 'items$_$ctor': VmData };
-    const legacyClass = Object.assign(function LegacyClass() {}, {
+    const classApi = Object.assign(function ClassApi() {}, {
       Attr: { getClassAttrs: () => attributes }
     });
 
-    expect(readRuntimeWriteClassAttributes(legacyClass, class Owner {})).toBe(attributes);
+    expect(readRuntimeWriteClassAttributes(classApi, class Owner {})).toBe(attributes);
   });
 });

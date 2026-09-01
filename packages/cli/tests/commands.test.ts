@@ -65,20 +65,8 @@ describe('parseCommand', () => {
     ])).toThrow('UNKNOWN_ARGUMENT');
   });
 
-  it('已移除的事务、声明式和扫描命令按未知命令拒绝', () => {
-    for (const removed of [
-      ['write-prepare', '--project-id', 'project-1', '--request', '{}'],
-      ['transaction-list', '--project-id', 'project-1'],
-      ['design-inspect', '--project-id', 'project-1'],
-      ['scan-project', '--project-id', 'project-1'],
-      ['prefab-graph', '--project-id', 'project-1'],
-      ['document-snapshot', '--project-id', 'project-1'],
-      ['write-revision', '--project-id', 'project-1'],
-      ['save-report', '--project-id', 'project-1', '--sample', 'legacy'],
-      ['component-schema', '--project-id', 'project-1', '--uuid', 'component-1']
-    ]) {
-      expect(() => parseCommand(removed)).toThrow('UNKNOWN_COMMAND');
-    }
+  it('拒绝未知命令', () => {
+    expect(() => parseCommand(['unknown-command'])).toThrow('UNKNOWN_COMMAND');
   });
 });
 

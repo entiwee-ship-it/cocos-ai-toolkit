@@ -193,7 +193,7 @@ describe('buildComponentTypeSchema', () => {
           visible: true,
           extends: ['cc.Asset']
         },
-        legacyValue: { value: 7 }
+        unknownValue: { value: 7 }
       },
       type: 'cc.MissingScript',
       cid: 'missing-type-id',
@@ -209,7 +209,7 @@ describe('buildComponentTypeSchema', () => {
     expect(schema.unresolved).toEqual(expect.arrayContaining([
       expect.objectContaining({ reason: 'SCRIPT_CLASS_NOT_REGISTERED' }),
       expect.objectContaining({ reason: 'SCRIPT_ASSET_PATH_NOT_FOUND' }),
-      expect.objectContaining({ path: 'properties.legacyValue', reason: 'DECLARED_TYPE_MISSING' })
+      expect.objectContaining({ path: 'properties.unknownValue', reason: 'DECLARED_TYPE_MISSING' })
     ]));
     expect(schema.rawClassAttributes).toMatchObject({ type: 'cc.MissingScript' });
   });

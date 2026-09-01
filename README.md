@@ -128,9 +128,9 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_prefab_delete` | 按 UUID 删除 Prefab 资产；不可回滚，必须精确确认 URL，存在反向引用时需二次确认 |
 | `cocos_asset_import` | 把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入 |
 | `cocos_asset_refresh` | 重新导入资产并尝试触发 TypeScript 编译 |
-| `cocos_batch_write` | 一次直发多项 `node.*` / `component.*` 操作；不接受 `asset.*` / `prefab.*`，只减少 MCP 往返，不是事务且无回滚，失败时 `executedOps` 之前的修改可能已生效 |
+| `cocos_batch_write` | 一次直发多项 `node.*` / `component.*` 操作；不接受 `asset.*` / `prefab.*`，只减少 MCP 往返；失败时 `executedOps` 之前的修改可能已生效 |
 
-节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件按类型解析，兼容 `cc.` 前缀（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。`cocos_prefab_create` 会在直写重开后检查 dirty，必要时自动补一次保存，再确认 `dirty=false`；仍未清除才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`cocos_document_save` 同样以 `DOCUMENT_DIRTY_AFTER_SAVE` 拒绝伪成功。`DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已经执行但保存或验证结局未知，必须先重读状态，确认前禁止重试。直写不提供事务、Revision 前置、Undo 编排或回滚。
+节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件类型接受有无 `cc.` 前缀的写法（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。`cocos_prefab_create` 会在直写重开后检查 dirty，必要时自动补一次保存，再确认 `dirty=false`；仍未清除才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`cocos_document_save` 同样以 `DOCUMENT_DIRTY_AFTER_SAVE` 拒绝伪成功。`DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已经执行但保存或验证结局未知，必须先重读状态，确认前禁止重试。直写失败即停，已执行修改不会自动恢复。
 
 `writeCapabilities` 会在写入前说明当前文档能否直接修改该节点。Prefab 编辑模式下，嵌套实例内容的已知无效写入会以 `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` 拒绝，并返回 `cocos_prefab_open` 的源 Prefab 路由；工具不会自动切换文档。文档身份暂不可判定时保持放行，继续由保存后的逐项重读验证兜底。
 
@@ -145,7 +145,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0`）下的构建产物，入口路径不变。日常保持最新只需要在主仓库检出执行一次：
 
 ```powershell
-& E:/xile-workspace/cocos-ai-toolkit/scripts/update-runtime.ps1
+& E:/xile-workspace/GitHub/cocos-ai-toolkit/scripts/update-runtime.ps1
 ```
 
 脚本依次完成：fetch 远程并让运行时 Worktree 以 detached HEAD 对齐 `origin/master`、依赖变化时 `npm install`、代码变化或产物缺失时全量 `npm run build`、重启 Probe Server、等待 Ready 事件并执行真实 WebSocket `editors` 请求。任一步失败会恢复旧提交、旧构建和原 Probe 运行状态。它不会创建额外本地分支；运行时 Worktree 存在未提交的 tracked 改动时会中止，避免覆盖手工修改。
@@ -230,7 +230,7 @@ CLI 只允许本文列出的只读诊断命令，不提供任意 JavaScript 执�
 - 不允许执行任意 JavaScript。
 - 正式 Bridge 不注册任意 `Editor.Message` 或 cce 门面调试入口；临时调试探针不属于运行时能力。
 - 裸启动只暴露只读工具；写工具仅当显式 `--enable-writes` 启动时注册。
-- **直写不提供事务和回滚**：每个写操作执行 + 自动保存 + 逐项重读即结束；失败即停，已生效的修改保留在文档中。误操作的还原手段是 git。
+- 每个直写操作执行、自动保存并逐项重读；失败即停，已生效的修改保留在文档中。误操作的还原手段是 git。
 - 写后逐项重读是唯一生效性防线：Creator 对部分写入会静默不生效（如预制体编辑模式下嵌套实例内部），重读不符会显式报错。
 - 外部进程不得直接修改 `.prefab`、`.scene` 或 `.meta` JSON 内容；只有 `.prefab` 删除必须经过 Creator/MCP，非 Prefab 资源文件可直接删除并同时删除同名 `.meta`。
 - Creator 3.8.x 小版本变化必须通过真实验证，不允许推测兼容；当前结论严格限定 3.8.8。

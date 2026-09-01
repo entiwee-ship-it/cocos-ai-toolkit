@@ -1,6 +1,6 @@
 {
   "name": "@cocos-ai/cli",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "private": true,
   "type": "module",
   "bin": {
@@ -12,8 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cocos-ai/client": "0.6.7",
-    "@cocos-ai/protocol": "0.6.7",
+    "@cocos-ai/client": "0.6.8",
+    "@cocos-ai/protocol": "0.6.8",
     "zod": "^4.3.6"
   }
 }

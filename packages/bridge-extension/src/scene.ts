@@ -291,7 +291,7 @@ function readOptionalOperationString(operation: WriteOperation, field: string): 
 
 async function probeComponent(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
-  const componentRequest = 'request' in input ? input.request : input;
+  const componentRequest = readObject(input.request);
   const uuid = requireUuid(componentRequest);
   const scriptPathsByUuid = readScriptPathsByUuid(input.scriptPathsByUuid);
   const raw = await Editor.Message.request('scene', 'query-component', uuid);
@@ -490,36 +490,6 @@ async function deleteAsset(request: unknown): Promise<unknown> {
 }
 
 /**
- * 从场景节点生成预制体资产（cce.SceneFacadeManager.createPrefab）。
- * 对既有路径先拒绝，避免触发 Creator"文件已存在"模态框无限阻塞。
- */
-async function createPrefabFromNode(request: unknown): Promise<unknown> {
-  const input = readObject(unwrapRequest(request));
-  const nodeUuid = typeof input.nodeUuid === 'string' && input.nodeUuid ? input.nodeUuid : null;
-  const assetUrl = typeof input.assetUrl === 'string' && input.assetUrl ? input.assetUrl : null;
-  if (!nodeUuid) throw new ProbeError('NODE_UUID_REQUIRED');
-  if (!assetUrl) throw new ProbeError('ASSET_URL_REQUIRED');
-  const existing = await Editor.Message.request('asset-db', 'query-asset-info', assetUrl);
-  if (existing) {
-    throw new ProbeError('ASSET_ALREADY_EXISTS', { assetUrl });
-  }
-  const cce = readObject((globalThis as Record<string, unknown>).cce);
-  const facade = cce.SceneFacadeManager ?? cce.sceneFacadeManager ?? cce.SceneFacade ?? cce.sceneFacade;
-  const owner = facade && (typeof facade === 'object' || typeof facade === 'function')
-    ? facade as Record<string, unknown>
-    : null;
-  if (!owner || typeof owner.createPrefab !== 'function') {
-    throw new ProbeError('CREATOR_CREATE_PREFAB_UNAVAILABLE');
-  }
-  const assetUuid = await (owner.createPrefab as (uuid: string, url: string) => Promise<unknown>)
-    .call(owner, nodeUuid, assetUrl);
-  if (typeof assetUuid !== 'string' || !assetUuid) {
-    throw new ProbeError('CREATE_PREFAB_FAILED', { nodeUuid, assetUrl });
-  }
-  return { assetUuid, assetUrl };
-}
-
-/**
  * 恢复主进程传入的脚本 UUID 路径 Map。
  *
  * @param value UUID、路径元组数组。
@@ -565,7 +535,6 @@ export const methods = {
   probePrefab,
   writeExecute,
   saveDocument,
-  createPrefabFromNode,
   deleteAsset,
   refreshAsset
 };

@@ -14,7 +14,7 @@ import {
 import { importAsset } from './import-asset';
 import { createProbeServerBootstrap, type ProbeBootstrapResult } from './probe-bootstrap';
 
-const BRIDGE_VERSION = '0.6.7';
+const BRIDGE_VERSION = '0.6.8';
 const BRIDGE_BUILD_ID = readBridgeBuildId(__dirname);
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
@@ -71,11 +71,10 @@ export function load(): void {
         await Editor.Message.request('asset-db', 'open-asset', request.uuid);
         return { opened: true, uuid: request.uuid };
       },
-  // 直写入口：直接驱动 Scene 写执行器（原子写 + 保存 + 逐项重读）。
+      // 直写入口：直接驱动 Scene 写执行器（原子写 + 保存 + 逐项重读）。
       'probe.directWrite': (payload) => forwardDirectWrite(payload),
       'probe.saveDocument': () => forwardToScene('saveDocument', {}),
       'probe.importAsset': (payload) => invalidateAfterAssetWrite(importAsset(payload)),
-      'probe.createPrefab': (payload) => invalidateAfterAssetWrite(forwardToScene('createPrefabFromNode', payload)),
       'probe.deleteAsset': (payload) => invalidateAfterAssetWrite(forwardToScene('deleteAsset', payload)),
       'probe.refreshAsset': (payload) => invalidateAfterAssetWrite(forwardToScene('refreshAsset', payload)),
       'probe.previewOpen': () => openPreviewServer(editorPreviewMessageSource, nodeHttpPreviewProbe),

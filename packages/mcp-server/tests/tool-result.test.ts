@@ -25,14 +25,14 @@ describe('MCP structured tool errors', () => {
     expect(result.content[0].text).toContain('等待自动恢复后重试');
   });
 
-  it('遗留 CODE:details 异常只在统一适配层提取稳定 code', () => {
+  it('从本地 CODE:details 错误提取稳定 code', () => {
     expect(normalizeToolError(new Error('NODE_NOT_FOUND:node-1'))).toMatchObject({
       code: 'NODE_NOT_FOUND',
       retryable: false
     });
   });
 
-  it('成功值仍保留文本与 structuredContent 兼容结果', async () => {
+  it('成功值同时返回人读文本与 structuredContent', async () => {
     await expect(toToolResult(Promise.resolve({ ok: true }))).resolves.toMatchObject({
       structuredContent: { ok: true },
       content: [{ type: 'text', text: '{"ok":true}' }]

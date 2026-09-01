@@ -425,39 +425,6 @@ function readScenarioSteps(value: string): ScenarioStep[] {
   }
 }
 
-function requireRelativeJsonPath(value: string, errorCode: string): string {
-  const segments = value.split(/[\\/]+/);
-  const fileName = segments[segments.length - 1]?.toLowerCase();
-  if (
-    !value
-    || value.includes('\0')
-    || value.includes(':')
-    || value.startsWith('/')
-    || value.startsWith('\\')
-    || segments.includes('..')
-    || !fileName?.endsWith('.json')
-    || fileName === '.json'
-  ) {
-    throw new Error(errorCode);
-  }
-  return value;
-}
-
-function readOptionalInteger(
-  flags: Map<string, string>,
-  name: string,
-  minimum: number,
-  maximum: number,
-  errorCode: string
-): number | undefined {
-  if (!flags.has(name)) return undefined;
-  const value = Number(flags.get(name));
-  if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(errorCode);
-  }
-  return value;
-}
-
 function readOptionalBoolean(
   flags: Map<string, string>,
   name: string,

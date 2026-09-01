@@ -67,11 +67,11 @@ export function normalizePrefabInstanceSummary(rawValue: unknown) {
 }
 
 /**
- * 把 Creator query-component Dump 转换为兼容旧探针并携带完整 Schema 的组件结构。
+ * 把 Creator query-component Dump 转换为当前 Bridge 组件结构并携带完整 Schema。
  *
  * @param rawValue Creator 返回的组件 Dump。
  * @param scriptPathsByUuid 脚本资产 UUID 到 db URL 或磁盘路径的索引。
- * @param includeRaw 是否附加组件原始 Dump；默认保留以兼容完整读取。
+ * @param includeRaw 是否附加组件原始 Dump；默认用于完整读取。
  * @returns 组件身份、类信息、属性摘要、完整 Schema 和未解析项；includeRaw 为 true 时附带原始 Dump。
  */
 export function normalizeComponentDump(

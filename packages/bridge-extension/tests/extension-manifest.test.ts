@@ -15,16 +15,15 @@ describe('bridge extension manifest', () => {
 
     expect(manifest.main).toBe('./dist/main.js');
     expect(manifest.contributions?.scene?.script).toBe('./dist/scene.js');
-    for (const removed of [
-      'probe-document-snapshot',
-      'probe-write-prepare',
-      'probe-write-confirm',
-      'probe-transaction-status',
-      'probe-transaction-list',
-      'probe-transaction-rollback'
-    ]) {
-      expect(manifest.contributions?.messages).not.toHaveProperty(removed);
-    }
+    expect(Object.keys(manifest.contributions?.messages ?? {}).sort()).toEqual([
+      'probe-asset-index',
+      'probe-assets',
+      'probe-component',
+      'probe-editor-state',
+      'probe-hierarchy',
+      'probe-node',
+      'probe-prefab'
+    ]);
   });
 
   it('为 Creator 本地扩展管理器提供双语摘要和详情元数据', () => {

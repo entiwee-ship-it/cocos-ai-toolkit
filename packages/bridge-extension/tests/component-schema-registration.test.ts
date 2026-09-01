@@ -26,7 +26,7 @@ describe('component schema registration', () => {
     expect(mainSource).toContain("forwardToScene('probeComponent', {");
     expect(mainSource).toContain('scriptPathsByUuid');
     expect(mainSource).toContain('readScriptPathsBestEffort');
-    expect(sceneSource).toContain("const componentRequest = 'request' in input ? input.request : input;");
+    expect(sceneSource).toContain('const componentRequest = readObject(input.request);');
     expect(sceneSource).toContain('normalizeComponentDump(raw, scriptPathsByUuid)');
   });
 

@@ -1,5 +1,5 @@
 /**
- * 直写架构的共享写类型。事务管理器、回滚、Revision 前置已移除，
+ * 直写架构的共享写类型。
  * 写路径为：MCP/CLI → probe.directWrite → Scene writeExecute → 原子写 + 保存 + 逐项重读。
  */
 
