@@ -19,7 +19,7 @@ describe('saveAndVerifyDirectWrite', () => {
       dependencies
     );
 
-    expect(dependencies.calls).toEqual(['saveDocument', 'reloadDocument']);
+    expect(dependencies.calls).toEqual(['saveDocument']);
     expect(report.passed).toBe(true);
     expect(report.items).toHaveLength(2);
     expect(report.items.every((item) => item.passed)).toBe(true);
@@ -428,7 +428,7 @@ describe('saveAndVerifyDirectWrite', () => {
     expect(report.items[0]).toMatchObject({ passed: true });
   });
 
-  it('prefab.instance_override 重载后用稳定路径和 FileID 重定位新 UUID', async () => {
+  it('prefab.instance_override 保存后用稳定路径和 FileID 重定位新 UUID', async () => {
     const dependencies = createDependencies();
     dependencies.getPrefabInstanceInfo = async (nodeUuid) => nodeUuid === 'instance-new'
       ? prefabInfo({
@@ -524,13 +524,14 @@ describe('saveAndVerifyDirectWrite', () => {
     }], dependencies);
 
     expect(report.passed).toBe(true);
+    expect(dependencies.calls).toEqual(['saveDocument', 'reloadDocument']);
     expect(report.items[0].actual).toMatchObject({
       overrideRemoved: true,
       restoredValue: 'Source Value'
     });
   });
 
-  it('node.rename 重载后用稳定路径验证新 UUID', async () => {
+  it('node.rename 保存后用稳定路径验证新 UUID', async () => {
     const dependencies = createDependencies();
     dependencies.getNodeInfo = async () => null;
     dependencies.getNodeInfoByStablePath = async (stablePath) => stablePath === '/Scene~0/Renamed~0'
@@ -594,7 +595,7 @@ describe('saveAndVerifyDirectWrite', () => {
     expect(report.items[0]).toMatchObject({ expected: 'parent-new', actual: 'parent-new', passed: true });
   });
 
-  it('node.delete 重载后仍能用删除前稳定路径发现残留节点', async () => {
+  it('node.delete 保存后仍能用删除前稳定路径发现残留节点', async () => {
     const dependencies = createDependencies();
     dependencies.getNodeInfo = async () => null;
     dependencies.getNodeInfoByStablePath = async () => ({ uuid: 'node-new', name: 'StillHere' });
@@ -613,7 +614,7 @@ describe('saveAndVerifyDirectWrite', () => {
     expect(report.items[0].actual).toBe('节点仍存在');
   });
 
-  it('component.set_property 重载后用节点路径和组件序号读取新 UUID', async () => {
+  it('component.set_property 保存后用节点路径和组件序号读取新 UUID', async () => {
     const dependencies = createDependencies();
     dependencies.getComponentInfo = async () => null;
     dependencies.getComponentInfoByStableLocator = async () => ({
@@ -639,7 +640,7 @@ describe('saveAndVerifyDirectWrite', () => {
     expect(report.passed).toBe(true);
   });
 
-  it('component.remove 重载后仍能用稳定 locator 发现残留组件', async () => {
+  it('component.remove 保存后仍能用稳定 locator 发现残留组件', async () => {
     const dependencies = createDependencies();
     dependencies.getComponentInfo = async () => null;
     dependencies.getComponentInfoByStableLocator = async () => ({

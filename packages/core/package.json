@@ -1,6 +1,6 @@
 {
   "name": "@cocos-ai/core",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -18,7 +18,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cocos-ai/protocol": "0.6.3",
+    "@cocos-ai/protocol": "0.6.4",
     "pngjs": "^7.0.0"
   },
   "devDependencies": {

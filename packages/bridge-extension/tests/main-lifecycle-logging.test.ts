@@ -72,7 +72,7 @@ describe('Bridge 扩展生命周期控制台日志', () => {
     const loadMessage = editorLog.mock.calls[0][0] as string;
     const loadDetails = JSON.parse(loadMessage.slice(loadMessage.indexOf('{'))) as Record<string, unknown>;
     expect(loadDetails).toMatchObject({
-      扩展版本: '0.6.3',
+      扩展版本: '0.6.4',
       Creator版本: '3.8.8',
       项目ID: 'project-id',
       项目路径: 'E:/project',

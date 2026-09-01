@@ -23,7 +23,7 @@ export type VerifiedOperation = (NodeWriteOpResult | ComponentWriteOpResult | Pr
 };
 
 /**
- * 重读验证依赖。saveDocument/reloadDocument 复用 Creator 保存与关闭重开（或等价刷新），
+ * 重读验证依赖。saveDocument 持久化写入；reloadDocument 仅用于 Prefab 语义操作的身份与源值确认。
  * 读取依赖复用当前文档快照链路（Scene query-node/query-component）。
  */
 export interface WriteVerifierDependencies {
@@ -74,7 +74,9 @@ export async function saveAndVerifyDirectWrite(
   const hasChanges = executed.some((operation) => operation.changed !== false);
   if (request.save && hasChanges) {
     await dependencies.saveDocument();
-    await dependencies.reloadDocument();
+    if (executed.some(requiresDocumentReload)) {
+      await dependencies.reloadDocument();
+    }
   }
 
   for (let index = 0; index < executed.length; index += 1) {
@@ -86,6 +88,12 @@ export async function saveAndVerifyDirectWrite(
     verifiedAt: new Date().toISOString(),
     items
   };
+}
+
+/** Prefab 语义操作保留重载验证；普通节点、组件和资产写入保存后直接重读。 */
+function requiresDocumentReload(executed: VerifiedOperation): boolean {
+  return executed.changed !== false
+    && executed.operation.type.startsWith('prefab.');
 }
 
 async function verifyOperation(

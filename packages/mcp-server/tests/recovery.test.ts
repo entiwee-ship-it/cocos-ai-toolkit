@@ -18,7 +18,7 @@ describe('MCP 与 Probe 后端恢复', () => {
     const probeClient = new ProbeClient(`ws://127.0.0.1:${port}`, 2_000, undefined, 10, 50);
     const server = createCocosMcpServer({ probeClient }, { enableWrites: true });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: 'recovery-test-client', version: '0.6.3' });
+    const client = new Client({ name: 'recovery-test-client', version: '0.6.4' });
     const [runtime] = await Promise.all([
       startMcpRuntime({ probeClient, server, transport: serverTransport }),
       client.connect(clientTransport)
@@ -44,7 +44,7 @@ describe('MCP 与 Probe 后端恢复', () => {
             projectId: 'project-1',
             projectPath: 'E:/project',
             creatorVersion: '3.8.8',
-            bridgeVersion: '0.6.3',
+            bridgeVersion: '0.6.4',
             bridgeBuildId: 'sha256:test',
             capabilities: []
           }
