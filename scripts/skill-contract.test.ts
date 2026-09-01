@@ -98,6 +98,21 @@ describe('Cocos AI Toolkit 技能契约', () => {
     expect(skill).toContain('不得自行修改 `UITransform.contentSize`');
   });
 
+  it('技能和 README 都要求打开前保护 dirty 文档并验证创建与保存后的 clean 状态', async () => {
+    const [skill, readme] = await Promise.all([
+      readFile(skillPath, 'utf8'),
+      readFile(readmePath, 'utf8')
+    ]);
+
+    for (const document of [skill, readme]) {
+      expect(document).toContain('DOCUMENT_SAVE_REQUIRED');
+      expect(document).toContain('DOCUMENT_DIRTY_AFTER_PREFAB_CREATE');
+      expect(document).toContain('DOCUMENT_DIRTY_AFTER_SAVE');
+    }
+    expect(skill).toContain('工具不得先切换文档或触发原生保存框');
+    expect(skill).toContain('dirty 时补保存');
+  });
+
   it('技能和 README 都明确 batch 只允许节点与组件操作', async () => {
     const [skill, readme] = await Promise.all([
       readFile(skillPath, 'utf8'),

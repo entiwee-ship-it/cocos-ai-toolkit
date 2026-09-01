@@ -16,10 +16,12 @@
 2. `cocos_editor_state`：确认当前文档 UUID、dirty、Scene/AssetDB ready。
 3. `cocos_asset_search`：按名称或路径寻找 Prefab、Scene、脚本 UUID；搜索在 Bridge 内分页并复用短缓存，不再把全量索引传给 MCP。
 4. `cocos_asset_inspect`：按 UUID 直接读取资产类型、URL、依赖和反向使用者，不需要先调用或传输完整资产索引。
-5. `cocos_prefab_open` 或 `cocos_scene_open`：通过 Creator 打开目标文档并等待身份就绪。
+5. `cocos_prefab_open` 或 `cocos_scene_open`：仅在当前文档 clean 时打开目标文档；收到 `DOCUMENT_SAVE_REQUIRED` 时先调用 `cocos_document_save`，确认 dirty 已清除后再重试。
 6. `cocos_hierarchy`：优先传 `summary`、`fields` 或 `query` 读取紧凑节点树；`cocos_node_read` 优先使用 `summary/fields/propertyPaths` 查看单节点；多节点使用 `cocos_nodes_read`。这些投影会在 Bridge 内直接省略结构 raw；完整无投影调用仍保留旧返回，并可用 `maxOutputBytes` 调整 Bridge 发送前预算。
 7. 调用写工具；成功响应中的 `outcome.verification.items` 是保存后重读证据。
-8. 手工编辑后需要显式落盘时调用 `cocos_document_save`。
+8. 手工编辑后需要显式落盘时调用 `cocos_document_save`；工具会重读并确认 dirty 已清除。
+
+`cocos_prefab_create` 复用直写通道执行 `prefab.create_from_node`，自动保存并重开验证重建后的 Prefab 实例；若重开后 dirty，会自动补一次保存并再次确认 clean，仍 dirty 才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`cocos_document_save` 保存后仍 dirty 会返回 `DOCUMENT_DIRTY_AFTER_SAVE`，都不能当成成功。
 9. 需要视觉或交互验证时运行 Preview 工具，最后用 `cocos_preview_stop` 清理会话。
 
 Probe 未启动时 MCP 仍会正常注册 40 个工具；`cocos_editor_list` 返回空 `editors` 和 `backend` 连接状态。Creator Bridge 拉起 Probe 后，同一 MCP 任务会自动恢复，不需要重新加载工具表。其它工具在后端离线时通过 `structuredContent.error.code=PROBE_SERVER_UNAVAILABLE` 返回可重试错误。
@@ -69,6 +71,9 @@ Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读
 | --- | --- |
 | `EDITOR_INSTANCE_NOT_FOUND` | 启动 Creator/Bridge，重新调用 `cocos_editor_list`。 |
 | `MULTIPLE_EDITOR_INSTANCES` | 补传 `editorInstanceId`。 |
+| `DOCUMENT_SAVE_REQUIRED` | 当前文档 dirty，工具未切换目标文档；先调用 `cocos_document_save`，确认 clean 后重试。 |
+| `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE` | Prefab 直写已执行，但文档 clean 校验失败；先保存并重读，确认前不要重复创建同一路径。 |
+| `DOCUMENT_DIRTY_AFTER_SAVE` | Creator 接受了保存请求但 dirty 未清除；检查当前文档与原生保存提示后再保存。 |
 | `NODE_ADDRESS_EXCLUSIVE` | UUID/path 只保留一个。 |
 | `NODE_NOT_FOUND` | 重新读取 hierarchy，不要复用旧 UUID。 |
 | `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` | 读取 `writeCapabilities` 和错误中的 `route`，确认后用 `cocos_prefab_open` 打开源 Prefab；不要原地重试。 |

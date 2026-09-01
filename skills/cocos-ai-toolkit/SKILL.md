@@ -20,10 +20,10 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 1. `cocos_editor_list` 发现在线项目（按 projectPath 选择；同项目多实例时传 editorInstanceId）。Probe 离线时仍会返回空 editors 和 backend 状态；Bridge 启动 Probe 后同一任务自动恢复。
 2. `cocos_editor_state` 确认当前文档 UUID、dirty 和 Scene/AssetDB ready。
 3. `cocos_asset_search` 按名称/路径找 Prefab、Scene 或脚本 UUID（Bridge 内分页并复用短缓存）；`cocos_asset_inspect` 按 UUID 直接看类型、URL、依赖和 users，不要先取全量索引。
-4. `cocos_prefab_open` / `cocos_scene_open` 打开目标文档，等待身份就绪。
+4. `cocos_prefab_open` / `cocos_scene_open` 仅在当前文档 clean 时打开目标文档。若返回 `DOCUMENT_SAVE_REQUIRED`，先调用 `cocos_document_save`，确认 dirty 已清除后再重试；工具不得先切换文档或触发原生保存框。
 5. `cocos_hierarchy` 优先传 summary/fields/query 做紧凑寻址；`cocos_node_read` 优先用 summary/fields/propertyPaths 看节点；多节点用 `cocos_nodes_read`。这些投影会在 Bridge 内省略结构 raw；只有明确需要完整诊断时才使用无投影读取，必要时用 `maxOutputBytes` 调整 Bridge 发送前预算。
 6. 写入：每步自动保存并逐项重读回显，响应里的 `verification.items` 就是生效证据。
-7. 手工修改后显式落盘用 `cocos_document_save`。
+7. 手工修改后显式落盘用 `cocos_document_save`；成功响应必须证明 dirty 已清除。
 8. 需要视觉确认时：`cocos_preview_launch` 启动预览 → `cocos_runtime_capture` 截图 → `cocos_preview_stop` 收尾。
 
 ## Sprite 默认配置
@@ -49,9 +49,9 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | 改组件属性值 | `cocos_component_set_property`（propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致会拒绝写入） |
 | 实例化 Prefab | `cocos_prefab_instantiate`（prefabUuid + parentUuid/parentPath 二选一；保存重开后返回 nodeUuid、instanceFileId 和 stablePath） |
 | 移除 Prefab 关联 | `cocos_prefab_unpack`（nodeUuid/path 二选一；current 仅当前关联，complete 递归移除嵌套关联；必须传 expectedPrefabAssetUuid） |
-| 节点生成 Prefab | `cocos_prefab_create`（assetUrl 必须 `db://assets/` 且 `.prefab` 后缀） |
+| 节点生成 Prefab | `cocos_prefab_create`（assetUrl 必须 `db://assets/` 且 `.prefab` 后缀；自动保存、重开，dirty 时补保存，再验证重建实例、资产身份和 clean 状态） |
 | 重命名 Prefab | `cocos_prefab_rename`（uuid + 不含路径和 `.prefab` 后缀的 newName；Creator AssetDB 保持 UUID 并拒绝覆盖） |
-| 保存当前文档 | `cocos_document_save`（Prefab/Scene 通用；写工具已自动保存，此入口用于手工改动落盘） |
+| 保存当前文档 | `cocos_document_save`（Prefab/Scene 通用；写工具已自动保存，此入口用于手工改动落盘并验证 dirty 已清除） |
 | 删除 Prefab | `cocos_prefab_delete`（不可回滚；传精确 `confirmAssetUrl`，有引用时再传 `confirmReferenced:true`） |
 | 导入外部文件 | `cocos_asset_import`（图片/音频等，复制进 assets 并导入） |
 | 重导入+触发编译 | `cocos_asset_refresh`（脚本改动后调用） |
@@ -69,6 +69,8 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 - Creator 对部分写入会静默不生效（典型：预制体编辑模式下嵌套实例内部）。工具写完会逐项重读，重读不符报 `DIRECT_WRITE_VERIFY_FAILED`——看到这个错不要当成已写入，换路径（如打开内层 Prefab 直接改）再写。
 - `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT`——当前 Prefab 只承载嵌套实例，目标内容必须路由到源 Prefab；按错误中的 `route` 重新打开和读取，禁止原地重试。
 - `DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已执行但保存/验证结局未知；先重读当前文档状态，确认前禁止重试。
+- `DOCUMENT_SAVE_REQUIRED` 表示当前文档 dirty，打开工具尚未切换目标文档；先保存，确认 clean 后再重试。
+- `cocos_prefab_create` 重开后若仍 dirty 会自动补保存；补保存后仍 dirty 才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`DOCUMENT_DIRTY_AFTER_SAVE` 同样不能当成成功；先重读并处理当前文档，确认前不要重复创建同一路径 Prefab。
 - 运行期节点/组件 UUID 每次重开文档都会变，禁止缓存；每个编辑会话内现取 hierarchy。
 - 连续多处修改时按"先读后写、逐项确认"推进；`cocos_batch_write` 仅接受 `node.*` 与 `component.*` 操作，是单次请求直发多项操作，不是批量暂存、事务或回滚。
 - 错误码都带下一步指引：`NODE_NOT_FOUND` 重取 hierarchy、`COMPONENT_NOT_FOUND` 会附可用组件清单、`ASSET_NOT_PREFAB` / `ASSET_NOT_SCENE` 用 asset_inspect 核对类型、`ASSET_ALREADY_EXISTS` 换 URL；Prefab 删除先处理 `PREFAB_DELETE_CONFIRMATION_REQUIRED`，有引用再处理 `PREFAB_REFERENCES_CONFIRMATION_REQUIRED`。

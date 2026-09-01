@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const releaseVersion = '0.6.6';
+const releaseVersion = '0.6.7';
 const workspacePackagePaths = [
   'packages/bridge-extension',
   'packages/cli',

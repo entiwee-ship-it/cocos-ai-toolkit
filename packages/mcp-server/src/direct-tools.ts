@@ -426,6 +426,19 @@ export class CocosDirectToolService {
     typeError: string,
     readinessError: string
   ) {
+    const { state: currentState } = await this.readonlyService.readEditorState(input);
+    if (currentState.document.dirty) {
+      throw {
+        code: 'DOCUMENT_SAVE_REQUIRED',
+        message: '当前文档有未保存修改，禁止切换文档',
+        details: {
+          currentDocumentUuid: currentState.document.assetUuid,
+          targetDocumentUuid: input.uuid
+        },
+        nextAction: '先调用 cocos_document_save，确认 dirty=false 后重试打开目标文档。',
+        retryable: false
+      };
+    }
     const opened = await this.readonlyService.openAsset(input);
     if (opened.asset.type !== expectedType) {
       throw new Error(`${typeError}:${input.uuid}`);
@@ -663,11 +676,53 @@ export class CocosDirectToolService {
       { nodeUuid: input.sourceNodeUuid, path: input.sourcePath },
       'sourceNode'
     );
-    const result = await this.readonlyService.requestBridge(editor, 'probe.createPrefab', {
+    const writeResult = await this.directWrite(editor, [{
+      type: 'prefab.create_from_node',
       nodeUuid,
       assetUrl: input.assetUrl
-    });
-    return { editor, result };
+    }]);
+    let state = (await this.readonlyService.readEditorState(input)).state;
+    if (state.document.dirty) {
+      await this.readonlyService.requestBridge(editor, 'probe.saveDocument', {});
+      state = (await this.readonlyService.readEditorState(input)).state;
+    }
+    if (state.document.dirty) {
+      throw {
+        code: 'DOCUMENT_DIRTY_AFTER_PREFAB_CREATE',
+        message: 'Prefab 创建完成后当前文档仍处于未保存状态',
+        details: {
+          currentDocumentUuid: state.document.assetUuid,
+          sourceNodeUuid: nodeUuid,
+          assetUrl: input.assetUrl,
+          evidence: writeResult.outcome.evidence ?? null
+        },
+        nextAction: '先调用 cocos_document_save 并重读状态；确认结果前不要重复创建同一路径 Prefab。',
+        retryable: false
+      };
+    }
+
+    const evidenceEntry = Array.isArray(writeResult.outcome.evidence)
+      ? writeResult.outcome.evidence[0]
+      : null;
+    const evidence = evidenceEntry && typeof evidenceEntry === 'object' && !Array.isArray(evidenceEntry)
+      ? evidenceEntry as Record<string, unknown>
+      : null;
+    const assetUuid = typeof evidence?.assetUuid === 'string' ? evidence.assetUuid : null;
+    const rebuiltNodeUuid = typeof evidence?.nodeUuid === 'string' ? evidence.nodeUuid : null;
+    if (!assetUuid || !rebuiltNodeUuid) {
+      throw new Error(`PREFAB_CREATE_RESULT_INVALID:${JSON.stringify(writeResult.outcome.evidence ?? null)}`);
+    }
+
+    return {
+      ...writeResult,
+      result: {
+        created: true,
+        assetUuid,
+        assetUrl: input.assetUrl,
+        nodeUuid: rebuiltNodeUuid
+      },
+      state
+    };
   }
 
   /** 通过 Creator AssetDB 在原目录内重命名 Prefab，并保持原 UUID。 */
@@ -695,7 +750,17 @@ export class CocosDirectToolService {
   async saveDocument(input: ProjectSelector) {
     const editor = await this.readonlyService.resolveEditor(input);
     const result = await this.readonlyService.requestBridge(editor, 'probe.saveDocument', {});
-    return { editor, result };
+    const { state } = await this.readonlyService.readEditorState(input);
+    if (state.document.dirty) {
+      throw {
+        code: 'DOCUMENT_DIRTY_AFTER_SAVE',
+        message: '保存请求完成后当前文档仍处于未保存状态',
+        details: { currentDocumentUuid: state.document.assetUuid },
+        nextAction: '检查 Creator 当前文档与原生保存提示，处理后重新调用 cocos_document_save。',
+        retryable: false
+      };
+    }
+    return { editor, result, state };
   }
 
   /** 删除 Prefab 资产；要求精确 URL 确认，存在引用时要求二次确认。 */
@@ -1476,7 +1541,7 @@ export function registerCocosDirectReadonlyTools(
   }, async (input) => toToolResult(service.readNodes(input)));
 
   server.registerTool('cocos_prefab_open', {
-    description: '通过 Creator 打开 Prefab 并等待文档身份就绪；PREFAB_OPEN_NOT_READY 时核对 UUID 后重试。',
+    description: '当前文档 clean 时通过 Creator 打开 Prefab 并等待身份就绪；dirty 时先返回 DOCUMENT_SAVE_REQUIRED，保存后再重试。',
     inputSchema: {
       ...ProjectSelectorInput,
       uuid: z.string().min(1)
@@ -1486,7 +1551,7 @@ export function registerCocosDirectReadonlyTools(
   }, async (input) => toToolResult(service.openPrefab(input)));
 
   server.registerTool('cocos_scene_open', {
-    description: '通过 Creator 打开 Scene 并等待文档身份就绪；ASSET_NOT_SCENE 时核对 UUID。',
+    description: '当前文档 clean 时通过 Creator 打开 Scene 并等待身份就绪；dirty 时先返回 DOCUMENT_SAVE_REQUIRED，保存后再重试。',
     inputSchema: {
       ...ProjectSelectorInput,
       uuid: z.string().min(1)
@@ -1622,7 +1687,7 @@ export function registerCocosDirectWriteTools(
   }, async (input) => toToolResult(service.unpackPrefab(input)));
 
   server.registerTool('cocos_prefab_create', {
-    description: '把当前文档中的节点生成为 Prefab 资产；ASSET_ALREADY_EXISTS 时换 URL。',
+    description: '把当前文档节点生成为 Prefab，自动保存、重开并在 dirty 时补保存，再验证重建实例与 clean 状态；ASSET_ALREADY_EXISTS 时换 URL。',
     inputSchema: {
       ...ProjectSelectorInput,
       assetUrl: z.string().min(1),
@@ -1645,7 +1710,7 @@ export function registerCocosDirectWriteTools(
   }, async (input) => toToolResult(service.renamePrefab(input)));
 
   server.registerTool('cocos_document_save', {
-    description: '保存当前文档（直写工具已自动保存，此入口用于手工修改后的落盘）。',
+    description: '保存当前文档并重读确认 dirty 已清除（直写工具已自动保存，此入口用于手工修改后的落盘）。',
     inputSchema: ProjectSelectorInput,
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS

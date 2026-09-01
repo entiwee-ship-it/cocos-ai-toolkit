@@ -250,6 +250,35 @@ const DIRECT_WRITE_SUCCESS = {
   }
 };
 
+const PREFAB_CREATE_SUCCESS = {
+  kind: 'success',
+  executedOps: 1,
+  verification: {
+    passed: true,
+    verifiedAt: '2026-09-01T00:00:00.000Z',
+    items: [{
+      operationIndex: 0,
+      description: '从节点生成预制体',
+      expected: '节点已关联预制体资产',
+      actual: 'new-prefab-uuid',
+      passed: true
+    }]
+  },
+  evidence: [{
+    operation: {
+      type: 'prefab.create_from_node',
+      nodeUuid: 'panel-uuid',
+      assetUrl: 'db://assets/ui/New.prefab',
+      resultNodeUuid: 'rebuilt-node-uuid',
+      resultAssetUuid: 'new-prefab-uuid'
+    },
+    nodeUuid: 'rebuilt-node-uuid',
+    assetUuid: 'new-prefab-uuid',
+    before: null,
+    after: null
+  }]
+};
+
 function createRespond(overrides: Record<string, unknown> = {}) {
   return (method: string, _payload?: unknown): unknown => {
     if (method === 'server.editors') return [ONLINE_EDITOR];
@@ -625,6 +654,36 @@ describe('直写档只读工具', () => {
       method: 'probe.assets',
       payload: expect.objectContaining({ params: { uuid: 'prefab-uuid-1', detailsOnly: true } })
     }));
+  });
+
+  it('cocos_prefab_open 在当前文档 dirty 时拒绝切换且不读取目标资产', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.editorState': {
+        ...EDITOR_STATE,
+        document: { assetUuid: 'dirty-scene-uuid', dirty: true }
+      }
+    }));
+    const { client } = await createHarness(probeClient);
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_open',
+      arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1' }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: 'DOCUMENT_SAVE_REQUIRED',
+        details: {
+          currentDocumentUuid: 'dirty-scene-uuid',
+          targetDocumentUuid: 'prefab-uuid-1'
+        },
+        nextAction: expect.stringContaining('cocos_document_save')
+      }
+    });
+    const methods = probeClient.requests.map((request) => request.method);
+    expect(methods).not.toContain('probe.openAsset');
+    expect(methods).not.toContain('probe.assets');
   });
 
   it('cocos_prefab_open 对非 Prefab 资产拒绝', async () => {
@@ -1884,8 +1943,24 @@ describe('直写档写工具', () => {
     expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
-  it('cocos_prefab_create 转发 probe.createPrefab', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
+  it('cocos_prefab_create 复用直写链路并在重开后 dirty 时补保存', async () => {
+    let savedAfterReload = false;
+    const respond = createRespond({
+      'probe.directWrite': PREFAB_CREATE_SUCCESS
+    });
+    const probeClient = new RecordingProbeClient((method, payload) => {
+      if (method === 'probe.editorState') {
+        return {
+          ...EDITOR_STATE,
+          document: { assetUuid: 'prefab-uuid-1', dirty: !savedAfterReload }
+        };
+      }
+      if (method === 'probe.saveDocument') {
+        savedAfterReload = true;
+        return { saved: true };
+      }
+      return respond(method, payload);
+    });
     const { client } = await createHarness(probeClient, { enableWrites: true });
 
     const result = await client.callTool({
@@ -1896,13 +1971,86 @@ describe('直写档写工具', () => {
         sourcePath: 'Root/Panel'
       }
     });
-    expect(result.structuredContent).toMatchObject({ result: { created: true } });
-    expect(probeClient.requests.at(-1)).toMatchObject({
-      method: 'probe.createPrefab',
+
+    expect(result.structuredContent).toMatchObject({
+      outcome: { kind: 'success', verification: { passed: true } },
+      result: {
+        created: true,
+        assetUuid: 'new-prefab-uuid',
+        assetUrl: 'db://assets/ui/New.prefab',
+        nodeUuid: 'rebuilt-node-uuid'
+      },
+      state: { document: { dirty: false } }
+    });
+    expect(probeClient.requests).toContainEqual({
+      method: 'probe.directWrite',
       payload: {
         selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' },
-        params: { nodeUuid: 'panel-uuid', assetUrl: 'db://assets/ui/New.prefab' }
+        params: {
+          operations: [{
+            type: 'prefab.create_from_node',
+            nodeUuid: 'panel-uuid',
+            assetUrl: 'db://assets/ui/New.prefab'
+          }],
+          save: true
+        }
       }
+    });
+    const methods = probeClient.requests.map((request) => request.method);
+    expect(methods).toContain('probe.saveDocument');
+    expect(methods.at(-1)).toBe('probe.editorState');
+    expect(methods).not.toContain('probe.createPrefab');
+  });
+
+  it('cocos_prefab_create 在创建后 dirty 未清除时返回稳定错误', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.directWrite': PREFAB_CREATE_SUCCESS,
+      'probe.editorState': {
+        ...EDITOR_STATE,
+        document: { assetUuid: 'prefab-uuid-1', dirty: true }
+      }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_create',
+      arguments: {
+        projectId: 'proj1',
+        assetUrl: 'db://assets/ui/New.prefab',
+        sourceNodeUuid: 'panel-uuid'
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: 'DOCUMENT_DIRTY_AFTER_PREFAB_CREATE',
+        details: {
+          sourceNodeUuid: 'panel-uuid',
+          assetUrl: 'db://assets/ui/New.prefab'
+        },
+        nextAction: expect.stringContaining('cocos_document_save')
+      }
+    });
+    expect(probeClient.requests.map((request) => request.method)).toContain('probe.saveDocument');
+  });
+
+  it('cocos_prefab_create 拒绝缺失资产或重建节点身份的成功证据', async () => {
+    const probeClient = new RecordingProbeClient(createRespond());
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_prefab_create',
+      arguments: {
+        projectId: 'proj1',
+        assetUrl: 'db://assets/ui/New.prefab',
+        sourceNodeUuid: 'panel-uuid'
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: 'PREFAB_CREATE_RESULT_INVALID' }
     });
   });
 
@@ -2074,7 +2222,7 @@ describe('直写档写工具', () => {
     expect(probeClient.requests.at(-1)?.method).toBe('probe.deleteAsset');
   });
 
-  it('cocos_document_save 转发 probe.saveDocument', async () => {
+  it('cocos_document_save 保存后重读确认 dirty 已清除', async () => {
     const probeClient = new RecordingProbeClient(createRespond());
     const { client } = await createHarness(probeClient, { enableWrites: true });
 
@@ -2082,8 +2230,36 @@ describe('直写档写工具', () => {
       name: 'cocos_document_save',
       arguments: { projectId: 'proj1' }
     });
-    expect(result.structuredContent).toMatchObject({ result: { saved: true } });
-    expect(probeClient.requests.at(-1)?.method).toBe('probe.saveDocument');
+    expect(result.structuredContent).toMatchObject({
+      result: { saved: true },
+      state: { document: { assetUuid: 'prefab-uuid-1', dirty: false } }
+    });
+    const methods = probeClient.requests.map((request) => request.method);
+    expect(methods.indexOf('probe.saveDocument')).toBeLessThan(methods.lastIndexOf('probe.editorState'));
+    expect(probeClient.requests.at(-1)?.method).toBe('probe.editorState');
+  });
+
+  it('cocos_document_save 在 dirty 未清除时返回稳定错误', async () => {
+    const probeClient = new RecordingProbeClient(createRespond({
+      'probe.editorState': {
+        ...EDITOR_STATE,
+        document: { assetUuid: 'prefab-uuid-1', dirty: true }
+      }
+    }));
+    const { client } = await createHarness(probeClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_document_save',
+      arguments: { projectId: 'proj1' }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: 'DOCUMENT_DIRTY_AFTER_SAVE',
+        details: { currentDocumentUuid: 'prefab-uuid-1' }
+      }
+    });
   });
 
   it('cocos_asset_import 校验 URL 并转发 probe.importAsset', async () => {
