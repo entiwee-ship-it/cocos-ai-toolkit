@@ -72,7 +72,7 @@ describe('Bridge 扩展生命周期控制台日志', () => {
     const loadMessage = editorLog.mock.calls[0][0] as string;
     const loadDetails = JSON.parse(loadMessage.slice(loadMessage.indexOf('{'))) as Record<string, unknown>;
     expect(loadDetails).toMatchObject({
-      扩展版本: '0.6.5',
+      扩展版本: '0.6.6',
       Creator版本: '3.8.8',
       项目ID: 'project-id',
       项目路径: 'E:/project',
@@ -96,23 +96,32 @@ describe('Bridge 扩展生命周期控制台日志', () => {
       attempt: 2,
       delayMs: 1000
     });
+    bridgeMock.options?.onLifecycleEvent?.({
+      type: 'disconnected',
+      code: 1006,
+      reason: ''
+    });
     expect(editorLog).toHaveBeenCalledWith(
       '[CocosAI][Bridge] 正在连接探针服务 {"地址":"ws://127.0.0.1:43210"}'
     );
     expect(editorLog).toHaveBeenCalledWith(
       '[CocosAI][Bridge] 探针连接已建立 {"地址":"ws://127.0.0.1:43210"}'
     );
-    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 已发送身份握手 {}');
-    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 扩展初始化完成 {}');
+    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 已发送身份握手');
+    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 扩展初始化完成');
     expect(editorLog).toHaveBeenCalledWith(
       '[CocosAI][Bridge] 探针连接已断开 {"关闭码":1012,"原因":"测试重启"}'
     );
     expect(editorLog).toHaveBeenCalledWith(
       '[CocosAI][Bridge] 已安排重新连接 {"重试次数":2,"等待毫秒":1000}'
     );
+    expect(editorLog).toHaveBeenCalledWith(
+      '[CocosAI][Bridge] 探针连接已断开 {"关闭码":1006}'
+    );
+    expect(editorLog).not.toHaveBeenCalledWith(expect.stringContaining('"原因":""'));
 
     main.unload();
     expect(bridgeMock.dispose).toHaveBeenCalledOnce();
-    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 扩展已卸载 {}');
+    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 扩展已卸载');
   });
 });

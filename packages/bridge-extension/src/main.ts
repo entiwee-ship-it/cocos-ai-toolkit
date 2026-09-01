@@ -14,7 +14,7 @@ import {
 import { importAsset } from './import-asset';
 import { createProbeServerBootstrap, type ProbeBootstrapResult } from './probe-bootstrap';
 
-const BRIDGE_VERSION = '0.6.5';
+const BRIDGE_VERSION = '0.6.6';
 const BRIDGE_BUILD_ID = readBridgeBuildId(__dirname);
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 
@@ -153,7 +153,13 @@ function localizeBridgeLifecycleDetails(event: BridgeLifecycleEvent): Record<str
 }
 
 function logBridgeLifecycle(eventName: string, details: Record<string, unknown>): void {
-  const message = `[CocosAI][Bridge] ${eventName} ${JSON.stringify(details)}`;
+  const usefulDetails = Object.fromEntries(
+    Object.entries(details).filter(([, value]) => value !== '' && value !== null && value !== undefined)
+  );
+  const suffix = Object.keys(usefulDetails).length > 0
+    ? ` ${JSON.stringify(usefulDetails)}`
+    : '';
+  const message = `[CocosAI][Bridge] ${eventName}${suffix}`;
   try {
     const editorGlobal = Editor as unknown as Record<string, unknown>;
     if (typeof editorGlobal.log === 'function') {
