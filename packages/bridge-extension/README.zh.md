@@ -6,7 +6,7 @@ Cocos AI Bridge 是面向 Cocos Creator 3.8.x 的项目内编辑器扩展，为 
 | --- | --- |
 | 当前版本 | V0.6.9 |
 | 发布日期 | 2026-09-01 |
-| 作者 | 李威-Enti |
+| 作者 | Enti |
 | Creator 版本要求 | `>=3.8.0 <3.9.0` |
 | 已验证 Creator 版本 | 3.8.8 |
 | 支持平台 | Windows (`win32`) |

@@ -44,7 +44,7 @@ describe('bridge extension manifest', () => {
 
     expect(manifest).toMatchObject({
       description: 'i18n:cocos-ai-bridge.description',
-      author: '李威-Enti',
+      author: 'Enti',
       date: '2026-09-01',
       platform: ['win32'],
       editor: '>=3.8.0 <3.9.0'
