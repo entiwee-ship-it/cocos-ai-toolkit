@@ -45,6 +45,8 @@ Probe 未启动时 MCP 仍会正常注册 40 个工具；`cocos_editor_list` 返
 - 文档与资源：`cocos_document_save`、`cocos_asset_import`、`cocos_asset_refresh`
 - 多操作：`cocos_batch_write`，只接受 `node.*` 和 `component.*`；它只减少往返，不提供原子提交或回滚。
 
+组件事件默认写入 Inspector，而不是在脚本生命周期中注册监听：`Button.clickEvents`、`Toggle.checkEvents` 等事件数组使用 `Component.EventHandler`，字段为 `target/component/handler/customEventData`。先读取并保留已有数组项，再用 `cocos_component_set_property` 写完整数组并传 `expectedOldValue`；`component` 必须是精确 `@ccclass` 注册名。只有动态创建或回收的节点、运行时才能确定的目标、没有可序列化事件口的底层手势或全局事件才使用 `node.on(...)`。
+
 Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读取返回的 `nodeUuid`、`instanceFileId` 和 `stablePath`；不要从创建瞬间缓存 UUID。解包使用 `cocos_prefab_unpack`：`current` 仅解除所选实例，`complete` 同时解除子树内嵌套实例；两种模式都必须传当前源资产 UUID 作为乐观锁。Prefab 重命名使用 `uuid + newName`，只修改原目录内文件名。Creator AssetDB 会拒绝覆盖已有目标，并验证移动后 UUID 不变。
 
 `cocos_node_read` 的 `prefabInstance` 提供实例根、源 UUID、instanceFileId、state 和 sourceUrl。需要布局证据时传 `includeBounds`；可追加后代可视并集和 `relativeToPath`。`cocos_nodes_read` 最多读取 32 项，按 nodeUuids 后接 paths 的顺序逐项返回，单项错误和输出截断都会显式标记。

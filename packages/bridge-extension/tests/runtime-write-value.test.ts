@@ -24,6 +24,13 @@ class NestedVmData {
   target: unknown = null;
 }
 
+class TestEventHandler {
+  target: unknown = null;
+  component = '';
+  handler = '';
+  customEventData = '';
+}
+
 describe('resolveRuntimeWriteValue', () => {
   it('递归物化引用数组和嵌套 ccclass 对象并保留 Enum 数值', async () => {
     const current = [new VmData(), new VmData()];
@@ -116,6 +123,40 @@ describe('resolveRuntimeWriteValue', () => {
     )).rejects.toThrow('REFERENCE_VALUE_INVALID');
 
     expect(resolveReference).not.toHaveBeenCalled();
+  });
+
+  it('空事件数组可物化 EventHandler 并解析 target 节点引用', async () => {
+    const targetNode = { uuid: 'node-a' };
+    const result = await resolveRuntimeWriteValue(
+      [{
+        target: {
+          kind: 'node',
+          objectUuid: 'node-a',
+          fileId: null,
+          nodePath: null,
+          available: true
+        },
+        component: 'LobbyView',
+        handler: 'onClickStart',
+        customEventData: 'quick'
+      }],
+      [],
+      'clickEvents',
+      {
+        resolveReference: async () => targetNode,
+        createObject: (_value, propertyPath) => (
+          propertyPath === 'clickEvents[0]' ? new TestEventHandler() : undefined
+        )
+      }
+    ) as TestEventHandler[];
+
+    expect(result[0]).toBeInstanceOf(TestEventHandler);
+    expect(result[0]).toMatchObject({
+      target: targetNode,
+      component: 'LobbyView',
+      handler: 'onClickStart',
+      customEventData: 'quick'
+    });
   });
 
   it('从 Creator Class Attr 的 ctor 字段读取 ccclass 构造器', () => {

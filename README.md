@@ -119,7 +119,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_node_reparent` | 把现有节点迁移到新父节点并保存；源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex |
 | `cocos_node_delete` | 按 nodeUuid 或 path 删除节点及子树，不可回滚 |
 | `cocos_component_add` | 在节点上挂载组件；自定义脚本组件必须提供 scriptUuid |
-| `cocos_component_set_property` | 修改组件属性值；propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致时拒绝写入 |
+| `cocos_component_set_property` | 修改组件属性值或绑定 Inspector 事件；支持 `items[2]` 嵌套和 `Component.EventHandler[]`，expectedOldValue 不一致时拒绝写入 |
 | `cocos_prefab_instantiate` | 在父节点下实例化 Prefab；支持 parentUuid/parentPath，保存重开后返回稳定实例身份 |
 | `cocos_prefab_unpack` | 按节点移除 Prefab 关联；current 仅移除当前关联，complete 递归移除嵌套关联，源资产 UUID 必须精确匹配 |
 | `cocos_prefab_create` | 把当前文档节点生成为 Prefab，自动保存、重开并在 dirty 时补保存，再验证重建实例、资产身份和 clean 状态 |
@@ -129,6 +129,8 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_asset_import` | 把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入 |
 | `cocos_asset_refresh` | 重新导入资产并尝试触发 TypeScript 编译 |
 | `cocos_batch_write` | 一次直发多项 `node.*` / `component.*` 操作；不接受 `asset.*` / `prefab.*`，只减少 MCP 往返；失败时 `executedOps` 之前的修改可能已生效 |
+
+组件事件默认直接写入 Prefab/Scene 的 Inspector 事件数组：按钮使用 `Button.clickEvents`，Toggle 状态变化使用 `Toggle.checkEvents`，其它组件使用自身公开的 EventHandler 数组。事件元素用 `Component.EventHandler` 的 `target/component/handler/customEventData` 描述；`component` 是精确 `@ccclass` 注册名。只有动态创建或回收的节点、运行时才能确定的目标，或没有可序列化事件口的底层手势/全局事件才使用 `node.on(...)`；不要为静态按钮生成 `onLoad/start + node.on/off` 转发代码。
 
 节点寻址严格要求 `nodeUuid` 或 `path` 二选一（如 `Root/Panel/Button`）；组件类型接受有无 `cc.` 前缀的写法（`Label` 与 `cc.Label` 等价）。写工具响应携带 `verification.items`（逐项期望值与重读实际值），重读不符会以 `DIRECT_WRITE_VERIFY_FAILED` 报错——Creator 静默不生效的写入不会被当成成功。`cocos_prefab_create` 会在直写重开后检查 dirty，必要时自动补一次保存，再确认 `dirty=false`；仍未清除才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`cocos_document_save` 同样以 `DOCUMENT_DIRTY_AFTER_SAVE` 拒绝伪成功。`DIRECT_WRITE_OUTCOME_UNKNOWN` 表示操作已经执行但保存或验证结局未知，必须先重读状态，确认前禁止重试。直写失败即停，已执行修改不会自动恢复。
 

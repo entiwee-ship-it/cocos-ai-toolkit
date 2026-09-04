@@ -82,6 +82,21 @@ describe('Cocos AI Toolkit 技能契约', () => {
     expect(skill).toContain('不得自行修改 `UITransform.contentSize`');
   });
 
+  it('组件事件默认写入 Inspector EventHandler 而不是脚本监听', async () => {
+    const [skill, readme] = await Promise.all([
+      readFile(skillPath, 'utf8'),
+      readFile(readmePath, 'utf8')
+    ]);
+
+    for (const document of [skill, readme]) {
+      expect(document).toContain('`Component.EventHandler`');
+      expect(document).toContain('`Button.clickEvents`');
+      expect(document).toContain('`Toggle.checkEvents`');
+      expect(document).toContain('`node.on(...)`');
+    }
+    expect(skill).toContain('动态创建或回收的节点');
+  });
+
   it('技能和 README 都要求打开前保护 dirty 文档并验证创建与保存后的 clean 状态', async () => {
     const [skill, readme] = await Promise.all([
       readFile(skillPath, 'utf8'),

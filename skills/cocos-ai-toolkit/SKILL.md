@@ -34,6 +34,18 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 2. 把 `trim` 设为 `false`，确保 Inspector 中的 `Trim` 不勾选。
 3. 不得自行修改 `UITransform.contentSize`，也不得改用 `CUSTOM` 或 `TRIMMED`；写后重读 `cc.Sprite.sizeMode` 和 `cc.Sprite.trim`，确认值分别为 `2` 和 `false`。
 
+## 组件事件默认绑定
+
+Prefab/Scene 中的节点只要组件公开 Inspector 事件数组，就必须优先写入 `Component.EventHandler`，不得改成脚本里的 `node.on(...)` / `node.off(...)`。常见入口包括 `Button.clickEvents`、`Toggle.checkEvents`、`ToggleContainer.checkEvents`、`Slider.slideEvents`、`ScrollView.scrollEvents`、`PageView.pageEvents` 和 EditBox 的编辑事件。
+
+1. 先读取事件组件和回调目标组件，确认事件属性、目标节点、精确 `@ccclass` 名和公开实例方法。`component` 填 `@ccclass` 注册名，不填脚本文件名或节点名；`handler` 填方法名。
+2. 用 `cocos_component_set_property` 写完整事件数组。数组元素包含 `target` 节点引用、`component`、`handler`、`customEventData`；先保留已有事件项，只追加或替换用户要求的项，并用 `expectedOldValue` 锁定读取到的旧数组。
+   `target` 使用当前结构化引用：`{ kind: "node", objectUuid, fileId: null, nodePath, available: true }`；例如事件项为 `{ target: <节点引用>, component: "LobbyViewComp", handler: "onClickStart", customEventData: "" }`。
+3. 回调方法不存在时，只在合适的现有业务组件中增加处理方法；不要新增只负责 `node.on(...)` / `node.off(...)` 转发的脚本。若确实需要新业务组件，事件仍通过 Inspector 数组绑定。
+4. 写后重读对应事件数组，确认 `target/component/handler/customEventData`；需要行为验收时再运行 Preview。
+
+只有动态创建或回收的节点、运行时才能确定的目标/方法、组件没有可序列化事件口，或必须处理 TOUCH_START/MOVE/END 等底层手势、生命周期、全局/自定义总线事件时，才使用代码监听。Toggle 状态变化优先 `Toggle.checkEvents`，不要因为它继承 Button 就默认绑 `clickEvents`。
+
 ## 写入工具
 
 | Intent | Tool |
@@ -46,7 +58,7 @@ If MCP, Creator, Probe, Bridge, target identity, or write capability is unavaila
 | 删除节点及子树 | `cocos_node_delete` |
 | 迁移节点 | `cocos_node_reparent`（源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex） |
 | 挂载组件 | `cocos_component_add`（自定义脚本组件必须给 scriptUuid，用 asset_search 查） |
-| 改组件属性值 | `cocos_component_set_property`（propertyPath 支持 `items[2]` 嵌套；expectedOldValue 不一致会拒绝写入） |
+| 改组件属性值/绑定 Inspector 事件 | `cocos_component_set_property`（支持 `items[2]` 嵌套和 `Component.EventHandler[]`；expectedOldValue 不一致会拒绝写入） |
 | 实例化 Prefab | `cocos_prefab_instantiate`（prefabUuid + parentUuid/parentPath 二选一；保存重开后返回 nodeUuid、instanceFileId 和 stablePath） |
 | 移除 Prefab 关联 | `cocos_prefab_unpack`（nodeUuid/path 二选一；current 仅当前关联，complete 递归移除嵌套关联；必须传 expectedPrefabAssetUuid） |
 | 节点生成 Prefab | `cocos_prefab_create`（assetUrl 必须 `db://assets/` 且 `.prefab` 后缀；自动保存、重开，dirty 时补保存，再验证重建实例、资产身份和 clean 状态） |

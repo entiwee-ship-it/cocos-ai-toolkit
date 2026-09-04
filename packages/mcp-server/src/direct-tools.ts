@@ -1639,7 +1639,7 @@ export function registerCocosDirectWriteTools(
   }, async (input) => toToolResult(service.addComponent(input)));
 
   server.registerTool('cocos_component_set_property', {
-    description: '修改节点上某组件的属性值并保存回读；propertyPath 支持 items[2] 嵌套路径；expectedOldValue 不一致时拒绝写入。',
+    description: '修改节点上某组件的属性值并保存回读；Button.clickEvents、Toggle.checkEvents 等 Inspector 事件优先直接写 Component.EventHandler[]，不要改成脚本 node.on；propertyPath 支持 items[2] 嵌套，expectedOldValue 不一致时拒绝写入。',
     inputSchema: {
       ...ProjectSelectorInput,
       ...NodeAddressInput,

@@ -426,6 +426,9 @@ describe('直写档工具注册', () => {
     expect(batchSchema).toContain('component.set_property');
     const transformTool = writeTools.find((tool) => tool.name === 'cocos_node_set_transform');
     expect(transformTool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    const componentPropertyTool = writeTools.find((tool) => tool.name === 'cocos_component_set_property');
+    expect(componentPropertyTool?.description).toContain('Button.clickEvents');
+    expect(componentPropertyTool?.description).toContain('node.on');
   });
 });
 
