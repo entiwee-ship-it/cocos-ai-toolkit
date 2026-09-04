@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 
-import { ProbeClient } from '@cocos-ai/client';
+import { CreatorClient } from '@cocos-ai/client';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { pathToFileURL } from 'node:url';
 import { createCocosMcpServer } from './server.js';
 
-const DEFAULT_SERVER_URL = 'ws://127.0.0.1:32188';
 /** 与 CLI 默认一致的单次请求等待超时毫秒数。 */
 const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
 
-interface RuntimeProbeClient {
+interface RuntimeCreatorClient {
   connect(): Promise<void>;
   close(): Promise<void>;
 }
@@ -24,29 +23,31 @@ export interface McpRuntime {
 }
 
 export interface McpRuntimeConfig {
-  serverUrl: string;
+  endpointRoot: string | undefined;
+  captureRoot: string | undefined;
   enableWrites: boolean;
   requestTimeoutMs: number;
   sessionToken: string | undefined;
 }
 
 /**
- * 从进程环境和启动参数读取 Probe Server 地址、写能力开关和请求超时。
+ * 从进程环境和启动参数读取 Creator IPC、写能力开关和请求超时。
  * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力。
- * 请求超时经 COCOS_AI_PROBE_TIMEOUT_MS 配置，与 CLI 共用同一环境变量。
+ * 请求超时经 COCOS_AI_IPC_TIMEOUT_MS 配置，与 CLI 共用同一环境变量。
  *
  * @param environment 环境变量键值；缺失值使用本机默认配置。
  * @param argv 启动参数（不含 node 和入口脚本路径）。
- * @returns 可直接创建 Probe Client 和 MCP Server 的运行配置。
+ * @returns 可直接创建 Creator Client 和 MCP Server 的运行配置。
  */
 export function readMcpRuntimeConfig(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   argv: readonly string[] = process.argv.slice(2)
 ): McpRuntimeConfig {
   return {
-    serverUrl: environment.COCOS_AI_PROBE_SERVER_URL ?? DEFAULT_SERVER_URL,
+    endpointRoot: environment.COCOS_AI_ENDPOINT_ROOT || undefined,
+    captureRoot: environment.COCOS_AI_CAPTURE_ROOT || undefined,
     enableWrites: readEnableWrites(argv),
-    requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_PROBE_TIMEOUT_MS),
+    requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_IPC_TIMEOUT_MS),
     sessionToken: environment.COCOS_AI_SESSION_TOKEN || undefined
   };
 }
@@ -64,38 +65,38 @@ function readRequestTimeoutMs(rawValue: string | undefined): number {
 }
 
 /**
- * 先启动 MCP Transport 暴露固定工具面，再让 Probe Client 在后台持续连接，并返回幂等关闭句柄。
+ * 启动 MCP Transport 和本机 Creator Client，并返回幂等关闭句柄。
  *
- * @param options 已构造的 Probe Client、MCP Server（包含默认只读和可选门控工具）和 Transport。
- * @param options.probeClient 提供 Creator WebSocket 请求的共享客户端。
+ * @param options 已构造的 Creator Client、MCP Server（包含默认只读和可选门控工具）和 Transport。
+ * @param options.creatorClient 提供 Creator Named Pipe 请求的共享客户端。
  * @param options.server 已登记默认只读工具和可选门控工具的 MCP Server。
  * @param options.transport 当前 MCP stdio Transport。
  * @returns 可安全重复调用的运行时关闭句柄。
  */
 export async function startMcpRuntime<TTransport>(options: {
-  probeClient: RuntimeProbeClient;
+  creatorClient: RuntimeCreatorClient;
   server: RuntimeMcpServer<TTransport>;
   transport: TTransport;
 }): Promise<McpRuntime> {
   try {
     await options.server.connect(options.transport);
-    void options.probeClient.connect().catch(() => undefined);
+    await options.creatorClient.connect();
   } catch (error) {
-    await closeRuntimeResources(options.server, options.probeClient).catch(() => undefined);
+    await closeRuntimeResources(options.server, options.creatorClient).catch(() => undefined);
     throw error;
   }
 
   let closePromise: Promise<void> | undefined;
   return {
     close() {
-      closePromise ??= closeRuntimeResources(options.server, options.probeClient);
+      closePromise ??= closeRuntimeResources(options.server, options.creatorClient);
       return closePromise;
     }
   };
 }
 
 /**
- * 使用真实 Probe Client 和 stdio Transport 启动直写工具档 Cocos MCP Server。
+ * 使用真实 Creator IPC Client 和 stdio Transport 启动 Cocos MCP Server。
  *
  * @param environment 可选环境变量覆盖，默认使用当前进程环境。
  * @returns 已连接且可关闭的 MCP 运行时。
@@ -105,18 +106,16 @@ export async function runMcpServer(
   argv: readonly string[] = process.argv.slice(2)
 ): Promise<McpRuntime> {
   const config = readMcpRuntimeConfig(environment, argv);
-  const probeClient = new ProbeClient(
-    config.serverUrl,
-    config.requestTimeoutMs,
-    undefined,
-    500,
-    10_000,
-    config.sessionToken
-  );
-  const server = createCocosMcpServer({ probeClient }, { enableWrites: config.enableWrites });
+  const creatorClient = new CreatorClient({
+    requestTimeoutMs: config.requestTimeoutMs,
+    ...(config.endpointRoot ? { endpointRoot: config.endpointRoot } : {}),
+    ...(config.captureRoot ? { captureRoot: config.captureRoot } : {}),
+    ...(config.sessionToken ? { sessionToken: config.sessionToken } : {})
+  });
+  const server = createCocosMcpServer({ creatorClient }, { enableWrites: config.enableWrites });
   const transport = new StdioServerTransport();
   patchTransportSchemaRefs(transport);
-  return startMcpRuntime({ probeClient, server, transport });
+  return startMcpRuntime({ creatorClient, server, transport });
 }
 
 /**
@@ -166,14 +165,14 @@ function patchTransportSchemaRefs(transport: StdioServerTransport): void {
 }
 
 /**
- * 无论 MCP Server 关闭是否失败，都继续释放 Probe Client，并保留首个错误。
+ * 无论 MCP Server 关闭是否失败，都继续释放 Creator Client，并保留首个错误。
  *
  * @param server 当前 MCP Server。
- * @param probeClient 当前 Probe Client。
+ * @param creatorClient 当前 Creator Client。
  */
 async function closeRuntimeResources(
   server: { close(): Promise<void> },
-  probeClient: { close(): Promise<void> }
+  creatorClient: { close(): Promise<void> }
 ): Promise<void> {
   let firstError: unknown;
   try {
@@ -182,7 +181,7 @@ async function closeRuntimeResources(
     firstError = error;
   }
   try {
-    await probeClient.close();
+    await creatorClient.close();
   } catch (error) {
     firstError ??= error;
   }

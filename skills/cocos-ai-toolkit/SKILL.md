@@ -13,18 +13,19 @@ Use the Cocos MCP for Creator resources. Match namespaced tools by the `cocos_*`
 
 删除边界：只有 `.prefab` 必须通过 Creator/MCP 删除。非 Prefab 资源文件可以直接通过文件系统删除，无需 Creator/MCP；同时删除同名 `.meta` 文件（如存在）。这是整文件删除，不是手改 `.meta` JSON。删除前确认目标和引用，删除后检查 git 状态；Creator 正在运行时让 AssetDB 自动刷新，但 Creator 不可用不阻塞这类删除。
 
-If MCP, Creator, Probe, Bridge, target identity, or write capability is unavailable for Prefab operations or serialized-content writes, 停下并报告阻塞. Never fall back to editing serialized JSON. This block does not apply to non-Prefab file deletion.
+If MCP, Creator, Creator IPC, Bridge, target identity, or write capability is unavailable for Prefab operations or serialized-content writes, 停下并报告阻塞. Never fall back to editing serialized JSON. This block does not apply to non-Prefab file deletion.
 
 ## 编辑主流程（按序组合）
 
-1. `cocos_editor_list` 发现在线项目（按 projectPath 选择；同项目多实例时传 editorInstanceId）。Probe 离线时仍会返回空 editors 和 backend 状态；Bridge 启动 Probe 后同一任务自动恢复。
-2. `cocos_editor_state` 确认当前文档 UUID、dirty 和 Scene/AssetDB ready。
-3. `cocos_asset_search` 按名称/路径找 Prefab、Scene 或脚本 UUID（Bridge 内分页并复用短缓存）；`cocos_asset_inspect` 按 UUID 直接看类型、URL、依赖和 users，不要先取全量索引。
-4. `cocos_prefab_open` / `cocos_scene_open` 仅在当前文档 clean 时打开目标文档。若返回 `DOCUMENT_SAVE_REQUIRED`，先调用 `cocos_document_save`，确认 dirty 已清除后再重试；工具不得先切换文档或触发原生保存框。
-5. `cocos_hierarchy` 优先传 summary/fields/query 做紧凑寻址；`cocos_node_read` 优先用 summary/fields/propertyPaths 看节点；多节点用 `cocos_nodes_read`。这些投影会在 Bridge 内省略结构 raw；只有明确需要完整诊断时才使用无投影读取，必要时用 `maxOutputBytes` 调整 Bridge 发送前预算。
-6. 写入：每步自动保存并逐项重读回显，响应里的 `verification.items` 就是生效证据。
-7. 手工修改后显式落盘用 `cocos_document_save`；成功响应必须证明 dirty 已清除。
-8. 需要视觉确认时：`cocos_preview_launch` 启动预览 → `cocos_runtime_capture` 截图 → `cocos_preview_stop` 收尾。
+1. `cocos_editor_list` 发现在线项目（按 projectPath 选择；同项目多实例时传 editorInstanceId）。Creator 未打开时仍会返回空 editors 和 backend IPC 状态；Bridge 发布 Named Pipe 端点后同一任务立即发现。
+2. 需要查看扩展版本、发布日期、项目和直连状态时，调用 `cocos_tool_manager_open`，无需使用电脑操控 Creator 菜单。
+3. `cocos_editor_state` 确认当前文档 UUID、dirty 和 Scene/AssetDB ready。
+4. `cocos_asset_search` 按名称/路径找 Prefab、Scene 或脚本 UUID（Bridge 内分页并复用短缓存）；`cocos_asset_inspect` 按 UUID 直接看类型、URL、依赖和 users，不要先取全量索引。
+5. `cocos_prefab_open` / `cocos_scene_open` 仅在当前文档 clean 时打开目标文档。若返回 `DOCUMENT_SAVE_REQUIRED`，先调用 `cocos_document_save`，确认 dirty 已清除后再重试；工具不得先切换文档或触发原生保存框。
+6. `cocos_hierarchy` 优先传 summary/fields/query 做紧凑寻址；`cocos_node_read` 优先用 summary/fields/propertyPaths 看节点；多节点用 `cocos_nodes_read`。这些投影会在 Bridge 内省略结构 raw；只有明确需要完整诊断时才使用无投影读取，必要时用 `maxOutputBytes` 调整 Bridge 发送前预算。
+7. 写入：每步自动保存并逐项重读回显，响应里的 `verification.items` 就是生效证据。
+8. 手工修改后显式落盘用 `cocos_document_save`；成功响应必须证明 dirty 已清除。
+9. 需要视觉确认时：`cocos_preview_launch` 启动预览 → `cocos_runtime_capture` 截图 → `cocos_preview_stop` 收尾。
 
 ## Sprite 默认配置
 

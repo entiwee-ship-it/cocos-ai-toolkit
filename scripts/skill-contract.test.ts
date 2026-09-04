@@ -44,11 +44,12 @@ const EXPECTED_TOOL_NAMES = [
   'cocos_runtime_run_scenario',
   'cocos_runtime_sample_window',
   'cocos_runtime_watch_property',
-  'cocos_scene_open'
+  'cocos_scene_open',
+  'cocos_tool_manager_open'
 ];
 
 describe('Cocos AI Toolkit 技能契约', () => {
-  it('教授当前直写档全部四十个工具', async () => {
+  it('教授当前直写档全部四十一个工具', async () => {
     const skill = await readFile(skillPath, 'utf8');
     const names = [...new Set(skill.match(/\bcocos_[a-z0-9_]+\b/g) ?? [])].sort();
     expect(names).toEqual(EXPECTED_TOOL_NAMES);

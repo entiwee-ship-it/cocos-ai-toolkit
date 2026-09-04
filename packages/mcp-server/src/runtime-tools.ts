@@ -82,7 +82,7 @@ function assertPreviewCapability(editor: { capabilities: string[] }): void {
 }
 
 /**
- * 运行态工具服务：经共享 Probe Client 调用 Probe Server 的运行态方法。
+ * 运行态工具服务：经共享 Creator Client 调用当前 MCP 进程内的运行态控制器。
  */
 export class CocosRuntimeToolService {
   constructor(
@@ -92,7 +92,7 @@ export class CocosRuntimeToolService {
 
   /** 列出 Preview 会话（可按项目过滤）。 */
   async listPreviewSessions(input: { projectId?: string }) {
-    const sessions = await this.options.probeClient.request('server.previewSessions', {
+    const sessions = await this.options.creatorClient.request('server.previewSessions', {
       ...(input.projectId ? { projectId: input.projectId } : {})
     });
     const output = SessionsOutputSchema.parse({ sessions });
@@ -108,7 +108,7 @@ export class CocosRuntimeToolService {
   }) {
     const editor = await this.editors.resolveEditor(input);
     assertPreviewCapability(editor);
-    const session = await this.options.probeClient.request('server.previewLaunch', {
+    const session = await this.options.creatorClient.request('server.previewLaunch', {
       selector: { projectId: editor.projectId, editorInstanceId: editor.editorInstanceId },
       params: {
         ...(input.resolution ? { resolution: input.resolution } : {}),
@@ -121,7 +121,7 @@ export class CocosRuntimeToolService {
 
   /** 停止 Preview 会话。 */
   async stopPreview(input: { sessionId: string }) {
-    const result = await this.options.probeClient.request('server.previewStop', { sessionId: input.sessionId });
+    const result = await this.options.creatorClient.request('server.previewStop', { sessionId: input.sessionId });
     const output = zod.object({ closed: zod.literal(true) }).parse(result);
     return output;
   }
@@ -130,7 +130,7 @@ export class CocosRuntimeToolService {
    * 读取运行时整树或指定子树快照。
    *
    * @param input Preview 会话、深度/节点上限、可选节点路径和未激活节点过滤选项。
-   * @returns Probe Server 返回的协议化运行时节点快照。
+   * @returns 当前 MCP 进程返回的协议化运行时节点快照。
    */
   async getRuntimeHierarchy(input: {
     sessionId: string;
@@ -139,7 +139,7 @@ export class CocosRuntimeToolService {
     path?: string;
     includeInactive?: boolean;
   }) {
-    const result = await this.options.probeClient.request('server.runtimeHierarchy', {
+    const result = await this.options.creatorClient.request('server.runtimeHierarchy', {
       sessionId: input.sessionId,
       ...(input.maxDepth !== undefined ? { maxDepth: input.maxDepth } : {}),
       ...(input.maxNodes !== undefined ? { maxNodes: input.maxNodes } : {}),
@@ -152,7 +152,7 @@ export class CocosRuntimeToolService {
 
   /** 读取运行时组件属性包。 */
   async inspectRuntimeComponent(input: { sessionId: string; path: string; componentType: string }) {
-    const result = await this.options.probeClient.request('server.runtimeComponent', {
+    const result = await this.options.creatorClient.request('server.runtimeComponent', {
       sessionId: input.sessionId,
       path: input.path,
       componentType: input.componentType
@@ -163,7 +163,7 @@ export class CocosRuntimeToolService {
 
   /** 读取运行时 Console（游标增量 + 级别过滤）。 */
   async getRuntimeConsole(input: { sessionId: string; sinceSeq?: number; level?: string }) {
-    const result = await this.options.probeClient.request('server.runtimeConsole', {
+    const result = await this.options.creatorClient.request('server.runtimeConsole', {
       sessionId: input.sessionId,
       ...(input.sinceSeq !== undefined ? { sinceSeq: input.sinceSeq } : {}),
       ...(input.level ? { level: input.level } : {})
@@ -185,7 +185,7 @@ export class CocosRuntimeToolService {
     intervalMs?: number;
     maxChanges?: number;
   }) {
-    const result = await this.options.probeClient.request('server.runtimeWatch', {
+    const result = await this.options.creatorClient.request('server.runtimeWatch', {
       sessionId: input.sessionId,
       path: input.path,
       componentType: input.componentType,
@@ -210,7 +210,7 @@ export class CocosRuntimeToolService {
     method: string;
     args?: unknown[];
   }) {
-    const result = await this.options.probeClient.request('server.runtimeInvoke', {
+    const result = await this.options.creatorClient.request('server.runtimeInvoke', {
       sessionId: input.sessionId,
       path: input.path,
       componentType: input.componentType,
@@ -228,7 +228,7 @@ export class CocosRuntimeToolService {
    * @returns 带会话身份、逐帧样本和可选触发结果的采样快照。
    */
   async sampleRuntimeWindow(input: RuntimeSampleWindowInput & { sessionId: string }) {
-    const result = await this.options.probeClient.request('server.runtimeSampleWindow', {
+    const result = await this.options.creatorClient.request('server.runtimeSampleWindow', {
       sessionId: input.sessionId,
       path: input.path,
       componentType: input.componentType,
@@ -249,7 +249,7 @@ export class CocosRuntimeToolService {
     y?: number;
     key?: string;
   }) {
-    const result = await this.options.probeClient.request('server.runtimeDispatchInput', {
+    const result = await this.options.creatorClient.request('server.runtimeDispatchInput', {
       sessionId: input.sessionId,
       inputType: input.inputType,
       ...(input.x !== undefined ? { x: input.x } : {}),
@@ -268,7 +268,7 @@ export class CocosRuntimeToolService {
     x?: number;
     y?: number;
   }) {
-    const result = await this.options.probeClient.request('server.runtimeInstantiate', {
+    const result = await this.options.creatorClient.request('server.runtimeInstantiate', {
       sessionId: input.sessionId,
       assetUuid: input.assetUuid,
       parentPath: input.parentPath,
@@ -294,7 +294,7 @@ export class CocosRuntimeToolService {
     overlayNodeBounds?: boolean | string[];
     overlayAnchors?: boolean | string[];
   }) {
-    const result = await this.options.probeClient.request('server.runtimeCapture', {
+    const result = await this.options.creatorClient.request('server.runtimeCapture', {
       sessionId: input.sessionId,
       ...(input.resolution ? { resolution: input.resolution } : {}),
       ...(input.resolutions ? { resolutions: input.resolutions } : {}),
@@ -323,7 +323,7 @@ export class CocosRuntimeToolService {
     steps: unknown[];
   }) {
     const steps = zod.array(ScenarioStepSchema).min(1).parse(input.steps);
-    const result = await this.options.probeClient.request('server.runtimeRunScenario', {
+    const result = await this.options.creatorClient.request('server.runtimeRunScenario', {
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.projectId
         ? {
@@ -365,7 +365,7 @@ export function registerCocosRuntimeReadonlyTools(
   service: CocosRuntimeToolService
 ): void {
   server.registerTool('cocos_preview_sessions', {
-    description: '列出当前 Probe Server 管理的 Preview 页面会话（状态、URL、实际生效分辨率）。',
+    description: '列出当前 MCP 进程管理的 Preview 页面会话（状态、URL、实际生效分辨率）。',
     inputSchema: {
       projectId: zod.string().min(1).optional()
     },

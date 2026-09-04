@@ -13,7 +13,7 @@ const hash = createHash('sha256');
 for (const file of files) {
   hash.update(relative(distDirectory, file).replaceAll('\\', '/'));
   hash.update('\0');
-  hash.update(await readFile(file));
+  hash.update((await readFile(file, 'utf8')).replaceAll('\r\n', '\n'));
   hash.update('\0');
 }
 const buildId = `sha256:${hash.digest('hex')}`;

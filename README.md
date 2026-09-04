@@ -1,16 +1,16 @@
 # Cocos AI Toolkit
 
-这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI、Probe Server 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
+这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本提供 40 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本提供 41 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
 ```text
 AI / Codex / Kimi Code
-  -> stdio MCP Server（正式 AI 入口）/ cocos-ai-probe CLI（只读诊断入口）
-  -> localhost Probe Server
-  -> Creator 项目内 Bridge Extension
+  -> stdio MCP Server（正式 AI 入口）/ cocos-ai CLI（诊断入口）
+  -> Windows Named Pipe（每次调用建立短连接）
+  -> Creator 项目内 Bridge Extension（进程内端点）
   -> Cocos Creator Editor / Scene / AssetDB
 ```
 
@@ -37,7 +37,7 @@ npm run typecheck
 npm run build
 ```
 
-构建会生成 MCP Server、CLI、Probe Server、协议包、Core 运行时模块和 Bridge Extension 的 `dist/`。
+构建会生成 MCP Server、CLI、协议包、Core 运行时模块和 Bridge Extension 的 `dist/`。
 
 ## 安装 Bridge
 
@@ -50,33 +50,27 @@ npm run build
 
 Bridge 使用 Junction 指向运行时 Worktree 的 `packages/bridge-extension`，不会复制代码。默认只允许隔离 Worktree；已经明确授权保存项目时才传 `-AllowSavedProject`。安装后用 Creator 3.8.8 打开目标项目，或在 Creator 中刷新扩展。
 
-## 启动 Probe Server
+## Creator 本机直连与工具管理面板
 
-Bridge Extension 加载时会先探测 loopback Probe Server；服务不存在时，Bridge 会从同一 Toolkit 检出自动启动 `packages/probe-server/dist/run.js`，连接断开后也会再次探测并拉起。Node 默认从 Creator 进程的 `PATH` 查找，可用 `COCOS_AI_NODE_PATH` 指定绝对路径。Probe 冷启动不加载 Playwright；只有首次调用 Preview launch 时才动态加载浏览器驱动，后续调用复用 Node 模块缓存。
+Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，并在当前用户的本地数据目录登记端点。MCP/CLI 每次工具调用建立一次短连接，返回结果后立即关闭；不监听 TCP 端口，不启动独立后台服务，也没有 WebSocket 心跳或重连状态机。
 
-手工诊断或不启动 Creator 时，仍可在独立终端运行：
+在 Creator 顶部菜单选择 **面板 → Cocos AI 工具管理**，可以直接查看扩展版本、发布日期、构建指纹、项目身份、Named Pipe 状态、Scene/AssetDB、当前文档和 Preview 状态。面板内也可以刷新状态或打开 Creator 扩展管理器。
 
-```powershell
-& scripts/start-probe-server.ps1 -Port 32188 -ReportRoot 'reports'
-```
-
-运行态截图默认每个会话保留 100 张、全局保留 50 个会话且最长保留 14 天；可分别用 `COCOS_AI_CAPTURE_FILES_PER_SESSION`、`COCOS_AI_CAPTURE_MAX_SESSIONS` 和 `COCOS_AI_CAPTURE_MAX_AGE_DAYS` 调整。
-
-默认只监听 `127.0.0.1:32188`。Bridge 会自动连接和重连；CLI/MCP 通过同一 WebSocket Server 选择目标编辑器实例。不要把 Probe Server 暴露到外网。
+通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`；可选的 `COCOS_AI_SESSION_TOKEN` 会要求 MCP/CLI 与 Creator 使用同一会话令牌。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 
 ## 启动 AI 正式入口 MCP Server
 
-先启动 Probe Server，并确保目标 Creator 3.8.8 已加载 Bridge。MCP Server 使用 stdio 与 AI 客户端通信：
+确保目标 Creator 3.8.8 已加载 Bridge。MCP Server 使用 stdio 与 AI 客户端通信：
 
 ```powershell
-$env:COCOS_AI_PROBE_SERVER_URL = 'ws://127.0.0.1:32188'
 node packages/mcp-server/dist/run.js --enable-writes
 ```
 
 环境变量：
 
-- `COCOS_AI_PROBE_SERVER_URL`：Probe Server 地址，默认 `ws://127.0.0.1:32188`。
-- `COCOS_AI_SESSION_TOKEN`：可选本机会话 Token；配置后 Probe、Bridge、CLI 和 MCP 必须使用相同值。
+- `COCOS_AI_ENDPOINT_ROOT`：可选 Creator 端点描述目录，通常无需配置。
+- `COCOS_AI_IPC_TIMEOUT_MS`：可选单次 Creator IPC 请求超时，默认 180000 毫秒。
+- `COCOS_AI_SESSION_TOKEN`：可选本机会话令牌；配置后 Bridge、CLI 和 MCP 必须使用相同值。
 
 启动参数只接受可选的 `--enable-writes`：裸启动注册只读工具，写工具必须显式开启，环境变量不能开启写能力；其它参数以稳定错误拒绝。
 
@@ -91,15 +85,16 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（完整写模式 40 个）
+## MCP 工具面（完整写模式 41 个）
 
 ### 编辑态只读 9 个（默认开放）
 
 | 工具 | 用途 |
 | --- | --- |
-| `cocos_editor_list` | 列出当前连接 Probe Server 的 Creator；唯一不要求 `projectId` 的全局入口 |
+| `cocos_editor_list` | 列出当前可通过 Named Pipe 访问的 Creator；唯一不要求 `projectId` 的全局入口 |
 | `cocos_editor_state` | 读取当前文档 UUID、dirty、Scene/AssetDB ready、选择和 Preview 状态 |
 | `cocos_extension_manager_open` | 直接打开目标 Creator 的内置扩展管理器，不修改项目或扩展启用状态 |
+| `cocos_tool_manager_open` | 直接打开目标 Creator 中的 Cocos AI 工具管理面板 |
 | `cocos_asset_search` | Bridge 内大小写无关包含搜索，短缓存复用全量索引；Bridge 只返回当前结果页，MCP cursor 仅编码分页位置和 revision |
 | `cocos_asset_inspect` | 按 UUID 直接读取资产详情、Meta、依赖和反向使用者 |
 | `cocos_hierarchy` | 读取当前文档节点树；深层 `rootPath` 原生读取目标子树并保留 `truncated`，`query/fields/summary` 在 Bridge 内直接走紧凑响应，完整读取可用 `maxOutputBytes` 调整预算 |
@@ -150,9 +145,9 @@ AI 客户端的 MCP 配置固定指向运行时 Worktree（默认 `E:/xile-works
 & E:/xile-workspace/GitHub/cocos-ai-toolkit/scripts/update-runtime.ps1
 ```
 
-脚本依次完成：fetch 远程并让运行时 Worktree 以 detached HEAD 对齐 `origin/master`、依赖变化时 `npm install`、代码变化或产物缺失时全量 `npm run build`、重启 Probe Server、等待 Ready 事件并执行真实 WebSocket `editors` 请求。任一步失败会恢复旧提交、旧构建和原 Probe 运行状态。它不会创建额外本地分支；运行时 Worktree 存在未提交的 tracked 改动时会中止，避免覆盖手工修改。
+脚本依次完成：fetch 远程并让运行时 Worktree 以 detached HEAD 对齐 `origin/master`、依赖变化时 `npm install`、代码变化或产物缺失时全量 `npm run build`。任一步失败会尝试恢复旧提交和旧构建；脚本不会启动任何后台服务。它不会创建额外本地分支；运行时 Worktree 存在未提交的 tracked 改动时会中止，避免覆盖手工修改。
 
-执行完后按提示生效：MCP Server 是 AI 客户端在会话启动时拉起的 stdio 进程，需要重启 Kimi Code / Codex 会话加载新构建；若 Bridge Extension 有变更，还需要在 Cocos Creator 中刷新/重启扩展。常用参数：`-SkipProbeRestart`、`-Force`、`-TargetRef`。
+执行完后按提示生效：MCP Server 是 AI 客户端在会话启动时拉起的 stdio 进程，需要重启 Kimi Code / Codex 会话加载新构建；若 Bridge Extension 有变更，还需要在 Cocos Creator 中刷新/重启扩展。常用参数：`-Force`、`-TargetRef`。
 
 当前直写架构的真实 Creator 3.8.8 smoke 使用隔离项目执行只读发现和一次 `cc.UITransform` no-op 直写，前后 Git 状态必须完全一致：
 
@@ -196,31 +191,18 @@ npm run smoke:creator:write-routing
 
 默认用 Junction 挂接到仓库，仓库更新技能即更新；`-Copy` 改为复制，`-Force` 覆盖同名旧安装。
 
-## CLI 命令（只读诊断入口）
+## CLI 命令（诊断入口）
 
 ```powershell
 node packages/cli/dist/index.js editors
 node packages/cli/dist/index.js state --project-id <project-id> --editor-instance-id <editor-id>
-node packages/cli/dist/index.js assets --project-id <project-id> --editor-instance-id <editor-id> --pattern <text> [--uuid <asset-uuid>]
-node packages/cli/dist/index.js open-asset --project-id <project-id> --editor-instance-id <editor-id> --uuid <asset-uuid>
+node packages/cli/dist/index.js assets --project-id <project-id> --editor-instance-id <editor-id> --pattern <text>
 node packages/cli/dist/index.js hierarchy --project-id <project-id> --editor-instance-id <editor-id> --depth 20
 node packages/cli/dist/index.js node --project-id <project-id> --editor-instance-id <editor-id> --uuid <node-uuid>
-node packages/cli/dist/index.js component --project-id <project-id> --editor-instance-id <editor-id> --uuid <component-uuid>
-node packages/cli/dist/index.js prefab --project-id <project-id> --editor-instance-id <editor-id> --node-uuid <nested-prefab-node-uuid>
-node packages/cli/dist/index.js asset-index --project-id <project-id> --editor-instance-id <editor-id>
-
-# Preview 与运行时读取/动作
-node packages/cli/dist/index.js preview-launch --project-id <project-id> [--resolution 720x1280]
-node packages/cli/dist/index.js preview-sessions [--project-id <project-id>]
-node packages/cli/dist/index.js preview-stop --session-id <session-id>
-node packages/cli/dist/index.js runtime-hierarchy --session-id <session-id>
-node packages/cli/dist/index.js runtime-component --session-id <session-id> --path <node-path> --component-type <type>
-node packages/cli/dist/index.js runtime-console --session-id <session-id>
-node packages/cli/dist/index.js runtime-capture --session-id <session-id>
-node packages/cli/dist/index.js runtime-instantiate --session-id <session-id> --asset-uuid <prefab-uuid> --parent-path <node-path> [--x 0 --y 0]
+node packages/cli/dist/index.js runtime-scenario --project-id <project-id> --steps '<包含 launch 与 stop(always:true) 的 JSON 数组>'
 ```
 
-CLI 只允许本文列出的只读诊断命令，不提供任意 JavaScript 执行入口；未知命令会返回稳定错误，写操作统一使用 MCP。
+CLI 不再跨进程保存 Preview session。持续的 Preview 读取和操作使用 MCP；CLI 只保留编辑态诊断和在单个进程内完成的 `runtime-scenario`。
 
 ## 运行期节点和组件 UUID
 
@@ -228,7 +210,7 @@ CLI 只允许本文列出的只读诊断命令，不提供任意 JavaScript 执�
 
 ## 安全边界
 
-- Bridge 仅连接 `127.0.0.1`。
+- Bridge 只监听当前 Windows 用户可访问的本机 Named Pipe，不开放网络端口。
 - 不允许执行任意 JavaScript。
 - 正式 Bridge 不注册任意 `Editor.Message` 或 cce 门面调试入口；临时调试探针不属于运行时能力。
 - 裸启动只暴露只读工具；写工具仅当显式 `--enable-writes` 启动时注册。
@@ -240,7 +222,7 @@ CLI 只允许本文列出的只读诊断命令，不提供任意 JavaScript 执�
 ## 清理顺序
 
 1. 保存或关闭本次 Creator 中需要保留的人工内容。
-2. 停止 Probe Server。
+2. 关闭正在使用 Cocos AI 的 Codex 任务，让 stdio MCP 和 Preview 浏览器正常退出。
 3. 移除 Bridge Junction：
 
 ```powershell

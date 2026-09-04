@@ -12,14 +12,18 @@ describe('Bridge 构建指纹', () => {
   it('只随 Bridge dist JavaScript 内容变化，并可由运行时读取', async () => {
     const dist = await mkdtemp(join(tmpdir(), 'cocos-ai-bridge-build-'));
     try {
-      await writeFile(join(dist, 'main.js'), 'module.exports = 1;');
+    await writeFile(join(dist, 'main.js'), 'module.exports = 1;\n');
       execFileSync(process.execPath, [writer, dist], { stdio: 'pipe' });
       const first = readBridgeBuildId(dist);
       const firstInfo = JSON.parse(await readFile(join(dist, 'build-info.json'), 'utf8'));
       expect(first).toBe(firstInfo.buildId);
-      expect(first).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(first).toMatch(/^sha256:[0-9a-f]{64}$/);
 
-      execFileSync(process.execPath, [writer, dist], { stdio: 'pipe' });
+    await writeFile(join(dist, 'main.js'), 'module.exports = 1;\r\n');
+    execFileSync(process.execPath, [writer, dist], { stdio: 'pipe' });
+    expect(readBridgeBuildId(dist)).toBe(first);
+
+    execFileSync(process.execPath, [writer, dist], { stdio: 'pipe' });
       expect(readBridgeBuildId(dist)).toBe(first);
       await writeFile(join(dist, 'main.js'), 'module.exports = 2;');
       execFileSync(process.execPath, [writer, dist], { stdio: 'pipe' });

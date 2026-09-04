@@ -1,52 +1,39 @@
 #!/usr/bin/env node
 
-import { ProbeClient } from '@cocos-ai/client';
+import { CreatorClient } from '@cocos-ai/client';
 import { parseCommand, type CliCommand } from './commands.js';
 import { pathToFileURL } from 'node:url';
 
-const DEFAULT_SERVER_URL = process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:32188';
-// 真实项目（xy-client 规模）下单次请求实测可能超过 10 秒，默认 60 秒；
-// 需要更短超时时用 COCOS_AI_PROBE_TIMEOUT_MS 显式调小。
-const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+// 真实项目资产和层级读取可能较慢；需要更短超时时用 COCOS_AI_IPC_TIMEOUT_MS 显式调小。
+const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
 
 /** CLI 侧只读探针客户端抽象。 */
-export interface ReadonlyProbeClient {
+export interface ReadonlyCreatorClient {
   request(method: string, payload: unknown): Promise<unknown>;
 }
 
 const HELP = `用法:
-  cocos-ai-probe editors
-  cocos-ai-probe state --project-id <id> [--editor-instance-id <id>]
-  cocos-ai-probe assets --project-id <id> --pattern <text> [--uuid <uuid>] [--editor-instance-id <id>]
-  cocos-ai-probe open-asset --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
-  cocos-ai-probe hierarchy --project-id <id> [--editor-instance-id <id>] [--depth <n>]
-  cocos-ai-probe node --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
-  cocos-ai-probe component --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
-  cocos-ai-probe prefab --project-id <id> --node-uuid <uuid> [--editor-instance-id <id>]
-  cocos-ai-probe asset-index --project-id <id> [--editor-instance-id <id>]
-  cocos-ai-probe preview-launch --project-id <id> [--editor-instance-id <id>] [--resolution <宽x高>] [--channel chrome|msedge]
-  cocos-ai-probe preview-stop --session-id <id>
-  cocos-ai-probe preview-sessions [--project-id <id>]
-  cocos-ai-probe runtime-console --session-id <id> [--since-seq <n>] [--level log|info|warn|error|debug]
-  cocos-ai-probe runtime-hierarchy --session-id <id> [--max-depth <n>] [--max-nodes <n>] [--path <节点路径>] [--include-inactive <true|false>]
-  cocos-ai-probe runtime-component --session-id <id> --path <节点路径> --component-type <类型>
-  cocos-ai-probe runtime-invoke --session-id <id> --path <节点路径> --component-type <类型> --method <方法名> [--args <json数组>]
-  cocos-ai-probe runtime-watch --session-id <id> --path <节点路径> --component-type <类型> --property <属性路径> [--timeout-ms <n>] [--interval-ms <n>] [--max-changes <n>]
-  cocos-ai-probe runtime-input --session-id <id> --input-type tap|click|key [--x <画布x>] [--y <画布y>] [--key <按键名>]
-  cocos-ai-probe runtime-instantiate --session-id <id> --asset-uuid <prefab-uuid> --parent-path <节点路径> [--x <x>] [--y <y>]
-  cocos-ai-probe runtime-capture --session-id <id> [--resolution <宽x高> | --resolutions <json数组>] [--crop <x,y,宽,高>] [--overlay-nodes <true|路径,逗号分隔>] [--overlay-anchors <true|路径,逗号分隔>]
-  cocos-ai-probe runtime-scenario --steps <json数组> [--session-id <id>] [--project-id <id> [--editor-instance-id <id>]]
+  cocos-ai editors
+  cocos-ai state --project-id <id> [--editor-instance-id <id>]
+  cocos-ai assets --project-id <id> --pattern <text> [--uuid <uuid>] [--editor-instance-id <id>]
+  cocos-ai open-asset --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
+  cocos-ai hierarchy --project-id <id> [--editor-instance-id <id>] [--depth <n>]
+  cocos-ai node --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
+  cocos-ai component --project-id <id> --uuid <uuid> [--editor-instance-id <id>]
+  cocos-ai prefab --project-id <id> --node-uuid <uuid> [--editor-instance-id <id>]
+  cocos-ai asset-index --project-id <id> [--editor-instance-id <id>]
+  cocos-ai runtime-scenario --project-id <id> [--editor-instance-id <id>] --steps <包含 launch 与 stop(always:true) 的 json 数组>
 
 环境变量:
-  COCOS_AI_PROBE_SERVER_URL  Probe Server WebSocket 地址，默认 ${DEFAULT_SERVER_URL}
-  COCOS_AI_PROBE_TIMEOUT_MS  单次请求等待毫秒数，默认 60000
-  COCOS_AI_SESSION_TOKEN     Probe Server 启用认证时使用的 Bearer Token
+  COCOS_AI_ENDPOINT_ROOT     Creator 端点描述目录，通常无需配置
+  COCOS_AI_IPC_TIMEOUT_MS    单次请求等待毫秒数，默认 180000
+  COCOS_AI_SESSION_TOKEN     Creator 本机直连启用认证时使用的会话令牌
 
-说明: CLI 定位为只读诊断入口；写操作请使用 MCP 直写工具。`;
+CLI 提供编辑态只读诊断和单进程 runtime-scenario；需要持续 Preview 会话时使用 MCP。`;
 
 export async function runCli(
   argv: string[],
-  options: { serverUrl?: string; stdout?: NodeJS.WritableStream; stderr?: NodeJS.WritableStream } = {}
+  options: { endpointRoot?: string; stdout?: NodeJS.WritableStream; stderr?: NodeJS.WritableStream } = {}
 ): Promise<number> {
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
@@ -59,20 +46,25 @@ export async function runCli(
   let command: CliCommand;
   try {
     command = parseCommand(argv);
+    assertCliCommandSupported(command);
   } catch (error) {
     writeError(stderr, error);
     return 1;
   }
 
-  const requestTimeoutMs = readRequestTimeoutMs(process.env.COCOS_AI_PROBE_TIMEOUT_MS);
-  const client = new ProbeClient(
-    options.serverUrl ?? DEFAULT_SERVER_URL,
+  const requestTimeoutMs = readRequestTimeoutMs(process.env.COCOS_AI_IPC_TIMEOUT_MS);
+  const client = new CreatorClient({
     requestTimeoutMs,
-    undefined,
-    500,
-    10_000,
-    process.env.COCOS_AI_SESSION_TOKEN || undefined
-  );
+    ...(options.endpointRoot || process.env.COCOS_AI_ENDPOINT_ROOT
+      ? { endpointRoot: options.endpointRoot ?? process.env.COCOS_AI_ENDPOINT_ROOT }
+      : {}),
+    ...(process.env.COCOS_AI_CAPTURE_ROOT
+      ? { captureRoot: process.env.COCOS_AI_CAPTURE_ROOT }
+      : {}),
+    ...(process.env.COCOS_AI_SESSION_TOKEN
+      ? { sessionToken: process.env.COCOS_AI_SESSION_TOKEN }
+      : {})
+  });
   try {
     await client.connect();
     const payload = await executeCommand(command, client);
@@ -86,6 +78,36 @@ export async function runCli(
   }
 }
 
+const MCP_ONLY_RUNTIME_COMMANDS = new Set<CliCommand['command']>([
+  'preview-launch',
+  'preview-stop',
+  'preview-sessions',
+  'runtime-console',
+  'runtime-hierarchy',
+  'runtime-component',
+  'runtime-invoke',
+  'runtime-watch',
+  'runtime-input',
+  'runtime-instantiate',
+  'runtime-capture'
+]);
+
+/** 无后台会话服务时，CLI 只允许单进程完成的场景验证。 */
+export function assertCliCommandSupported(command: CliCommand): void {
+  if (MCP_ONLY_RUNTIME_COMMANDS.has(command.command)) {
+    throw new Error('CLI_RUNTIME_SESSION_REQUIRES_MCP');
+  }
+  if (command.command !== 'runtime-scenario') return;
+  if (
+    command.sessionId
+    || !command.projectId
+    || !command.steps.some((step) => step.kind === 'launch')
+    || !command.steps.some((step) => step.kind === 'stop' && step.always === true)
+  ) {
+    throw new Error('CLI_SCENARIO_MUST_OWN_SESSION');
+  }
+}
+
 /**
  * 执行只读 Bridge 请求或运行态命令。
  *
@@ -95,13 +117,13 @@ export async function runCli(
  */
 export async function executeCommand(
   command: CliCommand,
-  client: ReadonlyProbeClient
+  client: ReadonlyCreatorClient
 ): Promise<unknown> {
   return client.request(...toRequest(command));
 }
 
 /**
- * 读取单次 Probe 请求超时，并对非法环境变量回退到稳定默认值。
+ * 读取单次 Creator IPC 请求超时，并对非法环境变量回退到稳定默认值。
  *
  * @param rawValue 环境变量中的毫秒数字符串。
  * @returns 有限的正整数毫秒数。
@@ -287,12 +309,14 @@ function errorMessage(code: string): string {
     SAMPLE_REQUIRED: '缺少 sample',
     INVALID_DEPTH: 'depth 必须是 1 到 20 的整数',
     MULTIPLE_EDITOR_INSTANCES: '同一项目存在多个编辑器实例，请明确指定 editor-instance-id',
-    CLIENT_NOT_CONNECTED: 'Probe Server 尚未连接',
-    SERVER_CONNECTION_CLOSED: 'Probe Server 连接已关闭',
-    SERVER_REQUEST_TIMEOUT: 'Probe Server 请求超时，结果未知',
-    EDITOR_INSTANCE_DISCONNECTED: '编辑器 Bridge 已断开',
+    CREATOR_CLIENT_NOT_READY: 'Creator 本机直连客户端尚未启动',
+    CREATOR_IPC_UNAVAILABLE: 'Creator 未打开或 Cocos AI Bridge 扩展未启用',
+    CREATOR_IPC_REQUEST_TIMEOUT: 'Creator 工具请求超时',
+    EDITOR_INSTANCE_DISCONNECTED: 'Creator 实例已断开',
+    CLI_RUNTIME_SESSION_REQUIRES_MCP: 'Preview 会话必须通过同一个 MCP 任务管理；CLI 只支持一次完成的 runtime-scenario',
+    CLI_SCENARIO_MUST_OWN_SESSION: 'CLI runtime-scenario 必须提供 project-id，并包含 launch 和 stop(always:true)',
   };
-  return messages[code] ?? '探针请求失败';
+  return messages[code] ?? 'Cocos AI 工具请求失败';
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

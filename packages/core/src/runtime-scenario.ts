@@ -3,7 +3,7 @@ import { ScenarioReportSchema, type Resolution, type ScenarioReport, type Scenar
 /**
  * 自动场景验证编排：按步骤序列驱动 Preview 运行时，
  * 逐步产出 expected/actual/passed 证据。结构化数据为真值，截图为辅助证据。
- * 运行时操作经 ScenarioRuntime 注入（Probe Server 以 driver + Bridge 装配）。
+ * 运行时操作经 ScenarioRuntime 注入（MCP 进程以 driver + Creator IPC 装配）。
  */
 
 /** 场景运行时操作集（由装配方实现）。 */

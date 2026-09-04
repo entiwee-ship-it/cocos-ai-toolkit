@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ProbeClientError } from '@cocos-ai/client';
+import { CreatorClientError } from '@cocos-ai/client';
 import { normalizeToolError, toToolResult } from '../src/tool-result.js';
 
 describe('MCP structured tool errors', () => {
-  it('Probe 错误保留结构化字段并继续提供可读文本', async () => {
-    const result = await toToolResult(Promise.reject(new ProbeClientError({
-      code: 'PROBE_SERVER_UNAVAILABLE',
-      message: 'Probe Server 当前不可用',
-      details: { state: 'reconnecting', url: 'ws://127.0.0.1:32188' },
-      nextAction: '等待自动恢复后重试',
+  it('Creator IPC 错误保留结构化字段并继续提供可读文本', async () => {
+    const result = await toToolResult(Promise.reject(new CreatorClientError({
+      code: 'CREATOR_IPC_UNAVAILABLE',
+      message: 'Creator IPC 当前不可用',
+      details: { state: 'ready', transport: 'named-pipe' },
+      nextAction: '打开 Creator 后重试',
       retryable: true
     })));
 
@@ -16,13 +16,13 @@ describe('MCP structured tool errors', () => {
       isError: true,
       structuredContent: {
         error: {
-          code: 'PROBE_SERVER_UNAVAILABLE',
+          code: 'CREATOR_IPC_UNAVAILABLE',
           retryable: true,
-          details: { state: 'reconnecting' }
+          details: { state: 'ready' }
         }
       }
     });
-    expect(result.content[0].text).toContain('等待自动恢复后重试');
+    expect(result.content[0].text).toContain('打开 Creator 后重试');
   });
 
   it('从本地 CODE:details 错误提取稳定 code', () => {

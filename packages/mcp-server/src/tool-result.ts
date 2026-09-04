@@ -1,4 +1,4 @@
-import { ProbeClientError } from '@cocos-ai/client';
+import { CreatorClientError } from '@cocos-ai/client';
 import { readStableErrorCode } from '@cocos-ai/protocol';
 
 export interface StructuredToolError {
@@ -35,16 +35,16 @@ export async function toToolResult(operation: unknown | Promise<unknown>) {
   }
 }
 
-/** 把 Probe、Bridge 和本地 Error 统一为机器可读错误。 */
+/** 把 Creator IPC、Bridge 和本地 Error 统一为机器可读错误。 */
 export function normalizeToolError(error: unknown, fallbackCode = 'TOOL_EXECUTION_FAILED'): StructuredToolError {
-  if (error instanceof ProbeClientError) {
+  if (error instanceof CreatorClientError) {
     return {
       code: error.code,
       message: error.originalMessage,
       details: error.details,
       ...(error.stage ? { stage: error.stage } : {}),
       ...(error.nextAction ? { nextAction: error.nextAction } : {}),
-      retryable: error.retryable
+      retryable: error.retryable ?? isRetryableCode(error.code)
     };
   }
   if (error && typeof error === 'object' && !Array.isArray(error)) {
@@ -69,8 +69,8 @@ export function normalizeToolError(error: unknown, fallbackCode = 'TOOL_EXECUTIO
     code,
     message,
     details: {},
-    ...(code === 'PROBE_SERVER_UNAVAILABLE'
-      ? { nextAction: '等待 Creator Bridge 自动启动 Probe，或确认 127.0.0.1:32188 监听后重试' }
+    ...(code === 'CREATOR_IPC_UNAVAILABLE'
+      ? { nextAction: '确认 Cocos Creator 已打开并启用 Cocos AI Bridge 扩展后重试' }
       : {}),
     retryable: isRetryableCode(code)
   };
@@ -90,7 +90,7 @@ function formatToolError(error: StructuredToolError): string {
 }
 
 function isRetryableCode(code: string): boolean {
-  return code === 'PROBE_SERVER_UNAVAILABLE'
-    || code === 'SERVER_CONNECTION_CLOSED'
-    || code === 'SERVER_REQUEST_TIMEOUT';
+  return code === 'CREATOR_IPC_UNAVAILABLE'
+    || code === 'CREATOR_CLIENT_NOT_READY'
+    || code === 'CREATOR_IPC_REQUEST_TIMEOUT';
 }

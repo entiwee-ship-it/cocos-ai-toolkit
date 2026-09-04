@@ -1,326 +1,290 @@
-import type { AddressInfo } from 'node:net';
-import { describe, expect, it, vi } from 'vitest';
-import { WebSocketServer, type WebSocket } from 'ws';
-import { ProbeClient, ProbeClientError } from '../src/client.js';
+import { randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createServer, type Server, type Socket } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  CreatorClient,
+  CreatorClientError,
+  type CreatorEndpointDescriptor
+} from '../src/client.js';
 
-interface ClientMessage {
-  method?: string;
-  payload?: unknown;
-  requestId?: string;
-}
+const cleanups: Array<() => Promise<void>> = [];
 
-interface TestServer {
-  url: string;
-  close: () => Promise<void>;
-}
+afterEach(async () => {
+  delete process.env.COCOS_AI_REQUEST_LOG;
+  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+});
 
-/**
- * 创建完成 client.hello 握手的真实 WebSocket 测试服务。
- *
- * @param onRequest 收到普通控制请求后的测试行为。
- * @returns 测试服务地址和关闭方法。
- */
-async function startTestServer(
-  onRequest: (socket: WebSocket, message: ClientMessage) => void
-): Promise<TestServer> {
-  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-  await new Promise<void>((resolve) => server.once('listening', resolve));
-  server.on('connection', (socket) => {
-    socket.on('message', (raw) => {
-      const message = JSON.parse(raw.toString()) as ClientMessage;
-      if (message.method === 'client.hello') {
-        socket.send(JSON.stringify({
-          type: 'response',
-          correlationId: 'client.hello',
-          ok: true,
-          payload: {}
-        }));
-        return;
+describe('CreatorClient named-pipe behavior', () => {
+  it('启动不建立长连接，没有 Creator 时返回空编辑器列表', async () => {
+    const endpointRoot = await temporaryRoot();
+    const client = new CreatorClient({ endpointRoot });
+    expect(client.getStatus()).toMatchObject({ state: 'idle', transport: 'named-pipe' });
+    await client.connect();
+    expect(await client.request('server.editors', {})).toEqual([]);
+    expect(await readdir(endpointRoot)).toEqual([]);
+    expect(client.getStatus()).toMatchObject({ state: 'ready', endpointRoot });
+    await client.close();
+    expect(client.getStatus().state).toBe('closed');
+  });
+
+  it('发现 Creator 后按工具调用建立独立短连接', async () => {
+    const endpointRoot = await temporaryRoot();
+    const bridge = await startFakeCreator(endpointRoot, async (request) => ({
+      echoedMethod: request.method,
+      echoedPayload: request.payload
+    }));
+    const client = new CreatorClient({ endpointRoot });
+    await client.connect();
+
+    expect(await client.request('server.editors', {})).toEqual([
+      expect.objectContaining({
+        editorInstanceId: bridge.descriptor.editorInstanceId,
+        projectId: bridge.descriptor.projectId,
+        bridgeVersion: bridge.descriptor.bridgeVersion
+      })
+    ]);
+    expect(await client.request('probe.editorState', {
+      selector: { projectId: bridge.descriptor.projectId },
+      params: { value: 7 }
+    })).toEqual({ echoedMethod: 'probe.editorState', echoedPayload: { value: 7 } });
+    expect(bridge.connectionCount()).toBe(3);
+    await client.close();
+  });
+
+  it('会话令牌只随本机请求发送，不写入端点描述', async () => {
+    const endpointRoot = await temporaryRoot();
+    const tokens: Array<string | undefined> = [];
+    const bridge = await startFakeCreator(endpointRoot, async (request) => {
+      tokens.push(request.sessionToken);
+      if (request.sessionToken !== 'secret') {
+        return failure('IPC_UNAUTHORIZED');
       }
-      onRequest(socket, message);
+      return { ok: true };
+    });
+    const client = new CreatorClient({ endpointRoot, sessionToken: 'secret' });
+    await client.connect();
+    await client.request('probe.editorState', {
+      selector: { projectId: bridge.descriptor.projectId },
+      params: {}
+    });
+    expect(tokens).toEqual(['secret']);
+    expect(JSON.stringify(bridge.descriptor)).not.toContain('secret');
+    await client.close();
+  });
+
+  it('忽略已经失效的端点描述文件', async () => {
+    const endpointRoot = await temporaryRoot();
+    const stale = descriptor('stale');
+    await writeDescriptor(endpointRoot, stale);
+    const client = new CreatorClient({ endpointRoot, requestTimeoutMs: 50 });
+    await client.connect();
+    expect(await client.request('server.editors', {})).toEqual([]);
+    await client.close();
+  });
+
+  it('Bridge 结构化失败响应保持错误字段', async () => {
+    const endpointRoot = await temporaryRoot();
+    const bridge = await startFakeCreator(endpointRoot, async (request) => (
+      request.method === 'probe.node'
+        ? failure('NODE_NOT_FOUND', {
+            message: '目标节点不存在',
+            details: { uuid: 'missing' },
+            stage: 'read',
+            nextAction: '刷新层级后重试'
+          })
+        : {}
+    ));
+    const client = new CreatorClient({ endpointRoot });
+    await client.connect();
+    const error = await client.request('probe.node', {
+      selector: { projectId: bridge.descriptor.projectId },
+      params: { uuid: 'missing' }
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(CreatorClientError);
+    expect(error).toMatchObject({
+      code: 'NODE_NOT_FOUND',
+      originalMessage: '目标节点不存在',
+      details: { uuid: 'missing' },
+      stage: 'read',
+      nextAction: '刷新层级后重试'
+    });
+    await client.close();
+  });
+
+  it('写请求发送后连接中断时保留 OUTCOME_UNKNOWN 保护', async () => {
+    const endpointRoot = await temporaryRoot();
+    const bridge = await startFakeCreator(endpointRoot, async (request, socket) => {
+      if (request.method === 'probe.directWrite') {
+        socket.destroy();
+        return noResponse;
+      }
+      return {};
+    });
+    const client = new CreatorClient({ endpointRoot });
+    await client.connect();
+    const error = await client.request('probe.directWrite', {
+      selector: { projectId: bridge.descriptor.projectId },
+      params: { operations: [] }
+    }).catch((caught) => caught);
+    expect(error).toMatchObject({
+      code: 'OUTCOME_UNKNOWN',
+      nextAction: expect.stringContaining('禁止重试写入')
+    });
+    await client.close();
+  });
+
+  it('请求超时和过大响应使用稳定错误码', async () => {
+    const timeoutRoot = await temporaryRoot();
+    const timeoutBridge = await startFakeCreator(timeoutRoot, async (request) => (
+      request.method === 'probe.node' ? noResponse : {}
+    ));
+    const timeoutClient = new CreatorClient({ endpointRoot: timeoutRoot, requestTimeoutMs: 30 });
+    await timeoutClient.connect();
+    await expect(timeoutClient.request('probe.node', {
+      selector: { projectId: timeoutBridge.descriptor.projectId },
+      params: {}
+    })).rejects.toMatchObject({ code: 'CREATOR_IPC_REQUEST_TIMEOUT' });
+    await timeoutClient.close();
+
+    const payloadRoot = await temporaryRoot();
+    const payloadBridge = await startFakeCreator(payloadRoot, async (request) => (
+      request.method === 'probe.node' ? { text: 'x'.repeat(2_000) } : {}
+    ));
+    const payloadClient = new CreatorClient({ endpointRoot: payloadRoot, maxPayloadBytes: 1_000 });
+    await payloadClient.connect();
+    await expect(payloadClient.request('probe.node', {
+      selector: { projectId: payloadBridge.descriptor.projectId },
+      params: {}
+    })).rejects.toMatchObject({ code: 'IPC_PAYLOAD_TOO_LARGE', retryable: false });
+    await payloadClient.close();
+  });
+
+  it('debug 日志只记录元数据，不输出业务 payload', async () => {
+    const endpointRoot = await temporaryRoot();
+    const bridge = await startFakeCreator(endpointRoot, async () => ({ privateValue: 'do-not-log' }));
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    process.env.COCOS_AI_REQUEST_LOG = 'debug';
+    const client = new CreatorClient({ endpointRoot });
+    await client.connect();
+    await client.request('probe.node', {
+      selector: { projectId: bridge.descriptor.projectId },
+      params: { privateValue: 'do-not-log' }
+    });
+    const logged = stderr.mock.calls.map(([value]) => String(value)).join('');
+    expect(logged).toContain('creator-ipc-client');
+    expect(logged).not.toContain('do-not-log');
+    stderr.mockRestore();
+    await client.close();
+  });
+});
+
+const noResponse = Symbol('no-response');
+
+interface FakeRequest {
+  requestId: string;
+  method: string;
+  payload: unknown;
+  sessionToken?: string;
+}
+
+async function temporaryRoot(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'cocos-ai-client-'));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+async function startFakeCreator(
+  endpointRoot: string,
+  handler: (request: FakeRequest, socket: Socket) => Promise<unknown>
+) {
+  const value = descriptor(randomUUID());
+  let connections = 0;
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    connections += 1;
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    let raw = '';
+    socket.on('data', (chunk) => {
+      raw += chunk.toString('utf8');
+      const newline = raw.indexOf('\n');
+      if (newline < 0) return;
+      const request = JSON.parse(raw.slice(0, newline)) as FakeRequest;
+      void (async () => {
+        const result = request.method === 'bridge.describe'
+          ? value
+          : await handler(request, socket);
+        if (result === noResponse || socket.destroyed) return;
+        if (isFailure(result)) {
+          socket.end(`${JSON.stringify({
+            type: 'response',
+            correlationId: request.requestId,
+            ok: false,
+            payload: result.payload
+          })}\n`);
+          return;
+        }
+        socket.end(`${JSON.stringify({
+          type: 'response',
+          correlationId: request.requestId,
+          ok: true,
+          payload: result
+        })}\n`);
+      })();
     });
   });
-  const port = (server.address() as AddressInfo).port;
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(value.pipeName, resolve);
+  });
+  await writeDescriptor(endpointRoot, value);
+  cleanups.push(async () => {
+    for (const socket of sockets) socket.destroy();
+    await closeServer(server);
+  });
+  return { descriptor: value, connectionCount: () => connections };
+}
+
+function descriptor(suffix: string): CreatorEndpointDescriptor {
   return {
-    url: `ws://127.0.0.1:${port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+    schemaVersion: 1,
+    editorInstanceId: `project-id:${suffix}`,
+    projectId: 'project-id',
+    projectPath: 'E:/project',
+    creatorVersion: '3.8.8',
+    bridgeVersion: '0.7.0',
+    bridgeBuildId: 'build-id',
+    capabilities: ['probe.editorState', 'probe.node', 'probe.directWrite'],
+    processId: process.pid,
+    pipeName: `\\\\.\\pipe\\cocos-ai-client-${process.pid}-${suffix}`,
+    startedAt: new Date().toISOString()
   };
 }
 
-describe('ProbeClient shared behavior', () => {
-  it('配置 session token 时在 WebSocket 握手发送 Bearer header', async () => {
-    let authorization: string | undefined;
-    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-    await new Promise<void>((resolve) => server.once('listening', resolve));
-    server.on('connection', (socket, request) => {
-      authorization = request.headers.authorization;
-      socket.on('message', (raw) => {
-        const message = JSON.parse(raw.toString()) as ClientMessage;
-        if (message.method === 'client.hello') {
-          socket.send(JSON.stringify({
-            type: 'response', correlationId: 'client.hello', ok: true, payload: {}
-          }));
-        }
-      });
-    });
-    const port = (server.address() as AddressInfo).port;
-    const client = new ProbeClient(`ws://127.0.0.1:${port}`, 1000, undefined, 500, 10000, 'secret-token');
+async function writeDescriptor(root: string, value: CreatorEndpointDescriptor): Promise<void> {
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, `${randomUUID()}.json`), JSON.stringify(value), 'utf8');
+}
 
-    try {
-      await client.connect();
-      expect(authorization).toBe('Bearer secret-token');
-    } finally {
-      await client.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+function failure(code: string, rest: Record<string, unknown> = {}) {
+  return {
+    failure: true,
+    payload: {
+      code,
+      message: code,
+      details: {},
+      ...rest
     }
-  });
+  };
+}
 
-  it('首次握手后断线会自动重连，离线请求立即给出状态，恢复后同一实例继续调用', async () => {
-    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-    await new Promise<void>((resolve) => server.once('listening', resolve));
-    let connectionCount = 0;
-    server.on('connection', (socket) => {
-      connectionCount += 1;
-      socket.on('message', (raw) => {
-        const message = JSON.parse(raw.toString()) as ClientMessage;
-        if (message.method === 'client.hello') {
-          socket.send(JSON.stringify({
-            type: 'response', correlationId: 'client.hello', ok: true, payload: {}
-          }));
-          return;
-        }
-        if (message.method === 'server.disconnect-once') {
-          socket.close();
-          return;
-        }
-        socket.send(JSON.stringify({
-          type: 'response',
-          correlationId: message.requestId,
-          ok: true,
-          payload: { connectionCount }
-        }));
-      });
-    });
-    const port = (server.address() as AddressInfo).port;
-    const client = new ProbeClient(`ws://127.0.0.1:${port}`, 1000, undefined, 5, 5);
+function isFailure(value: unknown): value is { failure: true; payload: unknown } {
+  return Boolean(value && typeof value === 'object' && (value as { failure?: unknown }).failure === true);
+}
 
-    try {
-      await client.connect();
-    await expect(client.request('server.disconnect-once', {})).rejects.toThrow(
-      'SERVER_CONNECTION_CLOSED'
-    );
-    await expect(client.request('server.editors', {})).rejects.toThrow('PROBE_SERVER_UNAVAILABLE');
-    for (let index = 0; index < 50 && client.getStatus().state !== 'connected'; index += 1) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 5));
-    }
-    expect(client.getStatus().state).toBe('connected');
-    await expect(client.request('server.editors', {})).resolves.toEqual({ connectionCount: 2 });
-    } finally {
-      await client.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-  });
-
-  it('关闭客户端会停止重连并暴露 closed 状态', async () => {
-    const server = await startTestServer((socket) => socket.close());
-    const client = new ProbeClient(server.url, 1000, undefined, 5000, 5000);
-
-    try {
-      await client.connect();
-      await expect(client.request('server.disconnect-once', {})).rejects.toThrow(
-        'SERVER_CONNECTION_CLOSED'
-      );
-    await expect(client.request('server.editors', {})).rejects.toThrow('PROBE_SERVER_UNAVAILABLE');
-    await client.close();
-    expect(client.getStatus()).toMatchObject({ state: 'closed', nextRetryAt: null });
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-
-  it('首次连接失败后持续重试，Probe 上线时原 connect 自动完成', async () => {
-    const reservation = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-    await new Promise<void>((resolve) => reservation.once('listening', resolve));
-    const port = (reservation.address() as AddressInfo).port;
-    await new Promise<void>((resolve) => reservation.close(() => resolve()));
-    const client = new ProbeClient(`ws://127.0.0.1:${port}`, 1_000, undefined, 5, 5);
-    const connecting = client.connect();
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
-
-    const server = new WebSocketServer({ host: '127.0.0.1', port });
-    await new Promise<void>((resolve) => server.once('listening', resolve));
-    server.on('connection', (socket) => socket.on('message', (raw) => {
-      const message = JSON.parse(raw.toString()) as ClientMessage;
-      if (message.method === 'client.hello') {
-        socket.send(JSON.stringify({
-          type: 'response', correlationId: 'client.hello', ok: true, payload: {}
-        }));
-      }
-    }));
-
-    try {
-      await expect(connecting).resolves.toBeUndefined();
-      expect(client.getStatus().state).toBe('connected');
-    } finally {
-      await client.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-  });
-
-  it('按显式 maxPayload 拒绝超大服务端响应', async () => {
-    const server = await startTestServer((socket, message) => {
-      socket.send(JSON.stringify({
-        type: 'response',
-        correlationId: message.requestId,
-        ok: true,
-        payload: 'x'.repeat(512)
-      }));
-    });
-    const client = new ProbeClient(server.url, 1000, 256);
-
-    try {
-      await client.connect();
-      await expect(client.request('server.editors', {})).rejects.toThrow(
-        'Max payload size exceeded'
-      );
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-
-  it('完成握手并按 requestId 解析请求响应', async () => {
-    const server = await startTestServer((socket, message) => {
-      socket.send(JSON.stringify({
-        type: 'response',
-        correlationId: message.requestId,
-        ok: true,
-        payload: [{ editorInstanceId: 'editor-1' }]
-      }));
-    });
-    const client = new ProbeClient(server.url);
-
-    try {
-      await client.connect();
-      await expect(client.request('server.editors', {})).resolves.toEqual([
-        { editorInstanceId: 'editor-1' }
-      ]);
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-
-  it('请求超过等待时间时返回稳定超时错误码', async () => {
-    const server = await startTestServer(() => undefined);
-    const client = new ProbeClient(server.url, 20);
-
-    try {
-      await client.connect();
-      await expect(client.request('server.editors', {})).rejects.toThrow(
-        'SERVER_REQUEST_TIMEOUT'
-      );
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-
-  it('请求期间连接断开时终止全部等待请求', async () => {
-    const server = await startTestServer((socket) => socket.close());
-    const client = new ProbeClient(server.url);
-
-    try {
-      await client.connect();
-      await expect(client.request('server.editors', {})).rejects.toThrow(
-        'SERVER_CONNECTION_CLOSED'
-      );
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-
-  it('服务端失败响应保留结构化 code', async () => {
-    const server = await startTestServer((socket, message) => {
-      socket.send(JSON.stringify({
-        type: 'response',
-        correlationId: message.requestId,
-        ok: false,
-        payload: { code: 'EDITOR_INSTANCE_NOT_FOUND' }
-      }));
-    });
-    const client = new ProbeClient(server.url);
-
-    try {
-      await client.connect();
-      await expect(client.request('probe.editorState', {})).rejects.toThrow(
-        'EDITOR_INSTANCE_NOT_FOUND'
-      );
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-
-  it('debug 观测只记录请求元数据而不输出业务 payload', async () => {
-    const previous = process.env.COCOS_AI_REQUEST_LOG;
-    process.env.COCOS_AI_REQUEST_LOG = 'debug';
-    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    const server = await startTestServer((socket, message) => {
-      socket.send(JSON.stringify({
-        type: 'response', correlationId: message.requestId, ok: true, payload: { secret: 'hidden' }
-      }));
-    });
-    const client = new ProbeClient(server.url);
-
-    try {
-      await client.connect();
-      await client.request('server.editors', { secret: 'hidden' });
-      const log = write.mock.calls.map((call) => String(call[0])).find((line) => line.includes('server.editors'));
-      expect(log).toContain('"method":"server.editors"');
-      expect(log).not.toContain('hidden');
-    } finally {
-      await client.close();
-      await server.close();
-      write.mockRestore();
-      if (previous === undefined) delete process.env.COCOS_AI_REQUEST_LOG;
-      else process.env.COCOS_AI_REQUEST_LOG = previous;
-    }
-  });
-
-  it('服务端失败响应保留原始 message、details、stage 和 nextAction', async () => {
-    const payload = {
-      code: 'PROPERTY_READONLY',
-      message: 'Creator 拒绝写入只读属性',
-      details: { propertyPath: 'spriteFrame' },
-      stage: 'apply',
-      nextAction: '改用可写属性或移除该计划项'
-    };
-    const server = await startTestServer((socket, message) => {
-      socket.send(JSON.stringify({
-        type: 'response', correlationId: message.requestId, ok: false, payload
-      }));
-    });
-    const client = new ProbeClient(server.url);
-
-    try {
-      await client.connect();
-      const error = await client.request('probe.directWrite', {}).catch((caught: unknown) => caught);
-      expect(error).toBeInstanceOf(ProbeClientError);
-      expect(error).toMatchObject({
-        code: payload.code,
-        originalMessage: payload.message,
-        details: payload.details,
-        stage: payload.stage,
-        nextAction: payload.nextAction
-      });
-      expect((error as Error).message).toContain('Creator 拒绝写入只读属性');
-      expect((error as Error).message).toContain('改用可写属性或移除该计划项');
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-});
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve) => server.close(() => resolve()));
+}

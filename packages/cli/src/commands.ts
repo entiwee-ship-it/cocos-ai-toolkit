@@ -86,7 +86,7 @@ export function parseCommand(argv: string[]): CliCommand {
   if (command === 'editors') {
     return { command };
   }
-  // 会话维度命令：Preview 页面会话由 Probe Server 管理，不需要项目选择器。
+  // 会话维度命令：Preview 页面会话由当前 CLI/MCP 进程管理，不需要项目选择器。
   if (command === 'preview-stop') {
     return { command, sessionId: requireFlag(flags, 'session-id', 'SESSION_ID_REQUIRED') };
   }

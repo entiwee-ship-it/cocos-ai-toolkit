@@ -4,14 +4,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCocosMcpServer } from '../src/server.js';
 import { COCOS_DIRECT_WRITE_TOOL_NAMES, CocosDirectToolService } from '../src/direct-tools.js';
-import { CocosReadonlyToolService, type ReadonlyProbeClient } from '../src/tools.js';
+import { CocosReadonlyToolService, type ReadonlyCreatorClient } from '../src/tools.js';
 
 interface ProbeRequest {
   method: string;
   payload: unknown;
 }
 
-class RecordingProbeClient implements ReadonlyProbeClient {
+class RecordingCreatorClient implements ReadonlyCreatorClient {
   readonly requests: ProbeRequest[] = [];
 
   constructor(
@@ -29,7 +29,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.6.9',
+  bridgeVersion: '0.7.0',
   bridgeBuildId: 'sha256:bridge-build',
   capabilities: [
     'probe.editorState',
@@ -41,6 +41,7 @@ const ONLINE_EDITOR = {
     'probe.node',
     'probe.nodeSelect',
     'probe.extensionManagerOpen',
+    'probe.managerPanelOpen',
     'probe.component'
   ]
 };
@@ -295,6 +296,7 @@ function createRespond(overrides: Record<string, unknown> = {}) {
     if (method === 'probe.node') return { data: NODE_DETAIL, raw: null, source: 'message-api' };
   if (method === 'probe.nodeSelect') return { nodeUuid: 'panel-uuid', selected: true, selection: ['panel-uuid'] };
   if (method === 'probe.extensionManagerOpen') return { opened: true, panel: 'extension.manager' };
+  if (method === 'probe.managerPanelOpen') return { opened: true, panel: 'cocos-ai-bridge' };
     if (method === 'probe.component') {
       return { data: { schema: COMPONENT_SCHEMA, raw: null }, raw: null, source: 'message-api' };
     }
@@ -322,15 +324,15 @@ afterEach(async () => {
 });
 
 async function createHarness(
-  probeClient: ReadonlyProbeClient,
+  creatorClient: ReadonlyCreatorClient,
   options: { enableWrites?: boolean } = {}
 ) {
   const server = createCocosMcpServer(
-    { probeClient },
+    { creatorClient },
     { enableWrites: options.enableWrites }
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'direct-test-client', version: '0.6.9' });
+  const client = new Client({ name: 'direct-test-client', version: '0.7.0' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)
@@ -341,8 +343,8 @@ async function createHarness(
 
 describe('直写档工具注册', () => {
   it('默认注册只读工具，写工具仅 enableWrites 时注册', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const readonlyTools = (await client.listTools()).tools;
     const names = readonlyTools.map((tool) => tool.name);
@@ -350,6 +352,7 @@ describe('直写档工具注册', () => {
       'cocos_editor_list',
       'cocos_editor_state',
       'cocos_extension_manager_open',
+      'cocos_tool_manager_open',
       'cocos_asset_search',
       'cocos_asset_inspect',
       'cocos_hierarchy',
@@ -388,7 +391,7 @@ describe('直写档工具注册', () => {
     expect(nodeReadTool?.description).toContain('结构/信封层重复 raw');
     expect(nodeReadTool?.description).toContain('Inspector 业务值内部的 raw');
 
-    const { client: writeClient } = await createHarness(probeClient, { enableWrites: true });
+    const { client: writeClient } = await createHarness(creatorClient, { enableWrites: true });
     const writeTools = (await writeClient.listTools()).tools;
     const writeNames = writeTools.map((tool) => tool.name);
     for (const gated of [
@@ -434,8 +437,8 @@ describe('直写档工具注册', () => {
 
 describe('直写档只读工具', () => {
   it('cocos_editor_list 返回已连接编辑器', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
     expect(result.structuredContent).toMatchObject({
@@ -443,19 +446,18 @@ describe('直写档只读工具', () => {
     });
   });
 
-  it('Probe 离线时 cocos_editor_list 仍成功返回固定结构和后端状态', async () => {
-    const probeClient: ReadonlyProbeClient = {
+  it('Creator Client 已关闭时 cocos_editor_list 仍成功返回固定结构和后端状态', async () => {
+    const creatorClient: ReadonlyCreatorClient = {
       getStatus: () => ({
-        url: 'ws://127.0.0.1:32188',
-        state: 'reconnecting',
-        reconnectAttempt: 2,
-        nextRetryAt: '2026-08-28T00:00:00.000Z'
+      transport: 'named-pipe',
+      state: 'closed',
+      endpointRoot: 'C:/CocosAI/creator-endpoints'
       }),
       async request() {
         throw new Error('REQUEST_SHOULD_NOT_RUN');
       }
     };
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
 
@@ -464,15 +466,15 @@ describe('直写档只读工具', () => {
       editors: [],
       backend: {
         available: false,
-        state: 'reconnecting',
-        reconnectAttempt: 2
+        transport: 'named-pipe',
+        state: 'closed'
       }
     });
   });
 
   it('cocos_editor_state 返回当前文档、就绪和 dirty 状态', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_editor_state',
@@ -485,12 +487,12 @@ describe('直写档只读工具', () => {
         ready: { scene: true, assetDatabase: true }
       }
     });
-    expect(probeClient.requests.at(-1)?.method).toBe('probe.editorState');
+    expect(creatorClient.requests.at(-1)?.method).toBe('probe.editorState');
   });
 
   it('cocos_extension_manager_open 直接打开 Creator 扩展管理器', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_extension_manager_open',
@@ -502,15 +504,35 @@ describe('直写档只读工具', () => {
       opened: true,
       panel: 'extension.manager'
     });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.extensionManagerOpen',
       payload: { params: {} }
     });
   });
 
+  it('cocos_tool_manager_open 直接打开 Cocos AI 工具管理面板', async () => {
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
+
+    const result = await client.callTool({
+      name: 'cocos_tool_manager_open',
+      arguments: { projectId: 'proj1' }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      editor: { projectId: 'proj1' },
+      opened: true,
+      panel: 'cocos-ai-bridge'
+    });
+    expect(creatorClient.requests.at(-1)).toMatchObject({
+      method: 'probe.managerPanelOpen',
+      payload: { params: {} }
+    });
+  });
+
   it('cocos_asset_search 在 Bridge 内过滤资产，不拉取全量索引', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_asset_search',
@@ -521,18 +543,18 @@ describe('直写档只读工具', () => {
       query: { pattern: '  TEST  ' },
       page: { total: 1, items: [{ assetUuid: 'prefab-uuid-1' }] }
     });
-    expect(probeClient.requests).toContainEqual(expect.objectContaining({
+    expect(creatorClient.requests).toContainEqual(expect.objectContaining({
       method: 'probe.assetSearch',
       payload: expect.objectContaining({
         params: { pattern: 'test', includeRaw: false, offset: 0, pageSize: 50 }
       })
     }));
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.assetIndex');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.assetIndex');
   });
 
   it('cocos_asset_search cursor 只向 Bridge 请求下一页', async () => {
     const fallback = createRespond();
-    const probeClient = new RecordingProbeClient((method, payload) => {
+    const creatorClient = new RecordingCreatorClient((method, payload) => {
       if (method !== 'probe.assetSearch') return fallback(method, payload);
       const params = (payload as { params: { offset: number } }).params;
       return {
@@ -542,7 +564,7 @@ describe('直写档只读工具', () => {
         unresolved: []
       };
     });
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const first = await client.callTool({
       name: 'cocos_asset_search',
@@ -557,17 +579,17 @@ describe('直写档只读工具', () => {
     expect(second.structuredContent).toMatchObject({
       page: { offset: 1, total: 2, items: [{ assetUuid: 'scene-uuid-1' }] }
     });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.assetSearch',
       payload: { params: { pattern: 'asset', includeRaw: false, offset: 1, pageSize: 1 } }
     });
   });
 
   it('cocos_asset_inspect 返回资产详情和引用关系', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': { ...INSPECT_ASSET_RESPONSE, dependencies: ['script-uuid-1'], users: ['scene-uuid-1'] }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_asset_inspect',
@@ -583,15 +605,15 @@ describe('直写档只读工具', () => {
         ])
       }
     });
-    expect(probeClient.requests).toContainEqual(expect.objectContaining({
+    expect(creatorClient.requests).toContainEqual(expect.objectContaining({
       method: 'probe.assets',
       payload: expect.objectContaining({ params: { uuid: 'prefab-uuid-1' } })
     }));
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.assetIndex');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.assetIndex');
   });
 
   it('cocos_scene_open 打开 Scene 并等待文档身份就绪', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': {
         ...INSPECT_ASSET_RESPONSE,
         details: {
@@ -610,7 +632,7 @@ describe('直写档只读工具', () => {
       'probe.openAsset': { opened: true, uuid: 'scene-uuid-1' },
       'probe.editorState': { ...EDITOR_STATE, document: { assetUuid: 'scene-uuid-1', dirty: false } }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_scene_open',
@@ -623,33 +645,33 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_prefab_open 打开资产并轮询文档身份就绪', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_open',
       arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1' }
     });
     expect(result.structuredContent).toMatchObject({ opened: true });
-    const methods = probeClient.requests.map((request) => request.method);
+    const methods = creatorClient.requests.map((request) => request.method);
     expect(methods).toContain('probe.openAsset');
     expect(methods).toContain('probe.editorState');
     expect(methods).toContain('probe.assets');
     expect(methods).not.toContain('probe.assetIndex');
-    expect(probeClient.requests).toContainEqual(expect.objectContaining({
+    expect(creatorClient.requests).toContainEqual(expect.objectContaining({
       method: 'probe.assets',
       payload: expect.objectContaining({ params: { uuid: 'prefab-uuid-1', detailsOnly: true } })
     }));
   });
 
   it('cocos_prefab_open 在当前文档 dirty 时拒绝切换且不读取目标资产', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.editorState': {
         ...EDITOR_STATE,
         document: { assetUuid: 'dirty-scene-uuid', dirty: true }
       }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_open',
@@ -667,19 +689,19 @@ describe('直写档只读工具', () => {
         nextAction: expect.stringContaining('cocos_document_save')
       }
     });
-    const methods = probeClient.requests.map((request) => request.method);
+    const methods = creatorClient.requests.map((request) => request.method);
     expect(methods).not.toContain('probe.openAsset');
     expect(methods).not.toContain('probe.assets');
   });
 
   it('cocos_prefab_open 对非 Prefab 资产拒绝', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': {
         ...INSPECT_ASSET_RESPONSE,
         details: { ...INSPECT_ASSET_RESPONSE.details, type: 'cc.ImageAsset' }
       }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_open',
@@ -690,25 +712,25 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_hierarchy 转发层级请求', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_hierarchy',
       arguments: { projectId: 'proj1', depth: 6 }
     });
     expect(result.structuredContent).toMatchObject({ hierarchy: { data: { name: 'Root' } } });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.hierarchy',
       payload: { selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' }, params: { depth: 6 } }
     });
-    expect((probeClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({ depth: 6 });
+    expect((creatorClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({ depth: 6 });
     expect(JSON.stringify(result.structuredContent)).toContain('raw');
   });
 
   it('cocos_hierarchy 和 cocos_node_read 把完整读取预算转发给 Bridge', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     await client.callTool({
       name: 'cocos_hierarchy',
@@ -719,15 +741,15 @@ describe('直写档只读工具', () => {
       arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', maxOutputBytes: 64 * 1024 }
     });
 
-    const hierarchyRequest = probeClient.requests.find((request) => request.method === 'probe.hierarchy');
-    const nodeRequest = probeClient.requests.find((request) => request.method === 'probe.node');
+    const hierarchyRequest = creatorClient.requests.find((request) => request.method === 'probe.hierarchy');
+    const nodeRequest = creatorClient.requests.find((request) => request.method === 'probe.node');
     expect(hierarchyRequest).toMatchObject({ payload: { params: { maxOutputBytes: 64 * 1024 } } });
     expect(nodeRequest).toMatchObject({ payload: { params: { uuid: 'panel-uuid', maxOutputBytes: 64 * 1024 } } });
   });
 
   it('cocos_hierarchy 的紧凑参数按子树和查询投影并移除所有 raw', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_hierarchy',
@@ -747,7 +769,7 @@ describe('直写档只读工具', () => {
       }
     });
     expect(JSON.stringify(result.structuredContent)).not.toContain('"raw"');
-    const hierarchyRequests = probeClient.requests.filter((request) => request.method === 'probe.hierarchy');
+    const hierarchyRequests = creatorClient.requests.filter((request) => request.method === 'probe.hierarchy');
     expect(hierarchyRequests).toHaveLength(2);
     expect(hierarchyRequests[0]).toMatchObject({ payload: { params: { depth: 50, compact: true } } });
     expect(hierarchyRequests[1]).toMatchObject({
@@ -756,7 +778,7 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_hierarchy 深层 rootPath 原生读取子树并保留截断', async () => {
-    const probeClient = new RecordingProbeClient((method, payload) => {
+    const creatorClient = new RecordingCreatorClient((method, payload) => {
       if (method === 'server.editors') return [ONLINE_EDITOR];
       if (method === 'probe.hierarchy') {
         const params = (payload as { params?: { rootUuid?: string } }).params ?? {};
@@ -772,7 +794,7 @@ describe('直写档只读工具', () => {
       }
       return createRespond()(method, payload);
     });
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_hierarchy',
@@ -786,15 +808,15 @@ describe('直写档只读工具', () => {
         nodes: [{ path: 'Root/Panel', name: 'Panel', truncated: true }]
       }
     });
-    const hierarchyRequests = probeClient.requests.filter((request) => request.method === 'probe.hierarchy');
+    const hierarchyRequests = creatorClient.requests.filter((request) => request.method === 'probe.hierarchy');
     expect(hierarchyRequests[1]).toMatchObject({
       payload: { params: { depth: 2, rootUuid: 'panel-uuid', compact: true } }
     });
   });
 
   it('cocos_hierarchy summary=false 保持完整旧返回', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_hierarchy',
@@ -802,12 +824,12 @@ describe('直写档只读工具', () => {
     });
     expect(result.structuredContent).toMatchObject({ hierarchy: { data: { name: 'Root' } } });
     expect(JSON.stringify(result.structuredContent)).toContain('"raw"');
-    expect((probeClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({});
+    expect((creatorClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({});
   });
 
   it('cocos_hierarchy summary-only 不重复返回节点树', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_hierarchy',
@@ -817,12 +839,12 @@ describe('直写档只读工具', () => {
       hierarchy: { summary: { totalNodeCount: 2, scopedNodeCount: 2 } }
     });
     expect((result.structuredContent as { hierarchy: Record<string, unknown> }).hierarchy).not.toHaveProperty('nodes');
-    expect(probeClient.requests.at(-1)).toMatchObject({ payload: { params: { compact: true } } });
+    expect(creatorClient.requests.at(-1)).toMatchObject({ payload: { params: { compact: true } } });
   });
 
   it('cocos_node_read 提供 componentType 时返回组件完整属性', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_read',
@@ -833,7 +855,7 @@ describe('直写档只读工具', () => {
       componentUuid: 'label-comp-uuid',
       component: { className: 'cc.Label' }
     });
-    const nodeRequest = probeClient.requests.find((request) => request.method === 'probe.node');
+    const nodeRequest = creatorClient.requests.find((request) => request.method === 'probe.node');
     expect((nodeRequest?.payload as { params: unknown }).params).toEqual({ uuid: 'panel-uuid' });
   });
 
@@ -843,10 +865,10 @@ describe('直写档只读工具', () => {
       localRect: { x: -50, y: -50, width: 100, height: 100 },
       worldRect: { x: 10, y: 20, width: 100, height: 100 }
     };
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.node': { data: { ...NODE_DETAIL, bounds }, raw: null, source: 'message-api' }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_read',
@@ -869,7 +891,7 @@ describe('直写档只读工具', () => {
         writeCapabilities: NODE_DETAIL.writeCapabilities
       }
     });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.node',
       payload: {
         params: {
@@ -886,12 +908,12 @@ describe('直写档只读工具', () => {
 
   it('cocos_nodes_read 保留顺序并隔离单项错误', async () => {
     const respond = createRespond();
-    const probeClient = new RecordingProbeClient((method, payload) => {
+    const creatorClient = new RecordingCreatorClient((method, payload) => {
       const uuid = (payload as { params?: { uuid?: string } }).params?.uuid;
       if (method === 'probe.node' && uuid === 'missing-uuid') throw new Error('NODE_NOT_FOUND:missing-uuid');
       return respond(method, payload);
     });
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_nodes_read',
@@ -912,10 +934,10 @@ describe('直写档只读工具', () => {
       count: { requested: 3, returned: 3, found: 2, errors: 1, omitted: 0 },
       output: { truncated: false }
     });
-    const hierarchyRequests = probeClient.requests.filter((request) => request.method === 'probe.hierarchy');
+    const hierarchyRequests = creatorClient.requests.filter((request) => request.method === 'probe.hierarchy');
     expect(hierarchyRequests).toHaveLength(1);
     expect(hierarchyRequests[0]).toMatchObject({ payload: { params: { depth: 50, compact: true } } });
-    const nodeRequests = probeClient.requests.filter((request) => request.method === 'probe.node');
+    const nodeRequests = creatorClient.requests.filter((request) => request.method === 'probe.node');
     expect(nodeRequests).toHaveLength(3);
     expect(nodeRequests.every((request) => (
       (request.payload as { params: { compact?: boolean } }).params.compact === true
@@ -926,7 +948,7 @@ describe('直写档只读工具', () => {
     const fallback = createRespond();
     let active = 0;
     let maxActive = 0;
-    const probeClient = new RecordingProbeClient(async (method, payload) => {
+    const creatorClient = new RecordingCreatorClient(async (method, payload) => {
       if (method !== 'probe.node') return fallback(method, payload);
       const uuid = (payload as { params: { uuid: string } }).params.uuid;
       active += 1;
@@ -942,7 +964,7 @@ describe('直写档只读工具', () => {
         source: 'message-api'
       };
     });
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_nodes_read',
@@ -960,14 +982,14 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_nodes_read 超出输出预算时显式截断', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.node': {
         data: { ...NODE_DETAIL, name: 'x'.repeat(20_000) },
         raw: null,
         source: 'message-api'
       }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_nodes_read',
@@ -981,8 +1003,8 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_node_read 组件类型未命中时给出可用清单', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_read',
@@ -997,10 +1019,10 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_node_read propertyPaths 只返回指定组件属性并移除 raw', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.component': { data: { schema: COMPONENT_SCHEMA_WITH_PROPERTIES, raw: { duplicate: true } }, raw: { envelope: true }, source: 'message-api' }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_read',
@@ -1036,10 +1058,10 @@ describe('直写档只读工具', () => {
         raw: { inspectorDuplicate: true }
       }]
     };
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.component': { data: { schema, raw: { duplicate: true } }, raw: { envelope: true }, source: 'message-api' }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_read',
@@ -1061,8 +1083,8 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_node_read fields 支持数组下标投影', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_read',
@@ -1086,13 +1108,13 @@ describe('直写档只读工具', () => {
       { name: 'cocos_node_read', arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', fields: ['identity.prototype.polluted'] } },
       { name: 'cocos_node_read', arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', fields: ['identity.constructor'] } }
     ]) {
-      const probeClient = new RecordingProbeClient(createRespond());
-      const { client } = await createHarness(probeClient);
+      const creatorClient = new RecordingCreatorClient(createRespond());
+      const { client } = await createHarness(creatorClient);
       const result = await client.callTool(testCase);
 
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toContain('FIELD_PATH_FORBIDDEN');
-      expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.hierarchy');
+      expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.hierarchy');
     }
 
     expect(Object.prototype.toString).toBe(beforeToString);
@@ -1101,10 +1123,10 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_node_read 对缺失 propertyPath 返回可用路径', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.component': { data: { schema: COMPONENT_SCHEMA_WITH_PROPERTIES, raw: null }, raw: null, source: 'message-api' }
     }));
-    const { client } = await createHarness(probeClient);
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_read',
@@ -1121,8 +1143,8 @@ describe('直写档只读工具', () => {
   });
 
   it('cocos_node_read 禁止在没有 componentType 时使用 propertyPaths', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_read',
@@ -1135,8 +1157,8 @@ describe('直写档只读工具', () => {
 
 describe('直写档写工具', () => {
   it('cocos_node_create 按 parentPath 解析父节点并直写 node.create', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_create',
@@ -1145,7 +1167,7 @@ describe('直写档写工具', () => {
     expect(result.structuredContent).toMatchObject({
       outcome: { kind: 'success', executedOps: 1 }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     expect(write?.method).toBe('probe.directWrite');
     const payload = write?.payload as {
       params: { operations: Array<Record<string, unknown>>; save: boolean }
@@ -1159,8 +1181,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_node_create 路径未命中时报 NODE_NOT_FOUND', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_create',
@@ -1171,7 +1193,7 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_prefab_instantiate 按 parentPath 直写并返回重开后的稳定实例证据', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': {
         kind: 'success',
         executedOps: 1,
@@ -1205,7 +1227,7 @@ describe('直写档写工具', () => {
         }]
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_instantiate',
@@ -1224,7 +1246,7 @@ describe('直写档写工具', () => {
       stablePath: '/Root~0/Panel~0/Avatar~0',
       verification: { passed: true }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     expect(write?.method).toBe('probe.directWrite');
     const payload = write?.payload as {
       params: { operations: Array<Record<string, unknown>>; save: boolean };
@@ -1246,14 +1268,14 @@ describe('直写档写工具', () => {
       'PREFAB_ASSET_TYPE_MISMATCH',
       'NODE_NOT_FOUND'
     ]) {
-      const probeClient = new RecordingProbeClient(createRespond({
+      const creatorClient = new RecordingCreatorClient(createRespond({
         'probe.directWrite': {
           kind: 'operation-failed',
           executedOps: 0,
           failure: { code, message: code, operationIndex: 0 }
         }
       }));
-      const { client } = await createHarness(probeClient, { enableWrites: true });
+      const { client } = await createHarness(creatorClient, { enableWrites: true });
 
       const result = await client.callTool({
         name: 'cocos_prefab_instantiate',
@@ -1295,8 +1317,8 @@ describe('直写档写工具', () => {
     ];
 
     for (const [index, outcome] of outcomes.entries()) {
-      const probeClient = new RecordingProbeClient(createRespond({ 'probe.directWrite': outcome }));
-      const { client } = await createHarness(probeClient, { enableWrites: true });
+      const creatorClient = new RecordingCreatorClient(createRespond({ 'probe.directWrite': outcome }));
+      const { client } = await createHarness(creatorClient, { enableWrites: true });
 
       const result = await client.callTool({
         name: 'cocos_prefab_instantiate',
@@ -1311,7 +1333,7 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_prefab_unpack 按 path 直写 complete 并返回重开后的节点身份', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': {
         kind: 'success',
         executedOps: 1,
@@ -1344,7 +1366,7 @@ describe('直写档写工具', () => {
         }]
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_unpack',
@@ -1364,7 +1386,7 @@ describe('直写档写工具', () => {
       mode: 'complete',
       verification: { passed: true }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as { params: { operations: unknown[]; save: boolean } };
     expect(payload.params).toEqual({
       operations: [{
@@ -1378,7 +1400,7 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_prefab_unpack 保留源 Prefab 身份锁错误', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': {
         kind: 'operation-failed',
         executedOps: 0,
@@ -1389,7 +1411,7 @@ describe('直写档写工具', () => {
         }
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_unpack',
@@ -1404,22 +1426,22 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_node_delete 直写 node.delete', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     await client.callTool({
       name: 'cocos_node_delete',
       arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid' }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as { params: { operations: Array<Record<string, unknown>> } };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.operations).toEqual([{ type: 'node.delete', nodeUuid: 'panel-uuid' }]);
   });
 
   it('cocos_node_rename 按 path 直写 node.rename', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_rename',
@@ -1428,7 +1450,7 @@ describe('直写档写工具', () => {
     expect(result.structuredContent).toMatchObject({
       outcome: { kind: 'success', executedOps: 1 }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as {
       params: { operations: Array<Record<string, unknown>>; save: boolean }
     };
@@ -1442,8 +1464,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_node_rename 严格要求 nodeUuid 或 path 二选一', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     for (const address of [
       {},
@@ -1456,7 +1478,7 @@ describe('直写档写工具', () => {
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
     }
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('所有节点寻址入口都拒绝同时提供 UUID 和路径', async () => {
@@ -1498,21 +1520,21 @@ describe('直写档写工具', () => {
       }
     ];
     for (const testCase of cases) {
-      const probeClient = new RecordingProbeClient(createRespond());
-      const { client } = await createHarness(probeClient, { enableWrites: true });
+      const creatorClient = new RecordingCreatorClient(createRespond());
+      const { client } = await createHarness(creatorClient, { enableWrites: true });
       const result = await client.callTool({
         name: testCase.name,
         arguments: { projectId: 'proj1', ...testCase.arguments }
       });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
-      expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+      expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
     }
   });
 
   it('cocos_node_set_transform 按 path 直写 node.set_transform', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     await client.callTool({
       name: 'cocos_node_set_transform',
@@ -1522,7 +1544,7 @@ describe('直写档写工具', () => {
         localTransform: { position: { x: 12, y: 34, z: 0 } }
       }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as { params: { operations: Array<Record<string, unknown>> } };
     expect(payload.params.operations).toEqual([{
       type: 'node.set_transform',
@@ -1532,8 +1554,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_node_set_transform 严格要求 nodeUuid 或 path 二选一', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     for (const address of [
       {},
@@ -1550,18 +1572,18 @@ describe('直写档写工具', () => {
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
     }
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('写入前适用性错误保持原错误码，不包装成 outcome 错误', async () => {
     const respond = createRespond();
-    const probeClient = new RecordingProbeClient((method, payload) => {
+    const creatorClient = new RecordingCreatorClient((method, payload) => {
       if (method === 'probe.directWrite') {
         throw new Error('NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT:db://assets/Nested.prefab');
       }
       return respond(method, payload);
     });
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_set_transform',
@@ -1578,8 +1600,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_node_select 按 path 选择唯一节点且不走保存写通道', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_select',
@@ -1591,16 +1613,16 @@ describe('直写档写工具', () => {
       selected: true,
       selection: ['panel-uuid']
     });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.nodeSelect',
       payload: { params: { uuid: 'panel-uuid' } }
     });
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('cocos_node_reparent 按 UUID 和 parentPath 直写 node.reparent', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_reparent',
@@ -1614,7 +1636,7 @@ describe('直写档写工具', () => {
     expect(result.structuredContent).toMatchObject({
       outcome: { kind: 'success', executedOps: 1 }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as { params: { operations: Array<Record<string, unknown>>; save: boolean } };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.save).toBe(true);
@@ -1627,8 +1649,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_node_reparent 拒绝同一组中同时提供 UUID 和路径', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_reparent',
@@ -1641,12 +1663,12 @@ describe('直写档写工具', () => {
     });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('NODE_ADDRESS_EXCLUSIVE');
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('cocos_component_add 携带脚本 UUID 直写 component.add', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     await client.callTool({
       name: 'cocos_component_add',
@@ -1657,7 +1679,7 @@ describe('直写档写工具', () => {
         scriptUuid: 'script-uuid-9'
       }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as { params: { operations: Array<Record<string, unknown>> } };
     expect(payload.params.operations).toEqual([{
       type: 'component.add',
@@ -1668,8 +1690,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_component_set_property 解析组件后直写 component.set_property', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     await client.callTool({
       name: 'cocos_component_set_property',
@@ -1682,7 +1704,7 @@ describe('直写档写工具', () => {
         expectedOldValue: '旧标题'
       }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as { params: { operations: Array<Record<string, unknown>> } };
     expect(write?.method).toBe('probe.directWrite');
     expect(payload.params.operations).toEqual([{
@@ -1695,14 +1717,14 @@ describe('直写档写工具', () => {
   });
 
   it('直写操作级失败抛 DIRECT_WRITE_OPERATION_FAILED', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': {
         kind: 'operation-failed',
         executedOps: 0,
         failure: { code: 'WRITE_OPERATION_FAILED', message: 'WRITE_OPERATION_FAILED', operationIndex: 0 }
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_delete',
@@ -1715,10 +1737,10 @@ describe('直写档写工具', () => {
   });
 
   it('直写 operation-failed 缺少 failure 时拒绝无效 Bridge 结果', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': { kind: 'operation-failed', executedOps: 1 }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_delete',
@@ -1729,7 +1751,7 @@ describe('直写档写工具', () => {
   });
 
   it('直写 unknown 结果保留证据并禁止按验证失败重试', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': {
         kind: 'unknown',
         executedOps: 1,
@@ -1742,7 +1764,7 @@ describe('直写档写工具', () => {
         evidence: [{ operation: { type: 'node.delete', nodeUuid: 'panel-uuid' } }]
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_delete',
@@ -1754,7 +1776,7 @@ describe('直写档写工具', () => {
   });
 
   it('直写重读不符抛 DIRECT_WRITE_VERIFY_FAILED', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': {
         kind: 'success',
         executedOps: 1,
@@ -1765,7 +1787,7 @@ describe('直写档写工具', () => {
         }
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_component_set_property',
@@ -1782,10 +1804,10 @@ describe('直写档写工具', () => {
   });
 
   it('直写 success 但 verification=null 仍判定验证失败', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': { kind: 'success', executedOps: 1, verification: null }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_node_delete',
@@ -1836,8 +1858,8 @@ describe('直写档写工具', () => {
     ];
 
     for (const outcome of invalidOutcomes) {
-      const probeClient = new RecordingProbeClient(createRespond({ 'probe.directWrite': outcome }));
-      const { client } = await createHarness(probeClient, { enableWrites: true });
+      const creatorClient = new RecordingCreatorClient(createRespond({ 'probe.directWrite': outcome }));
+      const { client } = await createHarness(creatorClient, { enableWrites: true });
       const result = await client.callTool({
         name: 'cocos_batch_write',
         arguments: { projectId: 'proj1', operations }
@@ -1849,7 +1871,7 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_batch_write 复用直写通道并原样转发协议操作', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': {
         kind: 'success',
         executedOps: 2,
@@ -1863,7 +1885,7 @@ describe('直写档写工具', () => {
         }
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
     const operations = [
       { type: 'node.set_active', nodeUuid: 'panel-uuid', active: true },
       { type: 'node.set_transform', nodeUuid: 'panel-uuid', localTransform: { position: { x: 12, y: 34, z: 0 } } }
@@ -1874,7 +1896,7 @@ describe('直写档写工具', () => {
       arguments: { projectId: 'proj1', operations }
     });
     expect(result.structuredContent).toMatchObject({ outcome: { executedOps: 2 } });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as { params: { operations: unknown[] } };
     expect(payload.params.operations).toEqual(operations);
   });
@@ -1891,21 +1913,21 @@ describe('直写档写工具', () => {
         assetUrl: 'db://assets/ui/Test.prefab'
       }
     ]) {
-      const probeClient = new RecordingProbeClient(createRespond());
-      const { client } = await createHarness(probeClient, { enableWrites: true });
+      const creatorClient = new RecordingCreatorClient(createRespond());
+      const { client } = await createHarness(creatorClient, { enableWrites: true });
       const result = await client.callTool({
         name: 'cocos_batch_write',
         arguments: { projectId: 'proj1', operations: [operation] }
       });
 
       expect(result.isError).toBe(true);
-      expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+      expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
     }
   });
 
   it('cocos_batch_write 服务层仍以 allowlist 拒绝绕过公开 Schema 的危险操作', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const serviceOptions = { probeClient };
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const serviceOptions = { creatorClient };
     const readonlyService = new CocosReadonlyToolService(serviceOptions);
     const service = new CocosDirectToolService(readonlyService);
 
@@ -1925,7 +1947,7 @@ describe('直写档写工具', () => {
         operations: [operation] as never
       })).rejects.toThrow('BATCH_WRITE_OPERATION_NOT_ALLOWED');
     }
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.directWrite');
   });
 
   it('cocos_prefab_create 复用直写链路并在重开后 dirty 时补保存', async () => {
@@ -1933,7 +1955,7 @@ describe('直写档写工具', () => {
     const respond = createRespond({
       'probe.directWrite': PREFAB_CREATE_SUCCESS
     });
-    const probeClient = new RecordingProbeClient((method, payload) => {
+    const creatorClient = new RecordingCreatorClient((method, payload) => {
       if (method === 'probe.editorState') {
         return {
           ...EDITOR_STATE,
@@ -1946,7 +1968,7 @@ describe('直写档写工具', () => {
       }
       return respond(method, payload);
     });
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_create',
@@ -1967,7 +1989,7 @@ describe('直写档写工具', () => {
       },
       state: { document: { dirty: false } }
     });
-    expect(probeClient.requests).toContainEqual({
+    expect(creatorClient.requests).toContainEqual({
       method: 'probe.directWrite',
       payload: {
         selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' },
@@ -1981,20 +2003,20 @@ describe('直写档写工具', () => {
         }
       }
     });
-    const methods = probeClient.requests.map((request) => request.method);
+    const methods = creatorClient.requests.map((request) => request.method);
     expect(methods).toContain('probe.saveDocument');
     expect(methods.at(-1)).toBe('probe.editorState');
   });
 
   it('cocos_prefab_create 在创建后 dirty 未清除时返回稳定错误', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': PREFAB_CREATE_SUCCESS,
       'probe.editorState': {
         ...EDITOR_STATE,
         document: { assetUuid: 'prefab-uuid-1', dirty: true }
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_create',
@@ -2016,12 +2038,12 @@ describe('直写档写工具', () => {
         nextAction: expect.stringContaining('cocos_document_save')
       }
     });
-    expect(probeClient.requests.map((request) => request.method)).toContain('probe.saveDocument');
+    expect(creatorClient.requests.map((request) => request.method)).toContain('probe.saveDocument');
   });
 
   it('cocos_prefab_create 拒绝缺失资产或重建节点身份的成功证据', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_create',
@@ -2039,8 +2061,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_prefab_create 拒绝非 prefab 后缀的 URL', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_create',
@@ -2051,8 +2073,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_prefab_rename 按 UUID 在同目录内直写 asset.move 并保持 UUID', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_rename',
@@ -2064,7 +2086,7 @@ describe('直写档写工具', () => {
       targetUrl: 'db://assets/ui/RenamedPrefab.prefab',
       outcome: { kind: 'success', executedOps: 1 }
     });
-    const write = probeClient.requests.at(-1);
+    const write = creatorClient.requests.at(-1);
     const payload = write?.payload as {
       params: { operations: Array<Record<string, unknown>>; save: boolean }
     };
@@ -2079,7 +2101,7 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_prefab_rename 拒绝非 Prefab 资产和路径型名称', async () => {
-    const nonPrefabProbe = new RecordingProbeClient(createRespond({
+    const nonPrefabProbe = new RecordingCreatorClient(createRespond({
       'probe.assets': {
         ...INSPECT_ASSET_RESPONSE,
         details: { ...INSPECT_ASSET_RESPONSE.details, type: 'cc.ImageAsset' }
@@ -2094,7 +2116,7 @@ describe('直写档写工具', () => {
     expect(JSON.stringify(nonPrefab.content)).toContain('ASSET_NOT_PREFAB');
     expect(nonPrefabProbe.requests.map((request) => request.method)).not.toContain('probe.directWrite');
 
-    const invalidNameProbe = new RecordingProbeClient(createRespond());
+    const invalidNameProbe = new RecordingCreatorClient(createRespond());
     const { client: invalidNameClient } = await createHarness(invalidNameProbe, { enableWrites: true });
     const invalidName = await invalidNameClient.callTool({
       name: 'cocos_prefab_rename',
@@ -2106,8 +2128,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_prefab_delete 缺少精确 URL 确认时拒绝删除', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2115,14 +2137,14 @@ describe('直写档写工具', () => {
     });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('PREFAB_DELETE_CONFIRMATION_REQUIRED');
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
   });
 
   it('cocos_prefab_delete 有引用但未显式确认时拒绝删除', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': { ...INSPECT_ASSET_RESPONSE, users: ['scene-uuid-1'] }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2135,18 +2157,18 @@ describe('直写档写工具', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('PREFAB_REFERENCES_CONFIRMATION_REQUIRED');
     expect(JSON.stringify(result.content)).toContain('scene-uuid-1');
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
   });
 
   it('cocos_prefab_delete 引用查询不可用时默认拒绝删除', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': {
         ...INSPECT_ASSET_RESPONSE,
         users: null,
         unresolved: [{ path: 'query-asset-users', reason: 'MESSAGE_API_UNAVAILABLE' }]
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2158,12 +2180,12 @@ describe('直写档写工具', () => {
     });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('PREFAB_REFERENCES_UNRESOLVED');
-    expect(probeClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
+    expect(creatorClient.requests.map((request) => request.method)).not.toContain('probe.deleteAsset');
   });
 
   it('cocos_prefab_delete 精确确认无引用目标后删除并返回验证结果', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2178,7 +2200,7 @@ describe('直写档写工具', () => {
       references: { users: [], dependencies: [] },
       result: { deleted: true, verified: true }
     });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.deleteAsset',
       payload: {
         selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' },
@@ -2188,10 +2210,10 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_prefab_delete 引用确认后允许删除', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': { ...INSPECT_ASSET_RESPONSE, users: ['scene-uuid-1'] }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2203,12 +2225,12 @@ describe('直写档写工具', () => {
       }
     });
     expect(result.structuredContent).toMatchObject({ references: { users: ['scene-uuid-1'] } });
-    expect(probeClient.requests.at(-1)?.method).toBe('probe.deleteAsset');
+    expect(creatorClient.requests.at(-1)?.method).toBe('probe.deleteAsset');
   });
 
   it('cocos_document_save 保存后重读确认 dirty 已清除', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_document_save',
@@ -2218,19 +2240,19 @@ describe('直写档写工具', () => {
       result: { saved: true },
       state: { document: { assetUuid: 'prefab-uuid-1', dirty: false } }
     });
-    const methods = probeClient.requests.map((request) => request.method);
+    const methods = creatorClient.requests.map((request) => request.method);
     expect(methods.indexOf('probe.saveDocument')).toBeLessThan(methods.lastIndexOf('probe.editorState'));
-    expect(probeClient.requests.at(-1)?.method).toBe('probe.editorState');
+    expect(creatorClient.requests.at(-1)?.method).toBe('probe.editorState');
   });
 
   it('cocos_document_save 在 dirty 未清除时返回稳定错误', async () => {
-    const probeClient = new RecordingProbeClient(createRespond({
+    const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.editorState': {
         ...EDITOR_STATE,
         document: { assetUuid: 'prefab-uuid-1', dirty: true }
       }
     }));
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_document_save',
@@ -2247,8 +2269,8 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_asset_import 校验 URL 并转发 probe.importAsset', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_asset_import',
@@ -2259,7 +2281,7 @@ describe('直写档写工具', () => {
       }
     });
     expect(result.structuredContent).toMatchObject({ result: { uuid: 'imported-uuid' } });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.importAsset',
       payload: {
         selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' },
@@ -2276,14 +2298,14 @@ describe('直写档写工具', () => {
   });
 
   it('cocos_asset_refresh 转发 probe.refreshAsset', async () => {
-    const probeClient = new RecordingProbeClient(createRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_asset_refresh',
       arguments: { projectId: 'proj1', assetUrl: 'db://assets/script/A.ts' }
     });
     expect(result.structuredContent).toMatchObject({ result: { refreshed: true, compileTriggered: true } });
-    expect(probeClient.requests.at(-1)?.method).toBe('probe.refreshAsset');
+    expect(creatorClient.requests.at(-1)?.method).toBe('probe.refreshAsset');
   });
 });

@@ -5,14 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const releaseVersion = '0.6.9';
+const releaseVersion = '0.7.0';
 const workspacePackagePaths = [
   'packages/bridge-extension',
   'packages/cli',
   'packages/client',
   'packages/core',
   'packages/mcp-server',
-  'packages/probe-server',
   'packages/protocol'
 ];
 

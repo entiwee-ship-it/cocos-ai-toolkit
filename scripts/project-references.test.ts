@@ -18,11 +18,10 @@ describe('TypeScript project references', () => {
     expect(packageJson.scripts?.typecheck).toBe('tsc -b --pretty false');
     expect(solution.references?.map((item) => item.path)).toEqual([
       'packages/protocol',
-      'packages/client',
       'packages/core',
+      'packages/client',
       'packages/cli',
       'packages/mcp-server',
-      'packages/probe-server',
       'packages/bridge-extension'
     ]);
   });
@@ -41,5 +40,14 @@ describe('TypeScript project references', () => {
       expect(manifest.dependencies?.['@cocos-ai/core'], packageRoot).toBeUndefined();
       expect(tsconfig.references?.map((item) => item.path), packageRoot).not.toContain('../core');
     }
+
+    const clientManifest = JSON.parse(
+      await readFile(new URL('packages/client/package.json', root), 'utf8')
+    ) as { dependencies?: Record<string, string> };
+    const clientConfig = JSON.parse(
+      await readFile(new URL('packages/client/tsconfig.json', root), 'utf8')
+    ) as { references?: Array<{ path: string }> };
+    expect(clientManifest.dependencies?.['@cocos-ai/core']).toBeDefined();
+    expect(clientConfig.references?.map((item) => item.path)).toContain('../core');
   });
 });

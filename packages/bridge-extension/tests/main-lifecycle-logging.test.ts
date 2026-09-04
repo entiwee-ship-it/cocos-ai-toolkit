@@ -1,127 +1,107 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BridgeLifecycleEvent } from '../src/bridge-client';
 
-const bridgeMock = vi.hoisted(() => ({
-  connect: vi.fn(),
-  dispose: vi.fn(),
+const ipcMock = vi.hoisted(() => ({
   options: null as null | {
-    onLifecycleEvent?: (event: BridgeLifecycleEvent) => void;
-  }
+    onLifecycleEvent?: (event: unknown) => void;
+  },
+  start: vi.fn(),
+  stop: vi.fn()
 }));
 
-vi.mock('../src/bridge-client', () => ({
-  BridgeClient: class {
-    constructor(options: typeof bridgeMock.options) {
-      bridgeMock.options = options;
+vi.mock('../src/ipc-server', () => ({
+  buildCreatorPipeName: () => '\\\\.\\pipe\\cocos-ai-test',
+  CreatorIpcServer: class {
+    constructor(options: typeof ipcMock.options) {
+      ipcMock.options = options;
     }
 
-    connect(): void {
-      bridgeMock.connect();
+    async start() {
+      ipcMock.start();
+      ipcMock.options?.onLifecycleEvent?.({
+        type: 'ready',
+        pipeName: '\\\\.\\pipe\\cocos-ai-test',
+        endpointFile: 'C:/endpoint/test.json'
+      });
+      return this.getStatus();
     }
 
-    dispose(): void {
-      bridgeMock.dispose();
-      bridgeMock.options?.onLifecycleEvent?.({ type: 'disposed' });
+    async stop() {
+      ipcMock.stop();
+      ipcMock.options?.onLifecycleEvent?.({
+        type: 'stopped',
+        pipeName: '\\\\.\\pipe\\cocos-ai-test'
+      });
+    }
+
+    getStatus() {
+      return {
+        state: 'ready',
+        pipeName: '\\\\.\\pipe\\cocos-ai-test',
+        endpointFile: 'C:/endpoint/test.json',
+        activeRequests: 0,
+        totalRequests: 0,
+        lastRequestAt: null,
+        lastError: null,
+        authentication: 'local-user'
+      };
     }
   }
 }));
 
 describe('Bridge 扩展生命周期控制台日志', () => {
   const originalEditor = (globalThis as Record<string, unknown>).Editor;
-  const originalProbeUrl = process.env.COCOS_AI_PROBE_SERVER_URL;
   const editorLog = vi.fn();
 
   beforeEach(() => {
-    bridgeMock.connect.mockReset();
-    bridgeMock.dispose.mockReset();
-    bridgeMock.options = null;
+    ipcMock.options = null;
+    ipcMock.start.mockReset();
+    ipcMock.stop.mockReset();
     editorLog.mockReset();
-    process.env.COCOS_AI_PROBE_SERVER_URL = 'ws://127.0.0.1:43210';
     (globalThis as Record<string, unknown>).Editor = {
       Project: { path: 'E:/project', uuid: 'project-id' },
       App: { version: '3.8.8' },
       log: editorLog,
-      Message: { request: vi.fn() }
+      Message: { request: vi.fn() },
+      Panel: { open: vi.fn(), has: vi.fn() },
+      Selection: { clear: vi.fn(), select: vi.fn(), getSelected: vi.fn(() => []) }
     };
   });
 
   afterEach(async () => {
     const main = await import('../src/main');
-    main.unload();
-    if (originalEditor === undefined) {
-      delete (globalThis as Record<string, unknown>).Editor;
-    } else {
-      (globalThis as Record<string, unknown>).Editor = originalEditor;
-    }
-    if (originalProbeUrl === undefined) {
-      delete process.env.COCOS_AI_PROBE_SERVER_URL;
-    } else {
-      process.env.COCOS_AI_PROBE_SERVER_URL = originalProbeUrl;
-    }
+    await main.unload();
+    if (originalEditor === undefined) delete (globalThis as Record<string, unknown>).Editor;
+    else (globalThis as Record<string, unknown>).Editor = originalEditor;
   });
 
-  it('加载时输出可区分真实运行时的初始化信息并转发连接事件', async () => {
+  it('加载时只启动 Creator 本机直连并输出有效信息', async () => {
     const main = await import('../src/main');
+    await main.load();
 
-    main.load();
-
-    expect(bridgeMock.connect).toHaveBeenCalledOnce();
-    expect(editorLog).toHaveBeenCalledWith(expect.stringMatching(
-      /^\[CocosAI\]\[Bridge\] 扩展开始加载 \{.*\}$/
-    ));
-    const loadMessage = editorLog.mock.calls[0][0] as string;
-    const loadDetails = JSON.parse(loadMessage.slice(loadMessage.indexOf('{'))) as Record<string, unknown>;
-    expect(loadDetails).toMatchObject({
-      扩展版本: '0.6.9',
+    expect(ipcMock.start).toHaveBeenCalledOnce();
+    const loadMessage = editorLog.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.startsWith('[CocosAI][Bridge] 扩展开始加载 '));
+    expect(loadMessage).toBeDefined();
+    const details = JSON.parse(loadMessage!.slice(loadMessage!.indexOf('{'))) as Record<string, unknown>;
+    expect(details).toMatchObject({
+      扩展版本: '0.7.0',
       Creator版本: '3.8.8',
       项目ID: 'project-id',
       项目路径: 'E:/project',
       进程ID: process.pid,
-      探针地址: 'ws://127.0.0.1:43210'
+      直连管道: '\\\\.\\pipe\\cocos-ai-test'
     });
-    expect(loadDetails.能力数量).toBeTypeOf('number');
-    expect(loadDetails.能力数量).toBeGreaterThan(0);
+    expect(details.能力数量).toBeTypeOf('number');
+    const readyMessage = editorLog.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.startsWith('[CocosAI][Bridge] 本机直连已就绪 '));
+    expect(readyMessage).toContain('cocos-ai-test');
+    expect(readyMessage).toContain('C:/endpoint/test.json');
+    expect(editorLog.mock.calls.flat().join('\n')).not.toContain('WebSocket');
+    expect(editorLog.mock.calls.flat().join('\n')).not.toContain('32188');
 
-    bridgeMock.options?.onLifecycleEvent?.({ type: 'connecting', url: 'ws://127.0.0.1:43210' });
-    bridgeMock.options?.onLifecycleEvent?.({ type: 'socket-open', url: 'ws://127.0.0.1:43210' });
-    bridgeMock.options?.onLifecycleEvent?.({ type: 'hello-sent' });
-    bridgeMock.options?.onLifecycleEvent?.({ type: 'ready' });
-    bridgeMock.options?.onLifecycleEvent?.({
-      type: 'disconnected',
-      code: 1012,
-      reason: '测试重启'
-    });
-    bridgeMock.options?.onLifecycleEvent?.({
-      type: 'retry-scheduled',
-      attempt: 2,
-      delayMs: 1000
-    });
-    bridgeMock.options?.onLifecycleEvent?.({
-      type: 'disconnected',
-      code: 1006,
-      reason: ''
-    });
-    expect(editorLog).toHaveBeenCalledWith(
-      '[CocosAI][Bridge] 正在连接探针服务 {"地址":"ws://127.0.0.1:43210"}'
-    );
-    expect(editorLog).toHaveBeenCalledWith(
-      '[CocosAI][Bridge] 探针连接已建立 {"地址":"ws://127.0.0.1:43210"}'
-    );
-    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 已发送身份握手');
-    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 扩展初始化完成');
-    expect(editorLog).toHaveBeenCalledWith(
-      '[CocosAI][Bridge] 探针连接已断开 {"关闭码":1012,"原因":"测试重启"}'
-    );
-    expect(editorLog).toHaveBeenCalledWith(
-      '[CocosAI][Bridge] 已安排重新连接 {"重试次数":2,"等待毫秒":1000}'
-    );
-    expect(editorLog).toHaveBeenCalledWith(
-      '[CocosAI][Bridge] 探针连接已断开 {"关闭码":1006}'
-    );
-    expect(editorLog).not.toHaveBeenCalledWith(expect.stringContaining('"原因":""'));
-
-    main.unload();
-    expect(bridgeMock.dispose).toHaveBeenCalledOnce();
-    expect(editorLog).toHaveBeenCalledWith('[CocosAI][Bridge] 扩展已卸载');
+    await main.unload();
+    expect(ipcMock.stop).toHaveBeenCalledOnce();
   });
 });

@@ -4,7 +4,7 @@ import { normalizeAssetInfo } from './asset-probe';
 /**
  * 全量资产索引查询的精简字段集：只取 buildAssetIndex 实际消费的字段。
  * 完整 ASSET_DATA_KEYS 里的 meta/depends/dependeds/subAssets 等重字段
- * 会让大项目的 query-assets 超过 Probe Server 10s 转发超时。
+ * 会让大项目的 query-assets 超过 Creator IPC 请求超时。
  */
 const ASSET_INDEX_DATA_KEYS = [
   'name', 'displayName', 'source', 'path', 'url', 'file', 'uuid', 'importer',
@@ -188,7 +188,7 @@ export function buildAssetIndex(values: AssetIndexInput[]): AssetIndexResult {
 }
 
 /**
- * 移除运行期 Map，生成可通过 WebSocket JSON 序列化的资产索引。
+ * 移除运行期 Map，生成可通过 IPC JSON 序列化的资产索引。
  *
  * @param result 内部资产索引。
  * @returns 只包含数组和未解析项的资产索引。
@@ -213,7 +213,7 @@ export async function probeAssetIndex(request?: unknown): Promise<unknown> {
 }
 
 /**
- * 在 Bridge 内按 MCP 既有语义执行大小写无关的包含匹配，避免把全量索引传过 WebSocket。
+ * 在 Bridge 内按 MCP 既有语义执行大小写无关的包含匹配，避免把全量索引传过 IPC。
  *
  * @param request 搜索文本和可选完整诊断标记。
  * @returns 已排序的命中资产、兼容旧 cursor 的全量清单 revision 和未解析项。

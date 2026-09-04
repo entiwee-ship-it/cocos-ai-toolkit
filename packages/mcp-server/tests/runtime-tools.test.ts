@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ReadonlyProbeClient } from '../src/tools.js';
+import type { ReadonlyCreatorClient } from '../src/tools.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCocosMcpServer } from '../src/server.js';
 
@@ -10,7 +10,7 @@ interface ProbeRequest {
   payload: unknown;
 }
 
-class RecordingProbeClient implements ReadonlyProbeClient {
+class RecordingCreatorClient implements ReadonlyCreatorClient {
   readonly requests: ProbeRequest[] = [];
 
   constructor(
@@ -28,7 +28,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.6.9',
+  bridgeVersion: '0.7.0',
   capabilities: ['probe.editorState', 'probe.previewOpen']
 };
 
@@ -96,15 +96,15 @@ afterEach(async () => {
 });
 
 async function createHarness(
-  probeClient: ReadonlyProbeClient,
+  creatorClient: ReadonlyCreatorClient,
   options: { enableWrites?: boolean } = {}
 ) {
   const server = createCocosMcpServer(
-    { probeClient },
+    { creatorClient },
     { enableWrites: options.enableWrites }
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'runtime-test-client', version: '0.6.9' });
+  const client = new Client({ name: 'runtime-test-client', version: '0.7.0' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)
@@ -115,8 +115,8 @@ async function createHarness(
 
 describe('运行态 MCP 工具', () => {
   it('默认注册运行态只读工具，门控工具仅 enableWrites 时注册', async () => {
-    const probeClient = new RecordingProbeClient(createRuntimeRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.listTools();
     const names = result.tools.map((tool) => tool.name);
@@ -142,7 +142,7 @@ describe('运行态 MCP 工具', () => {
       expect(names).not.toContain(gated);
     }
 
-    const { client: writeClient } = await createHarness(probeClient, { enableWrites: true });
+    const { client: writeClient } = await createHarness(creatorClient, { enableWrites: true });
     const writeTools = await writeClient.listTools();
     const writeNames = writeTools.tools.map((tool) => tool.name);
     for (const gated of [
@@ -176,27 +176,27 @@ describe('运行态 MCP 工具', () => {
   });
 
   it('cocos_preview_sessions 转发 server.previewSessions', async () => {
-    const probeClient = new RecordingProbeClient(createRuntimeRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({ name: 'cocos_preview_sessions', arguments: { projectId: 'proj1' } });
     expect(result.structuredContent).toMatchObject({ sessions: [] });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'server.previewSessions',
       payload: { projectId: 'proj1' }
     });
   });
 
   it('cocos_preview_launch 校验编辑器与能力后启动会话', async () => {
-    const probeClient = new RecordingProbeClient(createRuntimeRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_preview_launch',
       arguments: { projectId: 'proj1', resolution: { width: 720, height: 1280 } }
     });
     expect(result.structuredContent).toMatchObject({ sessionId: 'preview-1', state: 'ready' });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'server.previewLaunch',
       payload: {
         selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' },
@@ -206,8 +206,8 @@ describe('运行态 MCP 工具', () => {
   });
 
   it('cocos_preview_launch 在编辑器不在线时拒绝', async () => {
-    const probeClient = new RecordingProbeClient((method) => method === 'server.editors' ? [] : {});
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient((method) => method === 'server.editors' ? [] : {});
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({ name: 'cocos_preview_launch', arguments: { projectId: 'proj1' } });
     expect(result.isError).toBe(true);
@@ -218,8 +218,8 @@ describe('运行态 MCP 工具', () => {
   });
 
   it('cocos_runtime_get_hierarchy 返回协议化快照', async () => {
-    const probeClient = new RecordingProbeClient(createRuntimeRespond());
-    const { client } = await createHarness(probeClient);
+    const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_runtime_get_hierarchy',
@@ -235,7 +235,7 @@ describe('运行态 MCP 工具', () => {
       previewSessionId: 'preview-1',
       root: { name: 'Scene' }
     });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'server.runtimeHierarchy',
       payload: {
         sessionId: 'preview-1',
@@ -247,23 +247,23 @@ describe('运行态 MCP 工具', () => {
   });
 
   it('cocos_runtime_invoke_method 经门控转发', async () => {
-    const probeClient = new RecordingProbeClient(createRuntimeRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_runtime_invoke_method',
       arguments: { sessionId: 'preview-1', path: 'Canvas/panel', componentType: 'GameLogic', method: 'add', args: [2, 3] }
     });
     expect(result.structuredContent).toMatchObject({ invoked: true, returnValue: 6 });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'server.runtimeInvoke',
       payload: { sessionId: 'preview-1', path: 'Canvas/panel', componentType: 'GameLogic', method: 'add', args: [2, 3] }
     });
   });
 
   it('cocos_runtime_sample_window 经门控转发页面内采样请求', async () => {
-    const probeClient = new RecordingProbeClient(createRuntimeRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_runtime_sample_window',
@@ -282,7 +282,7 @@ describe('运行态 MCP 工具', () => {
       source: 'preview-runtime',
       samples: [{ frame: 0, nodeValid: false }]
     });
-    expect(probeClient.requests.at(-1)).toMatchObject({
+    expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'server.runtimeSampleWindow',
       payload: {
         sessionId: 'preview-1',
@@ -297,8 +297,8 @@ describe('运行态 MCP 工具', () => {
   });
 
   it('cocos_runtime_instantiate_prefab 仅在门控开启后转发并拒绝空父路径', async () => {
-    const probeClient = new RecordingProbeClient(createRuntimeRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
 
     const result = await client.callTool({
       name: 'cocos_runtime_instantiate_prefab',
@@ -314,7 +314,7 @@ describe('运行态 MCP 工具', () => {
       done: true,
       nodePath: 'Canvas/LayerUI/Dialog'
     });
-    expect(probeClient.requests.at(-1)).toEqual({
+    expect(creatorClient.requests.at(-1)).toEqual({
       method: 'server.runtimeInstantiate',
       payload: {
         sessionId: 'preview-1',
@@ -325,18 +325,18 @@ describe('运行态 MCP 工具', () => {
       }
     });
 
-    const requestCount = probeClient.requests.length;
+    const requestCount = creatorClient.requests.length;
     const invalid = await client.callTool({
       name: 'cocos_runtime_instantiate_prefab',
       arguments: { sessionId: 'preview-1', assetUuid: 'asset-1', parentPath: '   ' }
     });
     expect(invalid.isError).toBe(true);
-    expect(probeClient.requests).toHaveLength(requestCount);
+    expect(creatorClient.requests).toHaveLength(requestCount);
   });
 
   it('cocos_runtime_run_scenario 校验步骤并返回报告', async () => {
-    const probeClient = new RecordingProbeClient(createRuntimeRespond());
-    const { client } = await createHarness(probeClient, { enableWrites: true });
+    const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
     const steps = [
       { kind: 'launch' },
       { kind: 'instantiate-prefab', assetUuid: 'asset-1', parentPath: 'Canvas/LayerUI', x: 0, y: -10 },
@@ -348,7 +348,7 @@ describe('运行态 MCP 工具', () => {
       arguments: { sessionId: 'preview-1', steps }
     });
     expect(result.structuredContent).toMatchObject({ passed: true });
-    expect(probeClient.requests.at(-1)).toEqual({
+    expect(creatorClient.requests.at(-1)).toEqual({
       method: 'server.runtimeRunScenario',
       payload: { sessionId: 'preview-1', steps }
     });

@@ -36,7 +36,7 @@ describe('运行工作树同步合同', () => {
     expect(installer).not.toContain('$realProject');
   });
 
-  it('Codex、Bridge 与 Probe 默认共用固定运行 Worktree', async () => {
+  it('Codex 与 Bridge 默认共用固定运行 Worktree', async () => {
     const [bridgeInstaller, codexInstaller, checker] = await Promise.all([
       readFile(installerPath, 'utf8'),
       readFile(new URL('./install-codex-mcp.ps1', import.meta.url), 'utf8'),
@@ -48,19 +48,15 @@ describe('运行工作树同步合同', () => {
     expect(checker).toContain(runtime);
   });
 
-  it('更新失败会恢复旧提交和旧 Probe，并以 Ready 与 WebSocket 请求作为健康门禁', async () => {
+  it('更新失败会恢复旧提交，且不再启动后台服务', async () => {
     const updater = await readFile(updaterPath, 'utf8');
 
     expect(updater).toContain("Invoke-Git @('checkout', '--detach', $old)");
-    expect(updater).toContain('probe-server.ready');
-    expect(updater).toContain("'editors'");
-    expect(updater).toContain('更新失败，已恢复旧运行时');
     expect(updater).toContain('回滚失败');
-    expect(updater).toContain('$normalizedEntry');
-    expect(updater).toContain('Start-OrAdoptProbeRuntime');
-    expect(updater).toContain('$current.ProcessId -ne $Listener.ProcessId');
-    expect(updater).toContain('Assert-ProbeListener -Listener $current -ExpectedEntry $ExpectedEntry -Port $Port');
-    expect(updater).toContain('Bridge 已抢先拉起同源 Probe');
+    expect(updater).toContain('Named Pipe 无需启动服务');
+    expect(updater).not.toContain('Start-Process');
+    expect(updater).not.toContain('Get-NetTCPConnection');
+    expect(updater).not.toContain('32188');
   });
 
   it('每次构建前清空所有 workspace 的旧 dist 产物', async () => {

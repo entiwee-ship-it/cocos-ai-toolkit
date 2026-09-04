@@ -2,10 +2,10 @@
   "package_version": 2,
   "name": "cocos-ai-bridge",
   "title": "Cocos AI Bridge",
-  "version": "0.6.9",
+  "version": "0.7.0",
   "description": "i18n:cocos-ai-bridge.description",
   "author": "Enti",
-  "date": "2026-09-01",
+  "date": "2026-09-04",
   "platform": [
     "win32"
   ],
@@ -17,11 +17,46 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
+  "panels": {
+    "default": {
+      "title": "i18n:cocos-ai-bridge.panel_title",
+      "type": "dockable",
+      "main": "./dist/panels/default",
+      "size": {
+        "min-width": 460,
+        "min-height": 360,
+        "width": 760,
+        "height": 620
+      }
+    }
+  },
   "contributions": {
+    "menu": [
+      {
+        "path": "i18n:menu.panel",
+        "label": "i18n:cocos-ai-bridge.open_panel",
+        "message": "open-panel"
+      }
+    ],
     "scene": {
       "script": "./dist/scene.js"
     },
     "messages": {
+      "open-panel": {
+        "methods": [
+          "openPanel"
+        ]
+      },
+      "manager-state": {
+        "methods": [
+          "queryManagerState"
+        ]
+      },
+      "open-extension-manager": {
+        "methods": [
+          "openExtensionManager"
+        ]
+      },
       "probe-editor-state": {
         "methods": [
           "probe-editor-state"
@@ -59,11 +94,7 @@
       }
     }
   },
-  "dependencies": {
-    "ws": "8.21.3"
-  },
   "devDependencies": {
-    "@cocos/creator-types": "3.8.8",
-    "@types/ws": "^8.18.1"
+    "@cocos/creator-types": "3.8.8"
   }
 }

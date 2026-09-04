@@ -77,6 +77,7 @@ export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
   'cocos_editor_list',
   'cocos_editor_state',
   'cocos_extension_manager_open',
+  'cocos_tool_manager_open',
   'cocos_asset_search',
   'cocos_asset_inspect',
   'cocos_hierarchy',
@@ -174,6 +175,21 @@ export class CocosDirectToolService {
       {}
     ));
     if (result.opened !== true) throw new Error('EXTENSION_MANAGER_OPEN_FAILED');
+    return { editor, ...result };
+  }
+
+  /** 打开 Cocos AI 自身的工具管理面板。 */
+  async openToolManager(input: ProjectSelector) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    if (!editor.capabilities.includes('probe.managerPanelOpen')) {
+      throw new Error('EDITOR_CAPABILITY_MISSING:probe.managerPanelOpen');
+    }
+    const result = asRecord(await this.readonlyService.requestBridge(
+      editor,
+      'probe.managerPanelOpen',
+      {}
+    ));
+    if (result.opened !== true) throw new Error('TOOL_MANAGER_OPEN_FAILED');
     return { editor, ...result };
   }
 
@@ -1432,7 +1448,7 @@ export function registerCocosDirectReadonlyTools(
   service: CocosDirectToolService
 ): void {
   server.registerTool('cocos_editor_list', {
-    description: '列出当前连接 Probe Server 的 Creator；Probe 离线时返回空 editors 和 backend 状态，Bridge 上线后同一任务自动恢复。',
+    description: '列出当前可通过本机命名管道访问的 Creator；Creator 未打开时返回空 editors 和 IPC 状态。',
     inputSchema: {},
     outputSchema: ToolOutputSchema,
     annotations: READONLY_ANNOTATIONS
@@ -1451,6 +1467,13 @@ export function registerCocosDirectReadonlyTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(service.openExtensionManager(input)));
+
+  server.registerTool('cocos_tool_manager_open', {
+    description: '直接在目标 Cocos Creator 中打开 Cocos AI 工具管理面板。',
+    inputSchema: ProjectSelectorInput,
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(service.openToolManager(input)));
 
   server.registerTool('cocos_asset_search', {
     description: '在 Creator AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），按 cursor 分页。',

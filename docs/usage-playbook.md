@@ -1,6 +1,6 @@
 # Cocos AI Toolkit 使用手册
 
-本文描述当前 `0.6.x` 直写架构。
+本文描述当前 `0.7.x` 直写架构。
 
 ## 1. 核心边界
 
@@ -9,6 +9,8 @@
 - 每次直写按顺序执行操作，随后保存并逐项重读验证；失败即停，已执行项不会自动恢复。
 - `DIRECT_WRITE_OUTCOME_UNKNOWN` 表示写入可能已经生效。先用 `cocos_editor_state`、`cocos_hierarchy`、`cocos_node_read` 或 `cocos_asset_inspect` 重读，确认前禁止重试。
 - 节点寻址严格要求 UUID 或 path 二选一。运行期 UUID 会随文档重开变化，跨会话使用 path 或重新读取 hierarchy。
+
+Creator Bridge 使用 Windows Named Pipe 接受单次短连接，不需要启动端口服务。可从 Creator 顶部菜单 **面板 → Cocos AI 工具管理** 查看版本、发布日期、项目身份、直连状态、当前文档和 Preview 状态。
 
 ## 2. 标准编辑流程
 
@@ -24,7 +26,7 @@
 `cocos_prefab_create` 复用直写通道执行 `prefab.create_from_node`，自动保存并重开验证重建后的 Prefab 实例；若重开后 dirty，会自动补一次保存并再次确认 clean，仍 dirty 才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`cocos_document_save` 保存后仍 dirty 会返回 `DOCUMENT_DIRTY_AFTER_SAVE`，都不能当成成功。
 9. 需要视觉或交互验证时运行 Preview 工具，最后用 `cocos_preview_stop` 清理会话。
 
-Probe 未启动时 MCP 仍会正常注册 40 个工具；`cocos_editor_list` 返回空 `editors` 和 `backend` 连接状态。Creator Bridge 拉起 Probe 后，同一 MCP 任务会自动恢复，不需要重新加载工具表。其它工具在后端离线时通过 `structuredContent.error.code=PROBE_SERVER_UNAVAILABLE` 返回可重试错误。
+Creator 未打开或 Bridge 未启用时，MCP 仍会正常注册 41 个工具；`cocos_editor_list` 返回空 `editors` 和 `backend` IPC 状态。Creator Bridge 发布 Named Pipe 端点后，同一 MCP 任务会立即发现，不需要重新加载工具表。其它工具在 Creator 不可达时通过 `structuredContent.error.code=CREATOR_IPC_UNAVAILABLE` 返回可重试错误。
 
 `cocos_nodes_read` 默认并发 4，仍保持输入顺序、单项错误隔离、32 项上限和输出预算。所有工具失败都同时提供人读文本与 `structuredContent.error`；程序应读取 `code/details/stage/nextAction/retryable`。
 
@@ -91,7 +93,7 @@ Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读
 
 ## 6. 运行时同步与健康检查
 
-Codex MCP、Creator Bridge 和 Probe 必须共同指向固定运行 Worktree：
+Codex MCP 和 Creator Bridge 必须共同指向固定运行 Worktree：
 
 ```text
 E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0

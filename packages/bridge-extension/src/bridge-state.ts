@@ -11,6 +11,7 @@ export const BRIDGE_CAPABILITIES = [
   'probe.node',
   'probe.nodeSelect',
   'probe.extensionManagerOpen',
+  'probe.managerPanelOpen',
   'probe.component',
   'probe.prefab',
   'probe.directWrite',

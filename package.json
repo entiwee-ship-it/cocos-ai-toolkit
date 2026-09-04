@@ -1,6 +1,6 @@
 {
   "name": "cocos-ai-toolkit",
-  "version": "0.6.9",
+  "version": "0.7.0",
   "private": true,
   "engines": {
     "node": ">=20.19 <26"

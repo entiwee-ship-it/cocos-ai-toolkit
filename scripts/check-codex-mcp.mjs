@@ -4,7 +4,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const TOOLKIT_VERSION = '0.6.9';
+const TOOLKIT_VERSION = '0.7.0';
 const entry = process.env.COCOS_AI_MCP_ENTRY;
 if (!entry) throw new Error('COCOS_AI_MCP_ENTRY_REQUIRED');
 const sourceCommit = process.env.COCOS_AI_SOURCE_COMMIT;
@@ -31,10 +31,7 @@ const timeoutMs = Number(process.env.COCOS_AI_CHECK_TIMEOUT_MS ?? 15_000);
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [entry, ...(enableWrites ? ['--enable-writes'] : [])],
-  env: {
-    ...process.env,
-    COCOS_AI_PROBE_SERVER_URL: process.env.COCOS_AI_PROBE_SERVER_URL ?? 'ws://127.0.0.1:32188'
-  },
+  env: process.env,
   stderr: 'pipe'
 });
 const client = new Client({ name: 'cocos-ai-health-check', version: TOOLKIT_VERSION });
@@ -117,7 +114,8 @@ try {
     serverVersion: client.getServerVersion(),
     bridgeVersions,
     bridgeBuildIds,
-    writeEnabled: enableWrites,
+  writeEnabled: enableWrites,
+  transport: 'named-pipe',
     toolCount: names.length,
     editors: editorResult.structuredContent ?? null
   }) + '\n');

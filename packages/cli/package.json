@@ -1,10 +1,10 @@
 {
   "name": "@cocos-ai/cli",
-  "version": "0.6.9",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "bin": {
-    "cocos-ai-probe": "./dist/index.js"
+    "cocos-ai": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -12,8 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cocos-ai/client": "0.6.9",
-    "@cocos-ai/protocol": "0.6.9",
+    "@cocos-ai/client": "0.7.0",
+    "@cocos-ai/protocol": "0.7.0",
     "zod": "^4.3.6"
   }
 }

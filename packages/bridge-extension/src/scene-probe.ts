@@ -393,7 +393,7 @@ function readPropertyPath(target: unknown, propertyPath: string[]): { found: boo
  * @param value Creator Dump 或运行态属性值。
  * @param depth 当前递归深度。
  * @param visited 当前递归链中已经访问的对象。
- * @returns 可通过 WebSocket JSON 往返的值。
+ * @returns 可通过 IPC JSON 往返的值。
  */
 function toSerializableValue(value: unknown, depth = 0, visited = new Set<unknown>()): unknown {
   if (value === undefined) return { kind: 'undefined', source: 'creator-dump' };

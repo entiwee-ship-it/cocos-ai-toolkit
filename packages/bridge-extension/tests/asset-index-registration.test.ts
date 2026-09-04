@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe('asset index registration', () => {
-  it('同时登记 Bridge 能力、WebSocket handler 和 Creator 消息入口', () => {
+  it('同时登记 Bridge 能力、Named Pipe handler 和 Creator 消息入口', () => {
     const packageJson = JSON.parse(readFileSync(
       new URL('../package.json', import.meta.url),
       'utf8'

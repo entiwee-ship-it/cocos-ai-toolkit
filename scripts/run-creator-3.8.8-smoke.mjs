@@ -12,7 +12,6 @@ const args = readArgs(process.argv.slice(2));
 const projectPath = resolveRequiredPath(args.projectPath, 'PROJECT_PATH_REQUIRED');
 const worktreeRoot = resolve(args.worktreeRoot ?? 'E:/xile-workspace/worktrees');
 const reportRoot = resolve(args.reportRoot ?? join(repoRoot, 'reports', 'creator-smoke'));
-const probeUrl = args.probeUrl ?? 'ws://127.0.0.1:32188';
 const targetPrefabUuid = args.targetPrefabUuid ?? null;
 const instantiatePrefabUuid = args.instantiatePrefabUuid ?? null;
 const instanceName = args.instanceName ?? 'CocosAiPrefabSmoke';
@@ -39,7 +38,7 @@ const result = {
   status: 'failed',
   toolkitVersion,
   projectPath,
-  probeUrl,
+  transport: 'named-pipe',
   creatorVersion: null,
   editorInstanceId: null,
   steps: []
@@ -58,7 +57,9 @@ try {
     args: [mcpEntry, '--enable-writes'],
     env: {
       ...process.env,
-      COCOS_AI_PROBE_SERVER_URL: probeUrl
+      ...(process.env.COCOS_AI_ENDPOINT_ROOT
+        ? { COCOS_AI_ENDPOINT_ROOT: process.env.COCOS_AI_ENDPOINT_ROOT }
+        : {})
     },
     stderr: 'pipe'
   });
@@ -125,7 +126,7 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   const unavailable = error instanceof SmokeSkip
-    || /ECONNREFUSED|MCP_SERVER_START_FAILED|SERVER_CONNECTION_CLOSED|CLIENT_NOT_CONNECTED|Connection closed/.test(message);
+    || /CREATOR_IPC_UNAVAILABLE|CREATOR_CLIENT_NOT_READY|MCP_SERVER_START_FAILED|Connection closed/.test(message);
   result.status = unavailable ? 'skipped' : 'failed';
   result.message = message;
   process.exitCode = unavailable ? 2 : 1;
@@ -140,7 +141,7 @@ async function callTool(targetClient, request) {
   return response.structuredContent ?? {};
 }
 
-/** 等待 MCP 后台 ProbeClient 完成握手，并返回包含目标工程的编辑器列表。 */
+/** 等待 Creator 扩展发布 Named Pipe 端点，并返回包含目标工程的编辑器列表。 */
 async function waitForProjectEditor(targetClient, targetProjectPath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   do {

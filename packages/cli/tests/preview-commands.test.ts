@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { parseCommand } from '../src/commands.js';
-import { toRequest } from '../src/index.js';
+import { assertCliCommandSupported, toRequest } from '../src/index.js';
 
 describe('preview 命令解析', () => {
+  it('无后台服务时 CLI 只允许自包含的 runtime-scenario', () => {
+    expect(() => assertCliCommandSupported(parseCommand([
+      'preview-launch', '--project-id', 'p1'
+    ]))).toThrow('CLI_RUNTIME_SESSION_REQUIRES_MCP');
+    expect(() => assertCliCommandSupported(parseCommand([
+      'runtime-scenario',
+      '--project-id', 'p1',
+      '--steps', '[{"kind":"launch"},{"kind":"stop","always":true}]'
+    ]))).not.toThrow();
+    expect(() => assertCliCommandSupported(parseCommand([
+      'runtime-scenario',
+      '--session-id', 's1',
+      '--steps', '[{"kind":"stop","always":true}]'
+    ]))).toThrow('CLI_SCENARIO_MUST_OWN_SESSION');
+  });
+
   it('preview-launch 解析项目选择器、分辨率与浏览器通道', () => {
     const command = parseCommand([
       'preview-launch',

@@ -11,7 +11,7 @@ describe('buildBridgeHello', () => {
       projectPath: 'E:/project',
       projectId: 'project-uuid',
       creatorVersion: '3.8.8',
-      bridgeVersion: '0.6.9',
+      bridgeVersion: '0.7.0',
       bridgeBuildId: 'sha256:bridge-build'
     });
 
@@ -26,6 +26,7 @@ describe('buildBridgeHello', () => {
     expect(BRIDGE_CAPABILITIES).toContain('probe.importAsset');
     expect(BRIDGE_CAPABILITIES).toContain('probe.nodeSelect');
     expect(BRIDGE_CAPABILITIES).toContain('probe.extensionManagerOpen');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.managerPanelOpen');
   });
 });
 

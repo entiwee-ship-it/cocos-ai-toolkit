@@ -97,10 +97,10 @@ async function probeNode(request: unknown): Promise<unknown> {
 }
 
 /**
- * 在 Bridge 把读取结果送入 WebSocket 前限制序列化字节数，避免完整 raw 意外放大传输。
+ * 在 Bridge 把读取结果送入 IPC 前限制序列化字节数，避免完整 raw 意外放大传输。
  *
  * @param method 当前内部探针方法名。
- * @param response 即将返回给 Probe Server 的结果。
+ * @param response 即将返回给 Creator IPC 客户端的结果。
  * @param input 调用参数；maxOutputBytes 未提供时使用安全默认值。
  * @returns 未超出预算的原始响应。
  */

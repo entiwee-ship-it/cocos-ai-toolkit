@@ -111,10 +111,10 @@ describe('local readonly commands', () => {
 });
 
 describe('readRequestTimeoutMs', () => {
-  it('仅接受正整数毫秒，非法值回退默认 60 秒', () => {
+  it('仅接受正整数毫秒，非法值回退默认 180 秒', () => {
     expect(readRequestTimeoutMs('120000')).toBe(120000);
     for (const value of [undefined, '0', '-1', '1.5', 'not-a-number']) {
-      expect(readRequestTimeoutMs(value)).toBe(60000);
+      expect(readRequestTimeoutMs(value)).toBe(180000);
     }
   });
 });

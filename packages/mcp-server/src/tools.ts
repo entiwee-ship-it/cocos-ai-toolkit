@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ProbeClientStatus } from '@cocos-ai/client';
+import type { CreatorClientStatus } from '@cocos-ai/client';
 import { z } from 'zod';
 import {
   AssetRecordSchema,
@@ -11,10 +11,10 @@ const SUPPORTED_CREATOR_VERSION = '3.8.8';
 const ASSET_SEARCH_PAGE_SIZE_MAX = 200;
 const ASSET_INSPECT_PAGE_SIZE_MAX = 500;
 
-/** MCP 侧只读探针客户端抽象。 */
-export interface ReadonlyProbeClient {
+/** MCP 侧 Creator 本机直连客户端抽象。 */
+export interface ReadonlyCreatorClient {
   request(method: string, payload: unknown): Promise<unknown>;
-  getStatus?(): ProbeClientStatus;
+  getStatus?(): CreatorClientStatus;
 }
 
 const EditorSessionSchema = z.object({
@@ -181,7 +181,7 @@ export type EditorSession = z.infer<typeof EditorSessionSchema>;
 type AssetCursor = z.infer<typeof CursorSchema>;
 
 export interface CocosReadonlyToolServiceOptions {
-  probeClient: ReadonlyProbeClient;
+  creatorClient: ReadonlyCreatorClient;
 }
 
 /**
@@ -190,20 +190,20 @@ export interface CocosReadonlyToolServiceOptions {
 export class CocosReadonlyToolService {
   constructor(private readonly options: CocosReadonlyToolServiceOptions) {}
 
-  /** 返回 Probe 后端状态；测试替身未实现时返回 null。 */
+  /** 返回 Creator IPC 后端状态；测试替身未实现时返回 null。 */
   readBackendStatus() {
-    const status = this.options.probeClient.getStatus?.();
-    return status ? { available: status.state === 'connected', ...status } : null;
+    const status = this.options.creatorClient.getStatus?.();
+    return status ? { available: status.state === 'ready', ...status } : null;
   }
 
   /**
-   * 返回当前 Probe Server 已登记的全部 Creator 编辑器实例。
+   * 返回当前可通过命名管道访问的全部 Creator 编辑器实例。
    *
    * @returns 经过结构校验的编辑器会话列表。
    */
   async listEditors(): Promise<EditorSession[]> {
     return EditorSessionSchema.array().parse(
-      await this.options.probeClient.request('server.editors', {})
+      await this.options.creatorClient.request('server.editors', {})
     );
   }
 
@@ -245,7 +245,7 @@ export class CocosReadonlyToolService {
   }) {
     const editor = await this.resolveEditor(selector);
     assertCapability(editor, 'probe.editorState');
-    const state = readEditorStateResponse(await this.options.probeClient.request(
+    const state = readEditorStateResponse(await this.options.creatorClient.request(
       'probe.editorState',
       {
         selector: {
@@ -290,7 +290,7 @@ export class CocosReadonlyToolService {
       requestedPageSize: input.pageSize,
       includeRaw
     });
-    const response = readAssetSearchProbeResponse(await this.options.probeClient.request('probe.assetSearch', {
+    const response = readAssetSearchProbeResponse(await this.options.creatorClient.request('probe.assetSearch', {
       selector: toSelector(editor),
       params: {
         pattern,
@@ -346,7 +346,7 @@ export class CocosReadonlyToolService {
   }) {
     const editor = await this.resolveEditor(input);
     assertCapability(editor, 'probe.assets');
-    const response = readAssetProbeResponse(await this.options.probeClient.request('probe.assets', {
+    const response = readAssetProbeResponse(await this.options.creatorClient.request('probe.assets', {
       selector: toSelector(editor),
       params: { uuid: input.uuid }
     }));
@@ -422,7 +422,7 @@ export class CocosReadonlyToolService {
     const editor = await this.resolveEditor(input);
     assertCapability(editor, 'probe.assets');
     assertCapability(editor, 'probe.openAsset');
-    const inspected = readAssetProbeResponse(await this.options.probeClient.request('probe.assets', {
+    const inspected = readAssetProbeResponse(await this.options.creatorClient.request('probe.assets', {
       selector: toSelector(editor),
       params: { uuid: input.uuid, detailsOnly: true }
     }));
@@ -430,7 +430,7 @@ export class CocosReadonlyToolService {
     if (!inspected.details.uuid) throw new Error('ASSET_IDENTITY_UNAVAILABLE');
     if (inspected.details.uuid !== input.uuid) throw new Error('ASSET_IDENTITY_MISMATCH');
     const asset = toAssetRecord(inspected.details);
-    const response = readAssetOpenProbeResponse(await this.options.probeClient.request(
+    const response = readAssetOpenProbeResponse(await this.options.creatorClient.request(
       'probe.openAsset',
       {
         selector: toSelector(editor),
@@ -462,7 +462,7 @@ export class CocosReadonlyToolService {
     const editor = await this.resolveEditor(input);
     assertCapability(editor, 'probe.component');
     const response = readComponentProbeResponse(
-      await this.options.probeClient.request('probe.component', {
+      await this.options.creatorClient.request('probe.component', {
         selector: toSelector(editor),
         params: { uuid: input.uuid }
       })
@@ -498,7 +498,7 @@ export class CocosReadonlyToolService {
     assertCapability(editor, 'probe.hierarchy');
     return {
       editor,
-      hierarchy: await this.options.probeClient.request('probe.hierarchy', {
+      hierarchy: await this.options.creatorClient.request('probe.hierarchy', {
         selector: toSelector(editor),
         params: {
           ...(typeof input.depth === 'number' ? { depth: input.depth } : {}),
@@ -531,7 +531,7 @@ export class CocosReadonlyToolService {
     assertCapability(editor, 'probe.node');
     return {
       editor,
-      node: await this.options.probeClient.request('probe.node', {
+      node: await this.options.creatorClient.request('probe.node', {
         selector: toSelector(editor),
         params: {
           uuid: input.uuid,
@@ -547,7 +547,7 @@ export class CocosReadonlyToolService {
   }
 
   /**
-   * 经 Probe Server 向目标编辑器发起一次原始请求（直写等高层服务的共用通道）。
+   * 经 Named Pipe 向目标编辑器发起一次原始请求（直写等高层服务的共用通道）。
    *
    * @param editor 已解析的编辑器会话。
    * @param method Bridge 探针方法名。
@@ -555,7 +555,7 @@ export class CocosReadonlyToolService {
    * @returns Bridge 响应载荷。
    */
   async requestBridge(editor: EditorSession, method: string, params: unknown): Promise<unknown> {
-    return this.options.probeClient.request(method, {
+    return this.options.creatorClient.request(method, {
       selector: toSelector(editor),
       params
     });

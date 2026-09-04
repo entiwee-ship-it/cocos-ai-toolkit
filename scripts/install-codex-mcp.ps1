@@ -1,19 +1,17 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0',
-    [string]$ProbeUrl = 'ws://127.0.0.1:32188',
     [string]$NodePath = '',
+    [string]$EndpointRoot = '',
     [switch]$SkipBuild,
     [switch]$Readonly
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $ToolkitPath) { $ToolkitPath = 'E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0' }
 $ToolkitPath = [IO.Path]::GetFullPath($ToolkitPath)
 if (-not (Test-Path -LiteralPath $ToolkitPath -PathType Container)) {
     throw "工具仓库不存在: $ToolkitPath"
 }
-
 if (-not $NodePath) {
     $NodePath = (Get-Command node -ErrorAction Stop).Source
 }
@@ -24,7 +22,7 @@ if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf)) {
 
 $entry = Join-Path $ToolkitPath 'packages/mcp-server/dist/run.js'
 if (-not $SkipBuild -or -not (Test-Path -LiteralPath $entry -PathType Leaf)) {
-    if (-not $PSCmdlet.ShouldProcess($ToolkitPath, '构建 MCP Server')) { return }
+    if (-not $PSCmdlet.ShouldProcess($ToolkitPath, '构建 Cocos AI MCP Server')) { return }
     npm --prefix $ToolkitPath run build
     if ($LASTEXITCODE -ne 0) { throw 'MCP Server 构建失败' }
 }
@@ -38,26 +36,26 @@ $configDirectory = Split-Path -Parent $configPath
 New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
 $backupPath = $null
 if (Test-Path -LiteralPath $configPath -PathType Leaf) {
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $backupPath = "$configPath.$stamp.bak"
+    $backupPath = "$configPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
     if (-not $PSCmdlet.ShouldProcess($configPath, "备份到 $backupPath")) { return }
     Copy-Item -LiteralPath $configPath -Destination $backupPath -Force
 }
+if (-not $PSCmdlet.ShouldProcess('Codex MCP 配置', '替换 cocos_ai 配置')) { return }
 
-if (-not $PSCmdlet.ShouldProcess('Codex MCP 配置', '移除旧 cocos_ai 并添加 MCP 配置')) { return }
 & $codexCommand mcp remove cocos_ai 2>$null
-# remove 在条目不存在时会返回非零；这是幂等安装的正常情况。
 $serverArgs = @($entry)
 if (-not $Readonly) { $serverArgs += '--enable-writes' }
-& $codexCommand mcp add cocos_ai `
-    --env "COCOS_AI_PROBE_SERVER_URL=$ProbeUrl" `
-    -- $NodePath @serverArgs
+$installArgs = @('mcp', 'add', 'cocos_ai')
+if ($EndpointRoot) {
+    $installArgs += @('--env', "COCOS_AI_ENDPOINT_ROOT=$([IO.Path]::GetFullPath($EndpointRoot))")
+}
+$installArgs += @('--', $NodePath)
+$installArgs += $serverArgs
+& $codexCommand @installArgs
 if ($LASTEXITCODE -ne 0) { throw 'Codex MCP 配置写入失败' }
 
 Write-Output $(if ($Readonly) { '已安装 cocos_ai（只读模式）' } else { '已安装 cocos_ai（默认写入）' })
-Write-Output "Probe: $ProbeUrl"
+Write-Output '传输: Creator Named Pipe（无端口、无独立后台服务）'
 Write-Output "入口: $NodePath $entry"
-if (-not $Readonly) { Write-Output '写工具: 已开启（--enable-writes）' }
-if ($Readonly) { Write-Output '写工具: 已关闭（只读模式）' }
 if ($backupPath) { Write-Output "配置备份: $backupPath" }
-Write-Output '请重启 Codex 或新建会话后运行 scripts/check-codex-mcp.ps1。'
+Write-Output '请刷新 Creator 扩展并重启 Codex 或新建任务，然后运行 scripts/check-codex-mcp.ps1。'

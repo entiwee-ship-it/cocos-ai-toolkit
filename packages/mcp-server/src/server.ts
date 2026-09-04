@@ -24,7 +24,7 @@ export interface CocosMcpRuntimeOptions {
  * 默认暴露只读工具（编辑器/资产/层级/节点读取、Prefab 打开、运行态读取）；
  * 显式 enableWrites（对应启动参数 --enable-writes）时追加直写工具和运行态动作工具。
  *
- * @param options 共享 Probe Client 和服务器授权的报告根目录。
+ * @param options 共享 Creator IPC Client。
  * @param runtime 运行时开关。
  * @returns 已登记工具的 MCP Server。
  */
@@ -34,7 +34,7 @@ export function createCocosMcpServer(
 ): McpServer {
   const server = new McpServer({
     name: 'cocos-ai-toolkit',
-    version: '0.6.9'
+    version: '0.7.0'
   });
   const readonlyService = new CocosReadonlyToolService(options);
   const runtimeService = new CocosRuntimeToolService(options, readonlyService);

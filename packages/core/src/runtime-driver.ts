@@ -31,7 +31,7 @@ export interface RuntimeBrowser {
   close(): Promise<void>;
 }
 
-/** 浏览器启动器：由装配方（Probe Server）以 playwright-core 实现注入。 */
+/** 浏览器启动器：由装配方（MCP/CLI 进程）以 playwright-core 实现注入。 */
 export type RuntimeBrowserLauncher = (options: { channel: string; headless: boolean }) => Promise<RuntimeBrowser>;
 
 export interface RuntimeDriverOptions {

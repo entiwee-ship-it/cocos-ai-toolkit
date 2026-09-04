@@ -1,72 +1,94 @@
-import type { AddressInfo } from 'node:net';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer, type Socket } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { ProbeClient } from '@cocos-ai/client';
-import { WebSocketServer, default as WebSocket } from 'ws';
+import { CreatorClient, type CreatorEndpointDescriptor } from '@cocos-ai/client';
 import { describe, expect, it } from 'vitest';
-import { ProbeServer } from '../../probe-server/src/server.js';
 import { createCocosMcpServer } from '../src/server.js';
 import { startMcpRuntime } from '../src/run.js';
 
-describe('MCP 与 Probe 后端恢复', () => {
-  it('Probe 离线时仍暴露 40 工具，上线后同一 MCP Client 在 2 秒内恢复', async () => {
-    const reservation = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-    await new Promise<void>((resolve) => reservation.once('listening', resolve));
-    const port = (reservation.address() as AddressInfo).port;
-    await new Promise<void>((resolve) => reservation.close(() => resolve()));
-
-    const probeClient = new ProbeClient(`ws://127.0.0.1:${port}`, 2_000, undefined, 10, 50);
-    const server = createCocosMcpServer({ probeClient }, { enableWrites: true });
+describe('MCP 与 Creator 本机直连恢复', () => {
+  it('Creator 后启动时同一 MCP Client 无需重连即可发现', async () => {
+    const endpointRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-recovery-'));
+    const creatorClient = new CreatorClient({ endpointRoot, requestTimeoutMs: 1_000 });
+    const server = createCocosMcpServer({ creatorClient }, { enableWrites: true });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: 'recovery-test-client', version: '0.6.9' });
+    const client = new Client({ name: 'recovery-test-client', version: '0.7.0' });
     const [runtime] = await Promise.all([
-      startMcpRuntime({ probeClient, server, transport: serverTransport }),
+      startMcpRuntime({ creatorClient, server, transport: serverTransport }),
       client.connect(clientTransport)
     ]);
-
-    const probeServer = new ProbeServer({ host: '127.0.0.1', port, requestTimeoutMs: 1_000 });
-    let bridge: WebSocket | null = null;
+    let bridge: Awaited<ReturnType<typeof startBridge>> | null = null;
     try {
-      expect((await client.listTools()).tools).toHaveLength(40);
+      expect((await client.listTools()).tools).toHaveLength(41);
       const offline = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
       expect(offline.structuredContent).toMatchObject({
         editors: [],
-        backend: { available: false }
+        backend: { available: true, transport: 'named-pipe', state: 'ready' }
       });
 
-      await probeServer.start();
-      bridge = new WebSocket(`ws://127.0.0.1:${port}`);
-      await new Promise<void>((resolve, reject) => {
-        bridge!.once('open', () => bridge!.send(JSON.stringify({
-          method: 'bridge.hello',
-          payload: {
-            editorInstanceId: 'project-1:100',
-            projectId: 'project-1',
-            projectPath: 'E:/project',
-            creatorVersion: '3.8.8',
-            bridgeVersion: '0.6.9',
-            bridgeBuildId: 'sha256:test',
-            capabilities: []
-          }
-        })));
-        bridge!.once('message', () => resolve());
-        bridge!.once('error', reject);
+      bridge = await startBridge(endpointRoot);
+      const online = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
+      expect(online.structuredContent).toMatchObject({
+        editors: [expect.objectContaining({ editorInstanceId: bridge.descriptor.editorInstanceId })]
       });
-
-      const deadline = Date.now() + 2_000;
-      let editors: unknown[] = [];
-      do {
-        const result = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
-        editors = (result.structuredContent as { editors?: unknown[] })?.editors ?? [];
-        if (editors.length) break;
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
-      } while (Date.now() < deadline);
-      expect(editors).toEqual([expect.objectContaining({ editorInstanceId: 'project-1:100' })]);
     } finally {
-      bridge?.close();
       await client.close();
       await runtime.close();
-      await probeServer.stop();
+      await bridge?.close();
+      await rm(endpointRoot, { recursive: true, force: true });
     }
   });
 });
+
+async function startBridge(endpointRoot: string) {
+  const id = randomUUID();
+  const descriptor: CreatorEndpointDescriptor = {
+    schemaVersion: 1,
+    editorInstanceId: `project-1:${id}`,
+    projectId: 'project-1',
+    projectPath: 'E:/project',
+    creatorVersion: '3.8.8',
+    bridgeVersion: '0.7.0',
+    bridgeBuildId: 'build-id',
+    capabilities: ['probe.editorState'],
+    processId: process.pid,
+    pipeName: `\\\\.\\pipe\\cocos-ai-recovery-${id}`,
+    startedAt: new Date().toISOString()
+  };
+  const sockets = new Set<Socket>();
+  const bridge = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    let raw = '';
+    socket.on('data', (chunk) => {
+      raw += chunk.toString('utf8');
+      const newline = raw.indexOf('\n');
+      if (newline < 0) return;
+      const request = JSON.parse(raw.slice(0, newline)) as { requestId: string; method: string };
+      socket.end(`${JSON.stringify({
+        type: 'response',
+        correlationId: request.requestId,
+        ok: request.method === 'bridge.describe',
+        payload: request.method === 'bridge.describe'
+          ? descriptor
+          : { code: 'METHOD_NOT_ALLOWED', message: 'METHOD_NOT_ALLOWED', details: {} }
+      })}\n`);
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    bridge.once('error', reject);
+    bridge.listen(descriptor.pipeName, resolve);
+  });
+  await writeFile(join(endpointRoot, `${id}.json`), JSON.stringify(descriptor), 'utf8');
+  return {
+    descriptor,
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => bridge.close(() => resolve()));
+    }
+  };
+}
