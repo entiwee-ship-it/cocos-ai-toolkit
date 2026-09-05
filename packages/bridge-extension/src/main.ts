@@ -13,8 +13,17 @@ import {
 import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
 import { ProbeError } from './probe-errors';
 
-const BRIDGE_VERSION = '0.7.0';
-const BRIDGE_RELEASE_DATE = '2026-09-04';
+interface ToolCatalogEntry {
+  name: string;
+  group: string;
+  writeRequired: boolean;
+  destructive?: boolean;
+  summary: string;
+}
+
+const TOOL_CATALOG = require('../tool-catalog.json') as ToolCatalogEntry[];
+const BRIDGE_VERSION = '0.8.0';
+const BRIDGE_RELEASE_DATE = '2026-09-05';
 
 type JsonObject = Record<string, unknown>;
 
@@ -176,6 +185,11 @@ async function queryManagerState(): Promise<unknown> {
       releaseDate: BRIDGE_RELEASE_DATE,
       buildId: readBridgeBuildId(__dirname),
       author: 'Enti'
+    },
+    tools: {
+      version: BRIDGE_VERSION,
+      total: TOOL_CATALOG.length,
+      items: TOOL_CATALOG
     },
     ipc: ipcServer?.getStatus() ?? {
       state: 'stopped',

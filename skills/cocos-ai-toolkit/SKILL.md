@@ -59,6 +59,7 @@ Prefab/Scene 中的节点只要组件公开 Inspector 事件数组，就必须�
 | 删除节点及子树 | `cocos_node_delete` |
 | 迁移节点 | `cocos_node_reparent`（源节点和新父节点分别支持 UUID/路径二选一，可选 siblingIndex） |
 | 挂载组件 | `cocos_component_add`（自定义脚本组件必须给 scriptUuid，用 asset_search 查） |
+| 移动、重命名或删除资源 | `cocos_asset_manage`（通过 Creator AssetDB；move 传 targetFolderUrl，rename 传 newName，delete 必须 confirmAssetUrl；存在反向引用时还需 confirmReferenced=true；文件夹、子资源和只读资源拒绝变更） |
 | 改组件属性值/绑定 Inspector 事件 | `cocos_component_set_property`（支持 `items[2]` 嵌套和 `Component.EventHandler[]`；expectedOldValue 不一致会拒绝写入） |
 | 实例化 Prefab | `cocos_prefab_instantiate`（prefabUuid + parentUuid/parentPath 二选一；保存重开后返回 nodeUuid、instanceFileId 和 stablePath） |
 | 移除 Prefab 关联 | `cocos_prefab_unpack`（nodeUuid/path 二选一；current 仅当前关联，complete 递归移除嵌套关联；必须传 expectedPrefabAssetUuid） |
@@ -85,7 +86,7 @@ Prefab/Scene 中的节点只要组件公开 Inspector 事件数组，就必须�
 - `cocos_prefab_create` 重开后若仍 dirty 会自动补保存；补保存后仍 dirty 才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`DOCUMENT_DIRTY_AFTER_SAVE` 同样不能当成成功；先重读并处理当前文档，确认前不要重复创建同一路径 Prefab。
 - 运行期节点/组件 UUID 每次重开文档都会变，禁止缓存；每个编辑会话内现取 hierarchy。
 - 连续多处修改时按"先读后写、逐项确认"推进；`cocos_batch_write` 仅接受 `node.*` 与 `component.*` 操作，失败时先检查 `executedOps` 再决定后续动作。
-- 错误码都带下一步指引：`NODE_NOT_FOUND` 重取 hierarchy、`COMPONENT_NOT_FOUND` 会附可用组件清单、`ASSET_NOT_PREFAB` / `ASSET_NOT_SCENE` 用 asset_inspect 核对类型、`ASSET_ALREADY_EXISTS` 换 URL；Prefab 删除先处理 `PREFAB_DELETE_CONFIRMATION_REQUIRED`，有引用再处理 `PREFAB_REFERENCES_CONFIRMATION_REQUIRED`。
+- 错误码都带下一步指引：`NODE_NOT_FOUND` 重取 hierarchy、`COMPONENT_NOT_FOUND` 会附可用组件清单、`ASSET_NOT_PREFAB` / `ASSET_NOT_SCENE` 用 asset_inspect 核对类型、`ASSET_ALREADY_EXISTS` 换 URL；资源管理先处理 `ASSET_DELETE_CONFIRMATION_REQUIRED`、`ASSET_REFERENCES_CONFIRMATION_REQUIRED`，Prefab 删除再处理 `PREFAB_DELETE_CONFIRMATION_REQUIRED` 和 `PREFAB_REFERENCES_CONFIRMATION_REQUIRED`。
 - 工具失败读取 `structuredContent.error` 的 `code/details/stage/nextAction/retryable`；文本块仅供人读。
 
 ## 运行态工具

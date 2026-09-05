@@ -11,7 +11,7 @@ describe('buildBridgeHello', () => {
       projectPath: 'E:/project',
       projectId: 'project-uuid',
       creatorVersion: '3.8.8',
-      bridgeVersion: '0.7.0',
+      bridgeVersion: '0.8.0',
       bridgeBuildId: 'sha256:bridge-build'
     });
 

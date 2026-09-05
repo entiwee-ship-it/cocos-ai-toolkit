@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本提供 41 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本提供 42 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -56,6 +56,8 @@ Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，�
 
 在 Creator 顶部菜单选择 **Cocos AI → 打开工具管理**，会打开独立管理窗口，可以直接查看扩展版本、发布日期、构建指纹、项目身份、Named Pipe 状态、Scene/AssetDB、当前文档和 Preview 状态。窗口内也可以刷新状态或打开 Creator 扩展管理器。
 
+管理窗口提供“运行状态”和“工具列表”两个切换页。“工具列表”由 Bridge 返回当前版本的完整 MCP 工具目录，按编辑器、资源、节点与组件、Prefab 与文档、Preview 与运行态分组，并标出是否需要 `--enable-writes` 以及是否可能删除数据。
+
 通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`；可选的 `COCOS_AI_SESSION_TOKEN` 会要求 MCP/CLI 与 Creator 使用同一会话令牌。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 
 ## 启动 AI 正式入口 MCP Server
@@ -85,9 +87,9 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（完整写模式 41 个）
+## MCP 工具面（完整写模式 42 个）
 
-### 编辑态只读 9 个（默认开放）
+### 编辑态只读 11 个（默认开放）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -103,7 +105,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_prefab_open` | 当前文档 clean 时通过 Creator 打开 Prefab 并等待身份就绪；dirty 时返回 `DOCUMENT_SAVE_REQUIRED` 且不切换 |
 | `cocos_scene_open` | 当前文档 clean 时通过 Creator 打开 Scene 并等待身份就绪；dirty 时返回 `DOCUMENT_SAVE_REQUIRED` 且不切换 |
 
-### 编辑态动作与直写 17 个（`--enable-writes` 才注册；序列化写入自动保存并逐项重读回显）
+### 编辑态动作与直写 18 个（`--enable-writes` 才注册；序列化写入自动保存并逐项重读回显）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -121,6 +123,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_prefab_rename` | 按 UUID 在原目录内重命名 Prefab，通过 Creator AssetDB 保持 UUID 并拒绝覆盖 |
 | `cocos_document_save` | 保存当前 Prefab 或 Scene 文档，并重读确认 dirty 已清除 |
 | `cocos_prefab_delete` | 按 UUID 删除 Prefab 资产；不可回滚，必须精确确认 URL，存在反向引用时需二次确认 |
+| `cocos_asset_manage` | 通过 Creator AssetDB 移动、重命名或删除资源；删除必须精确确认 URL，存在反向引用时需要二次确认 |
 | `cocos_asset_import` | 把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入 |
 | `cocos_asset_refresh` | 重新导入资产并尝试触发 TypeScript 编译 |
 | `cocos_batch_write` | 一次直发多项 `node.*` / `component.*` 操作；不接受 `asset.*` / `prefab.*`，只减少 MCP 往返；失败时 `executedOps` 之前的修改可能已生效 |

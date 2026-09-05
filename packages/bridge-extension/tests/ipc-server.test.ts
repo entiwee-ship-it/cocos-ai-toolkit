@@ -72,7 +72,7 @@ function createDescriptor(suffix = 'default'): CreatorEndpointDescriptor {
     projectId: 'project-id',
     projectPath: 'E:/project',
     creatorVersion: '3.8.8',
-    bridgeVersion: '0.7.0',
+    bridgeVersion: '0.8.0',
     bridgeBuildId: 'build-id',
     capabilities: ['probe.editorState'],
     processId: process.pid,

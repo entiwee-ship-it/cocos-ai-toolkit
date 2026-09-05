@@ -7,6 +7,7 @@ const readmePath = new URL('../README.md', import.meta.url);
 const EXPECTED_TOOL_NAMES = [
   'cocos_asset_import',
   'cocos_asset_inspect',
+  'cocos_asset_manage',
   'cocos_asset_refresh',
   'cocos_asset_search',
   'cocos_batch_write',

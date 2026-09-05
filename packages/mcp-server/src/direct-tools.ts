@@ -30,6 +30,11 @@ const PrefabNameSchema = z.string().trim().min(1, 'PREFAB_NAME_INVALID').refine(
   'PREFAB_NAME_INVALID'
 );
 
+const AssetNameSchema = z.string().trim().min(1, 'ASSET_NAME_INVALID').refine(
+  (name) => name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\'),
+  'ASSET_NAME_INVALID'
+);
+
 const BATCH_WRITE_ALLOWED_OPERATION_TYPES = new Set<DocumentWriteOperation['type']>([
   'node.create',
   'node.delete',
@@ -102,6 +107,7 @@ export const COCOS_DIRECT_WRITE_TOOL_NAMES = [
   'cocos_prefab_rename',
   'cocos_document_save',
   'cocos_prefab_delete',
+  'cocos_asset_manage',
   'cocos_asset_import',
   'cocos_asset_refresh',
   'cocos_batch_write'
@@ -756,6 +762,109 @@ export class CocosDirectToolService {
       expectedAssetUuid: input.uuid
     }]);
     return { ...result, assetUuid: input.uuid, sourceUrl, targetUrl };
+  }
+
+  /**
+   * 通过 Creator AssetDB 移动、重命名或删除单个项目资源。
+   * 删除要求精确 URL 确认；存在反向引用时还要求 confirmReferenced=true。
+   */
+  async manageAsset(input: ProjectSelector & {
+    action: 'move' | 'rename' | 'delete';
+    uuid: string;
+    targetFolderUrl?: string;
+    newName?: string;
+    confirmAssetUrl?: string;
+    confirmReferenced?: boolean;
+  }) {
+    const editor = await this.readonlyService.resolveEditor(input);
+
+    const firstPage = await this.readonlyService.inspectAsset({ ...input, pageSize: 500 });
+    const asset = firstPage.asset;
+    const sourceUrl = asset.url ?? asset.path;
+    if (!sourceUrl) throw new Error(`ASSET_URL_UNAVAILABLE:${input.uuid}`);
+    assertAssetUrl(sourceUrl);
+    if (asset.isSubAsset === true) {
+      throw new Error(`ASSET_SUBASSET_MUTATION_FORBIDDEN:${input.uuid}`);
+    }
+    if (asset.readonly === true) throw new Error(`ASSET_READONLY:${input.uuid}`);
+
+    if (input.action === 'move') {
+      if (!input.targetFolderUrl) throw new Error('ASSET_TARGET_FOLDER_REQUIRED');
+      const targetFolderUrl = normalizeAssetFolderUrl(input.targetFolderUrl);
+      if (
+        asset.isDirectory === true
+        && (targetFolderUrl === sourceUrl || targetFolderUrl.startsWith(`${sourceUrl}/`))
+      ) {
+        throw new Error(`ASSET_MOVE_INTO_SELF:${targetFolderUrl}`);
+      }
+      const targetUrl = `${targetFolderUrl}/${assetUrlName(sourceUrl)}`;
+      const result = await this.directWrite(editor, [{
+        type: 'asset.move' as const,
+        sourceUrl,
+        targetUrl,
+        expectedAssetUuid: input.uuid
+      }]);
+      return { ...result, action: input.action, assetUuid: input.uuid, sourceUrl, targetUrl };
+    }
+
+    if (input.action === 'rename') {
+      if (!input.newName) throw new Error('ASSET_NEW_NAME_REQUIRED');
+      const targetUrl = renamedAssetUrl(sourceUrl, AssetNameSchema.parse(input.newName), asset.isDirectory === true);
+      const result = await this.directWrite(editor, [{
+        type: 'asset.move' as const,
+        sourceUrl,
+        targetUrl,
+        expectedAssetUuid: input.uuid
+      }]);
+      return { ...result, action: input.action, assetUuid: input.uuid, sourceUrl, targetUrl };
+    }
+
+    if (asset.isDirectory === true) {
+      throw new Error(`ASSET_DIRECTORY_DELETE_UNSUPPORTED:${sourceUrl}`);
+    }
+    if (input.confirmAssetUrl !== sourceUrl) {
+      throw new Error(`ASSET_DELETE_CONFIRMATION_REQUIRED:${JSON.stringify({ assetUrl: sourceUrl })}`);
+    }
+
+    const users = new Set<string>();
+    const dependencies = new Set<string>();
+    const unresolved = [...firstPage.unresolved];
+    let page = firstPage;
+    while (true) {
+      for (const relation of page.page.items) {
+        (relation.kind === 'user' ? users : dependencies).add(relation.assetUuid);
+      }
+      const cursor = page.page.nextCursor ?? undefined;
+      if (!cursor) break;
+      page = await this.readonlyService.inspectAsset({ ...input, pageSize: 500, cursor });
+      unresolved.push(...page.unresolved);
+    }
+
+    const userQueryFailures = unresolved.filter((item) => item.path === 'query-asset-users');
+    if (userQueryFailures.length) {
+      throw new Error(`ASSET_REFERENCES_UNRESOLVED:${JSON.stringify(userQueryFailures)}`);
+    }
+    const referencedBy = [...users].sort();
+    if (referencedBy.length && input.confirmReferenced !== true) {
+      throw new Error(`ASSET_REFERENCES_CONFIRMATION_REQUIRED:${JSON.stringify({
+        assetUrl: sourceUrl,
+        userCount: referencedBy.length,
+        users: referencedBy
+      })}`);
+    }
+
+    const result = await this.directWrite(editor, [{
+      type: 'asset.delete' as const,
+      assetUrl: sourceUrl,
+      expectedAssetUuid: input.uuid
+    }]);
+    return {
+      ...result,
+      action: input.action,
+      assetUuid: input.uuid,
+      assetUrl: sourceUrl,
+      references: { users: referencedBy, dependencies: [...dependencies].sort() }
+    };
   }
 
   /** 保存当前文档。 */
@@ -1433,6 +1542,44 @@ function componentTypeMatches(actual: string, wanted: string): boolean {
   return stripPrefix(actual) === stripPrefix(wanted);
 }
 
+function assetUrlName(assetUrl: string): string {
+  const name = assetUrl.slice(assetUrl.lastIndexOf('/') + 1);
+  if (!name) throw new Error(`ASSET_NAME_UNAVAILABLE:${assetUrl}`);
+  return name;
+}
+
+function normalizeAssetFolderUrl(folderUrl: string): string {
+  const normalized = folderUrl.trim().replace(/\/+$/, '');
+  if (
+    (normalized !== 'db://assets' && !normalized.startsWith('db://assets/'))
+    || normalized.includes('\\')
+    || normalized.split('/').some((segment) => segment === '.' || segment === '..')
+  ) {
+    throw new Error(`ASSET_FOLDER_URL_INVALID:${folderUrl}`);
+  }
+  return normalized;
+}
+
+function renamedAssetUrl(sourceUrl: string, newName: string, isDirectory: boolean): string {
+  const sourceName = assetUrlName(sourceUrl);
+  let targetName = newName;
+  if (!isDirectory) {
+    const sourceDot = sourceName.lastIndexOf('.');
+    const targetDot = newName.lastIndexOf('.');
+    const sourceExtension = sourceDot > 0 ? sourceName.slice(sourceDot) : '';
+    const targetExtension = targetDot > 0 ? newName.slice(targetDot) : '';
+    if (sourceExtension && !targetExtension) {
+      targetName += sourceExtension;
+    } else if (sourceExtension.toLowerCase() !== targetExtension.toLowerCase()) {
+      throw new Error(`ASSET_EXTENSION_CHANGE_FORBIDDEN:${JSON.stringify({
+        sourceExtension,
+        targetExtension
+      })}`);
+    }
+  }
+  return `${sourceUrl.slice(0, sourceUrl.lastIndexOf('/') + 1)}${targetName}`;
+}
+
 function assertAssetUrl(assetUrl: string, extension?: string): void {
   if (!assetUrl.startsWith('db://assets/') || assetUrl.includes('\\') || assetUrl.split('/').includes('..')) {
     throw new Error(`ASSET_URL_INVALID:${assetUrl}`);
@@ -1741,6 +1888,21 @@ export function registerCocosDirectWriteTools(
     outputSchema: ToolOutputSchema,
     annotations: DELETE_ANNOTATIONS
   }, async (input) => toToolResult(service.deletePrefab(input)));
+
+  server.registerTool('cocos_asset_manage', {
+    description: '通过 Creator AssetDB 移动、重命名或删除单个资源并保持 UUID；delete 必须精确确认 assetUrl，存在反向引用时还需 confirmReferenced=true，文件夹删除不开放。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      action: z.enum(['move', 'rename', 'delete']),
+      uuid: z.string().min(1),
+      targetFolderUrl: z.string().min(1).optional(),
+      newName: z.string().min(1).optional(),
+      confirmAssetUrl: z.string().min(1).optional(),
+      confirmReferenced: z.boolean().optional()
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: DELETE_ANNOTATIONS
+  }, async (input) => toToolResult(service.manageAsset(input)));
 
   server.registerTool('cocos_asset_import', {
     description: '把磁盘文件（图片/音频等）导入为项目资产并触发 AssetDB 导入；ASSET_ALREADY_EXISTS 时换 URL。',

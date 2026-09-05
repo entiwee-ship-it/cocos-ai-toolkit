@@ -16,14 +16,14 @@ describe('MCP 与 Creator 本机直连恢复', () => {
     const creatorClient = new CreatorClient({ endpointRoot, requestTimeoutMs: 1_000 });
     const server = createCocosMcpServer({ creatorClient }, { enableWrites: true });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: 'recovery-test-client', version: '0.7.0' });
+    const client = new Client({ name: 'recovery-test-client', version: '0.8.0' });
     const [runtime] = await Promise.all([
       startMcpRuntime({ creatorClient, server, transport: serverTransport }),
       client.connect(clientTransport)
     ]);
     let bridge: Awaited<ReturnType<typeof startBridge>> | null = null;
     try {
-      expect((await client.listTools()).tools).toHaveLength(41);
+    expect((await client.listTools()).tools).toHaveLength(42);
       const offline = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
       expect(offline.structuredContent).toMatchObject({
         editors: [],
@@ -52,7 +52,7 @@ async function startBridge(endpointRoot: string) {
     projectId: 'project-1',
     projectPath: 'E:/project',
     creatorVersion: '3.8.8',
-    bridgeVersion: '0.7.0',
+    bridgeVersion: '0.8.0',
     bridgeBuildId: 'build-id',
     capabilities: ['probe.editorState'],
     processId: process.pid,

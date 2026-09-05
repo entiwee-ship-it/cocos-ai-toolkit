@@ -29,7 +29,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.7.0',
+  bridgeVersion: '0.8.0',
   bridgeBuildId: 'sha256:bridge-build',
   capabilities: [
     'probe.editorState',
@@ -332,7 +332,7 @@ async function createHarness(
     { enableWrites: options.enableWrites }
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'direct-test-client', version: '0.7.0' });
+  const client = new Client({ name: 'direct-test-client', version: '0.8.0' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)
@@ -2098,6 +2098,111 @@ describe('直写档写工具', () => {
       targetUrl: 'db://assets/ui/RenamedPrefab.prefab',
       expectedAssetUuid: 'prefab-uuid-1'
     }]);
+  });
+
+  it('cocos_asset_manage 支持移动、重命名和安全删除', async () => {
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
+
+    const move = await client.callTool({
+      name: 'cocos_asset_manage',
+      arguments: {
+        projectId: 'proj1',
+        action: 'move',
+        uuid: 'prefab-uuid-1',
+        targetFolderUrl: 'db://assets/view'
+      }
+    });
+    expect(move.structuredContent).toMatchObject({
+      action: 'move',
+      sourceUrl: 'db://assets/ui/Test.prefab',
+      targetUrl: 'db://assets/view/Test.prefab'
+    });
+
+    const rename = await client.callTool({
+      name: 'cocos_asset_manage',
+      arguments: {
+        projectId: 'proj1',
+        action: 'rename',
+        uuid: 'prefab-uuid-1',
+        newName: 'Renamed'
+      }
+    });
+    expect(rename.structuredContent).toMatchObject({
+      action: 'rename',
+      targetUrl: 'db://assets/ui/Renamed.prefab'
+    });
+
+    const requestCountBeforeDelete = creatorClient.requests.length;
+    const missingConfirmation = await client.callTool({
+      name: 'cocos_asset_manage',
+      arguments: { projectId: 'proj1', action: 'delete', uuid: 'prefab-uuid-1' }
+    });
+    expect(missingConfirmation.isError).toBe(true);
+    expect(JSON.stringify(missingConfirmation.content)).toContain('ASSET_DELETE_CONFIRMATION_REQUIRED');
+    expect(creatorClient.requests.slice(requestCountBeforeDelete).map((request) => request.method)).not.toContain('probe.directWrite');
+  });
+
+  it('cocos_asset_manage 删除存在反向引用的资源时要求二次确认', async () => {
+    const creatorClient = new RecordingCreatorClient(createRespond({
+      'probe.assets': { ...INSPECT_ASSET_RESPONSE, users: ['scene-uuid-1'] }
+    }));
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
+
+    const result = await client.callTool({
+      name: 'cocos_asset_manage',
+      arguments: {
+        projectId: 'proj1',
+        action: 'delete',
+        uuid: 'prefab-uuid-1',
+        confirmAssetUrl: 'db://assets/ui/Test.prefab'
+      }
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('ASSET_REFERENCES_CONFIRMATION_REQUIRED');
+  });
+
+  it('cocos_asset_manage 对普通资源保留扩展名并通过 asset.delete 删除', async () => {
+    const imageAsset = {
+      ...INSPECT_ASSET_RESPONSE.details,
+      uuid: 'image-uuid-1',
+      url: 'db://assets/ui/icon.png',
+      file: 'E:/project/assets/ui/icon.png',
+      type: 'cc.ImageAsset',
+      name: 'icon.png',
+      source: 'assets/ui/icon.png',
+      path: 'assets/ui/icon.png',
+      displayName: 'icon.png'
+    };
+    const creatorClient = new RecordingCreatorClient(createRespond({
+      'probe.assets': { ...INSPECT_ASSET_RESPONSE, details: imageAsset }
+    }));
+    const { client } = await createHarness(creatorClient, { enableWrites: true });
+
+    const rename = await client.callTool({
+      name: 'cocos_asset_manage',
+      arguments: { projectId: 'proj1', action: 'rename', uuid: 'image-uuid-1', newName: 'logo' }
+    });
+    expect(rename.structuredContent).toMatchObject({
+      targetUrl: 'db://assets/ui/logo.png'
+    });
+
+    const deletion = await client.callTool({
+      name: 'cocos_asset_manage',
+      arguments: {
+        projectId: 'proj1',
+        action: 'delete',
+        uuid: 'image-uuid-1',
+        confirmAssetUrl: 'db://assets/ui/icon.png'
+      }
+    });
+    expect(deletion.structuredContent).toMatchObject({
+      action: 'delete',
+      assetUrl: 'db://assets/ui/icon.png'
+    });
+    const directWriteRequests = creatorClient.requests.filter((request) => request.method === 'probe.directWrite');
+    expect((directWriteRequests[0].payload as Record<string, any>).params.operations[0].type).toBe('asset.move');
+    expect((directWriteRequests[1].payload as Record<string, any>).params.operations[0].type).toBe('asset.delete');
   });
 
   it('cocos_prefab_rename 拒绝非 Prefab 资产和路径型名称', async () => {
