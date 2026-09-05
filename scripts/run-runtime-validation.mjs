@@ -42,7 +42,7 @@ try {
   const entry = join(repoRoot, 'packages', 'mcp-server', 'dist', 'run.js');
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [entry, '--enable-writes'],
+    args: [entry],
     env: process.env,
     stderr: 'pipe'
   });

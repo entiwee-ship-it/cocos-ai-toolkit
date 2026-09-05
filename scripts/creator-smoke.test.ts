@@ -5,7 +5,7 @@ const smokePath = new URL('./run-creator-3.8.8-smoke.mjs', import.meta.url);
 const packagePath = new URL('../package.json', import.meta.url);
 
 describe('Creator 3.8.8 smoke 合同', () => {
-  it('通过当前 MCP 做只读发现和 no-op 直写，并保护项目 Git 状态', async () => {
+  it('通过当前 MCP 做公开工具发现和 no-op 直写，并保护项目 Git 状态', async () => {
     const smoke = await readFile(smokePath, 'utf8');
     const packageJson = JSON.parse(await readFile(packagePath, 'utf8')) as {
       scripts?: Record<string, string>;
@@ -13,7 +13,7 @@ describe('Creator 3.8.8 smoke 合同', () => {
 
     expect(packageJson.scripts?.['smoke:creator']).toContain('run-creator-3.8.8-smoke.mjs');
     expect(packageJson.scripts?.['smoke:creator:write-routing']).toContain('--write-applicability true');
-    expect(smoke).toContain("'--enable-writes'");
+    expect(smoke).not.toContain("'--enable-writes'");
     expect(smoke).toContain("name: 'cocos_editor_list'");
     expect(smoke).toContain('waitForProjectEditor(client, projectPath, 2_000)');
     expect(smoke).toContain("name: 'cocos_hierarchy'");

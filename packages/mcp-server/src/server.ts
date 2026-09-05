@@ -5,7 +5,7 @@ import {
 } from './tools.js';
 import {
   CocosRuntimeToolService,
-  registerCocosRuntimeGatedTools,
+  registerCocosRuntimeActionTools,
   registerCocosRuntimeReadonlyTools
 } from './runtime-tools.js';
 import {
@@ -14,36 +14,27 @@ import {
   registerCocosDirectWriteTools
 } from './direct-tools.js';
 
-/** MCP 运行时开关；写能力必须显式开启，默认保持只读。 */
-export interface CocosMcpRuntimeOptions {
-  enableWrites?: boolean;
-}
-
 /**
- * 创建 Cocos MCP Server：直写架构单一工具档。
- * 默认暴露只读工具（编辑器/资产/层级/节点读取、Prefab 打开、运行态读取）；
- * 显式 enableWrites（对应启动参数 --enable-writes）时追加直写工具和运行态动作工具。
+ * 创建 Cocos MCP Server：所有工具默认公开注册。
+ * 读工具和编辑器/运行态动作工具共用同一 Creator IPC 端点；
+ * 写入工具仍保留自身的参数、确认、权限和回读校验。
  *
  * @param options 共享 Creator IPC Client。
- * @param runtime 运行时开关。
  * @returns 已登记工具的 MCP Server。
  */
 export function createCocosMcpServer(
-  options: CocosReadonlyToolServiceOptions,
-  runtime: CocosMcpRuntimeOptions = {}
+  options: CocosReadonlyToolServiceOptions
 ): McpServer {
   const server = new McpServer({
     name: 'cocos-ai-toolkit',
-    version: '0.8.0'
+    version: '0.9.0'
   });
   const readonlyService = new CocosReadonlyToolService(options);
   const runtimeService = new CocosRuntimeToolService(options, readonlyService);
   const directService = new CocosDirectToolService(readonlyService);
   registerCocosDirectReadonlyTools(server, directService);
+  registerCocosDirectWriteTools(server, directService);
   registerCocosRuntimeReadonlyTools(server, runtimeService);
-  if (runtime.enableWrites === true) {
-    registerCocosDirectWriteTools(server, directService);
-    registerCocosRuntimeGatedTools(server, runtimeService);
-  }
+  registerCocosRuntimeActionTools(server, runtimeService);
   return server;
 }

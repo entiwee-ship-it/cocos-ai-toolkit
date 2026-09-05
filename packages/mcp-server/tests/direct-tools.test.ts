@@ -29,7 +29,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.8.0',
+  bridgeVersion: '0.9.0',
   bridgeBuildId: 'sha256:bridge-build',
   capabilities: [
     'probe.editorState',
@@ -324,15 +324,11 @@ afterEach(async () => {
 });
 
 async function createHarness(
-  creatorClient: ReadonlyCreatorClient,
-  options: { enableWrites?: boolean } = {}
+  creatorClient: ReadonlyCreatorClient
 ) {
-  const server = createCocosMcpServer(
-    { creatorClient },
-    { enableWrites: options.enableWrites }
-  );
+  const server = createCocosMcpServer({ creatorClient });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'direct-test-client', version: '0.8.0' });
+  const client = new Client({ name: 'direct-test-client', version: '0.9.0' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)
@@ -342,12 +338,12 @@ async function createHarness(
 }
 
 describe('直写档工具注册', () => {
-  it('默认注册只读工具，写工具仅 enableWrites 时注册', async () => {
+  it('默认注册全部编辑态工具，不再按写入能力分组锁定', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
     const { client } = await createHarness(creatorClient);
+    const tools = (await client.listTools()).tools;
+    const names = tools.map((tool) => tool.name);
 
-    const readonlyTools = (await client.listTools()).tools;
-    const names = readonlyTools.map((tool) => tool.name);
     for (const expected of [
       'cocos_editor_list',
       'cocos_editor_state',
@@ -359,79 +355,23 @@ describe('直写档工具注册', () => {
       'cocos_node_read',
       'cocos_nodes_read',
       'cocos_prefab_open',
-      'cocos_scene_open'
+      'cocos_scene_open',
+      ...COCOS_DIRECT_WRITE_TOOL_NAMES
     ]) {
       expect(names).toContain(expected);
     }
-    for (const gated of [
-      'cocos_node_create',
-      'cocos_node_rename',
-      'cocos_node_set_transform',
-      'cocos_node_select',
-      'cocos_node_delete',
-      'cocos_node_reparent',
-      'cocos_component_add',
-      'cocos_component_set_property',
-      'cocos_prefab_instantiate',
-      'cocos_prefab_unpack',
-      'cocos_prefab_create',
-      'cocos_prefab_rename',
-      'cocos_document_save',
-      'cocos_prefab_delete',
-      'cocos_asset_import',
-      'cocos_asset_refresh',
-      'cocos_batch_write'
-    ]) {
-      expect(names).not.toContain(gated);
-    }
-    const hierarchyTool = readonlyTools.find((tool) => tool.name === 'cocos_hierarchy');
-    const nodeReadTool = readonlyTools.find((tool) => tool.name === 'cocos_node_read');
-    expect(hierarchyTool?.description).toContain('结构/信封层重复 raw');
-    expect(hierarchyTool?.description).toContain('Inspector 业务值内部的 raw');
-    expect(nodeReadTool?.description).toContain('结构/信封层重复 raw');
-    expect(nodeReadTool?.description).toContain('Inspector 业务值内部的 raw');
-
-    const { client: writeClient } = await createHarness(creatorClient, { enableWrites: true });
-    const writeTools = (await writeClient.listTools()).tools;
-    const writeNames = writeTools.map((tool) => tool.name);
-    for (const gated of [
-      'cocos_node_create',
-      'cocos_node_rename',
-      'cocos_node_set_transform',
-      'cocos_node_select',
-      'cocos_node_delete',
-      'cocos_node_reparent',
-      'cocos_component_add',
-      'cocos_component_set_property',
-      'cocos_prefab_instantiate',
-      'cocos_prefab_unpack',
-      'cocos_prefab_create',
-      'cocos_prefab_rename',
-      'cocos_document_save',
-      'cocos_prefab_delete',
-      'cocos_asset_import',
-      'cocos_asset_refresh',
-      'cocos_batch_write'
-    ]) {
-      expect(writeNames).toContain(gated);
-    }
-    expect(writeNames.filter((name) => COCOS_DIRECT_WRITE_TOOL_NAMES.includes(
+    expect(names.filter((name) => COCOS_DIRECT_WRITE_TOOL_NAMES.includes(
       name as (typeof COCOS_DIRECT_WRITE_TOOL_NAMES)[number]
     ))).toEqual([...COCOS_DIRECT_WRITE_TOOL_NAMES]);
-    const batchTool = writeTools.find((tool) => tool.name === 'cocos_batch_write');
-    expect(batchTool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
-    expect(batchTool?.description).toContain('node.* / component.*');
-    expect(batchTool?.description).toContain('asset.* / prefab.*');
+
+    const hierarchyTool = tools.find((tool) => tool.name === 'cocos_hierarchy');
+    const nodeReadTool = tools.find((tool) => tool.name === 'cocos_node_read');
+    expect(hierarchyTool?.description).toContain('结构/信封层重复 raw');
+    expect(nodeReadTool?.description).toContain('结构/信封层重复 raw');
+    const batchTool = tools.find((tool) => tool.name === 'cocos_batch_write');
     const batchSchema = JSON.stringify(batchTool?.inputSchema);
     expect(batchSchema).not.toContain('asset.delete');
     expect(batchSchema).not.toContain('prefab.delete_asset');
-    expect(batchSchema).toContain('node.set_transform');
-    expect(batchSchema).toContain('component.set_property');
-    const transformTool = writeTools.find((tool) => tool.name === 'cocos_node_set_transform');
-    expect(transformTool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
-    const componentPropertyTool = writeTools.find((tool) => tool.name === 'cocos_component_set_property');
-    expect(componentPropertyTool?.description).toContain('Button.clickEvents');
-    expect(componentPropertyTool?.description).toContain('node.on');
   });
 });
 
@@ -1158,7 +1098,7 @@ describe('直写档只读工具', () => {
 describe('直写档写工具', () => {
   it('cocos_node_create 按 parentPath 解析父节点并直写 node.create', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_create',
@@ -1182,7 +1122,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_create 路径未命中时报 NODE_NOT_FOUND', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_create',
@@ -1227,7 +1167,7 @@ describe('直写档写工具', () => {
         }]
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_instantiate',
@@ -1275,7 +1215,7 @@ describe('直写档写工具', () => {
           failure: { code, message: code, operationIndex: 0 }
         }
       }));
-      const { client } = await createHarness(creatorClient, { enableWrites: true });
+      const { client } = await createHarness(creatorClient);
 
       const result = await client.callTool({
         name: 'cocos_prefab_instantiate',
@@ -1318,7 +1258,7 @@ describe('直写档写工具', () => {
 
     for (const [index, outcome] of outcomes.entries()) {
       const creatorClient = new RecordingCreatorClient(createRespond({ 'probe.directWrite': outcome }));
-      const { client } = await createHarness(creatorClient, { enableWrites: true });
+      const { client } = await createHarness(creatorClient);
 
       const result = await client.callTool({
         name: 'cocos_prefab_instantiate',
@@ -1366,7 +1306,7 @@ describe('直写档写工具', () => {
         }]
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_unpack',
@@ -1411,7 +1351,7 @@ describe('直写档写工具', () => {
         }
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_unpack',
@@ -1427,7 +1367,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_delete 直写 node.delete', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     await client.callTool({
       name: 'cocos_node_delete',
@@ -1441,7 +1381,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_rename 按 path 直写 node.rename', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_rename',
@@ -1465,7 +1405,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_rename 严格要求 nodeUuid 或 path 二选一', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     for (const address of [
       {},
@@ -1521,7 +1461,7 @@ describe('直写档写工具', () => {
     ];
     for (const testCase of cases) {
       const creatorClient = new RecordingCreatorClient(createRespond());
-      const { client } = await createHarness(creatorClient, { enableWrites: true });
+      const { client } = await createHarness(creatorClient);
       const result = await client.callTool({
         name: testCase.name,
         arguments: { projectId: 'proj1', ...testCase.arguments }
@@ -1534,7 +1474,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_set_transform 按 path 直写 node.set_transform', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     await client.callTool({
       name: 'cocos_node_set_transform',
@@ -1555,7 +1495,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_set_transform 严格要求 nodeUuid 或 path 二选一', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     for (const address of [
       {},
@@ -1583,7 +1523,7 @@ describe('直写档写工具', () => {
       }
       return respond(method, payload);
     });
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_set_transform',
@@ -1601,7 +1541,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_select 按 path 选择唯一节点且不走保存写通道', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_select',
@@ -1622,7 +1562,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_reparent 按 UUID 和 parentPath 直写 node.reparent', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_reparent',
@@ -1650,7 +1590,7 @@ describe('直写档写工具', () => {
 
   it('cocos_node_reparent 拒绝同一组中同时提供 UUID 和路径', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_reparent',
@@ -1668,7 +1608,7 @@ describe('直写档写工具', () => {
 
   it('cocos_component_add 携带脚本 UUID 直写 component.add', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     await client.callTool({
       name: 'cocos_component_add',
@@ -1691,7 +1631,7 @@ describe('直写档写工具', () => {
 
   it('cocos_component_set_property 解析组件后直写 component.set_property', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     await client.callTool({
       name: 'cocos_component_set_property',
@@ -1724,7 +1664,7 @@ describe('直写档写工具', () => {
         failure: { code: 'WRITE_OPERATION_FAILED', message: 'WRITE_OPERATION_FAILED', operationIndex: 0 }
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_delete',
@@ -1740,7 +1680,7 @@ describe('直写档写工具', () => {
     const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': { kind: 'operation-failed', executedOps: 1 }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_delete',
@@ -1764,7 +1704,7 @@ describe('直写档写工具', () => {
         evidence: [{ operation: { type: 'node.delete', nodeUuid: 'panel-uuid' } }]
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_delete',
@@ -1787,7 +1727,7 @@ describe('直写档写工具', () => {
         }
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_component_set_property',
@@ -1807,7 +1747,7 @@ describe('直写档写工具', () => {
     const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.directWrite': { kind: 'success', executedOps: 1, verification: null }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_node_delete',
@@ -1859,7 +1799,7 @@ describe('直写档写工具', () => {
 
     for (const outcome of invalidOutcomes) {
       const creatorClient = new RecordingCreatorClient(createRespond({ 'probe.directWrite': outcome }));
-      const { client } = await createHarness(creatorClient, { enableWrites: true });
+      const { client } = await createHarness(creatorClient);
       const result = await client.callTool({
         name: 'cocos_batch_write',
         arguments: { projectId: 'proj1', operations }
@@ -1885,7 +1825,7 @@ describe('直写档写工具', () => {
         }
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
     const operations = [
       { type: 'node.set_active', nodeUuid: 'panel-uuid', active: true },
       { type: 'node.set_transform', nodeUuid: 'panel-uuid', localTransform: { position: { x: 12, y: 34, z: 0 } } }
@@ -1914,7 +1854,7 @@ describe('直写档写工具', () => {
       }
     ]) {
       const creatorClient = new RecordingCreatorClient(createRespond());
-      const { client } = await createHarness(creatorClient, { enableWrites: true });
+      const { client } = await createHarness(creatorClient);
       const result = await client.callTool({
         name: 'cocos_batch_write',
         arguments: { projectId: 'proj1', operations: [operation] }
@@ -1968,7 +1908,7 @@ describe('直写档写工具', () => {
       }
       return respond(method, payload);
     });
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_create',
@@ -2016,7 +1956,7 @@ describe('直写档写工具', () => {
         document: { assetUuid: 'prefab-uuid-1', dirty: true }
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_create',
@@ -2043,7 +1983,7 @@ describe('直写档写工具', () => {
 
   it('cocos_prefab_create 拒绝缺失资产或重建节点身份的成功证据', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_create',
@@ -2062,7 +2002,7 @@ describe('直写档写工具', () => {
 
   it('cocos_prefab_create 拒绝非 prefab 后缀的 URL', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_create',
@@ -2074,7 +2014,7 @@ describe('直写档写工具', () => {
 
   it('cocos_prefab_rename 按 UUID 在同目录内直写 asset.move 并保持 UUID', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_rename',
@@ -2102,7 +2042,7 @@ describe('直写档写工具', () => {
 
   it('cocos_asset_manage 支持移动、重命名和安全删除', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const move = await client.callTool({
       name: 'cocos_asset_manage',
@@ -2147,7 +2087,7 @@ describe('直写档写工具', () => {
     const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': { ...INSPECT_ASSET_RESPONSE, users: ['scene-uuid-1'] }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_asset_manage',
@@ -2177,7 +2117,7 @@ describe('直写档写工具', () => {
     const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': { ...INSPECT_ASSET_RESPONSE, details: imageAsset }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const rename = await client.callTool({
       name: 'cocos_asset_manage',
@@ -2212,7 +2152,7 @@ describe('直写档写工具', () => {
         details: { ...INSPECT_ASSET_RESPONSE.details, type: 'cc.ImageAsset' }
       }
     }));
-    const { client: nonPrefabClient } = await createHarness(nonPrefabProbe, { enableWrites: true });
+    const { client: nonPrefabClient } = await createHarness(nonPrefabProbe);
     const nonPrefab = await nonPrefabClient.callTool({
       name: 'cocos_prefab_rename',
       arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1', newName: 'RenamedPrefab' }
@@ -2222,7 +2162,7 @@ describe('直写档写工具', () => {
     expect(nonPrefabProbe.requests.map((request) => request.method)).not.toContain('probe.directWrite');
 
     const invalidNameProbe = new RecordingCreatorClient(createRespond());
-    const { client: invalidNameClient } = await createHarness(invalidNameProbe, { enableWrites: true });
+    const { client: invalidNameClient } = await createHarness(invalidNameProbe);
     const invalidName = await invalidNameClient.callTool({
       name: 'cocos_prefab_rename',
       arguments: { projectId: 'proj1', uuid: 'prefab-uuid-1', newName: '../RenamedPrefab' }
@@ -2234,7 +2174,7 @@ describe('直写档写工具', () => {
 
   it('cocos_prefab_delete 缺少精确 URL 确认时拒绝删除', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2249,7 +2189,7 @@ describe('直写档写工具', () => {
     const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': { ...INSPECT_ASSET_RESPONSE, users: ['scene-uuid-1'] }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2273,7 +2213,7 @@ describe('直写档写工具', () => {
         unresolved: [{ path: 'query-asset-users', reason: 'MESSAGE_API_UNAVAILABLE' }]
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2290,7 +2230,7 @@ describe('直写档写工具', () => {
 
   it('cocos_prefab_delete 精确确认无引用目标后删除并返回验证结果', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2318,7 +2258,7 @@ describe('直写档写工具', () => {
     const creatorClient = new RecordingCreatorClient(createRespond({
       'probe.assets': { ...INSPECT_ASSET_RESPONSE, users: ['scene-uuid-1'] }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_prefab_delete',
@@ -2335,7 +2275,7 @@ describe('直写档写工具', () => {
 
   it('cocos_document_save 保存后重读确认 dirty 已清除', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_document_save',
@@ -2357,7 +2297,7 @@ describe('直写档写工具', () => {
         document: { assetUuid: 'prefab-uuid-1', dirty: true }
       }
     }));
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_document_save',
@@ -2375,7 +2315,7 @@ describe('直写档写工具', () => {
 
   it('cocos_asset_import 校验 URL 并转发 probe.importAsset', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_asset_import',
@@ -2404,7 +2344,7 @@ describe('直写档写工具', () => {
 
   it('cocos_asset_refresh 转发 probe.refreshAsset', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_asset_refresh',

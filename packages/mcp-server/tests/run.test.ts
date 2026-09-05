@@ -51,14 +51,12 @@ describe('Cocos MCP stdio runtime', () => {
     })).toEqual({
       endpointRoot: 'C:/ipc/endpoints',
       captureRoot: 'C:/captures',
-      enableWrites: false,
       requestTimeoutMs: 180_000,
       sessionToken: 'secret-token'
     });
     expect(readMcpRuntimeConfig({})).toEqual({
       endpointRoot: undefined,
       captureRoot: undefined,
-      enableWrites: false,
       requestTimeoutMs: 180_000,
       sessionToken: undefined
     });
@@ -71,9 +69,11 @@ describe('Cocos MCP stdio runtime', () => {
     }
   });
 
-  it('写工具只能通过 --enable-writes 显式开启', () => {
-    expect(readMcpRuntimeConfig({}, ['--enable-writes']).enableWrites).toBe(true);
-    expect(readMcpRuntimeConfig({ COCOS_AI_MCP_ENABLE_WRITES: 'true' }, []).enableWrites).toBe(false);
+  it('所有工具默认公开，启动参数仅接受空列表', () => {
+    expect(readMcpRuntimeConfig({}, [])).toMatchObject({
+      requestTimeoutMs: 180_000
+    });
+    expect(() => readMcpRuntimeConfig({}, ['--enable-writes'])).toThrow('MCP_ARGUMENT_INVALID');
     expect(() => readMcpRuntimeConfig({}, ['--unknown'])).toThrow('MCP_ARGUMENT_INVALID');
   });
 });

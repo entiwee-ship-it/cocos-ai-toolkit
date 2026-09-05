@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本提供 42 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本为 `0.9.0`，提供 42 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -56,7 +56,7 @@ Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，�
 
 在 Creator 顶部菜单选择 **Cocos AI → 打开工具管理**，会打开独立管理窗口，可以直接查看扩展版本、发布日期、构建指纹、项目身份、Named Pipe 状态、Scene/AssetDB、当前文档和 Preview 状态。窗口内也可以刷新状态或打开 Creator 扩展管理器。
 
-管理窗口提供“运行状态”和“工具列表”两个切换页。“工具列表”由 Bridge 返回当前版本的完整 MCP 工具目录，按编辑器、资源、节点与组件、Prefab 与文档、Preview 与运行态分组，并标出是否需要 `--enable-writes` 以及是否可能删除数据。
+管理窗口提供“运行状态”和“工具列表”两个切换页。“工具列表”由 Bridge 返回当前版本的完整 MCP 工具目录，按编辑器、资源、节点与组件、Prefab 与文档、Preview 与运行态分组，并标出只读、编辑器操作和潜在删除风险。
 
 通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`；可选的 `COCOS_AI_SESSION_TOKEN` 会要求 MCP/CLI 与 Creator 使用同一会话令牌。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 
@@ -65,7 +65,7 @@ Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，�
 确保目标 Creator 3.8.8 已加载 Bridge。MCP Server 使用 stdio 与 AI 客户端通信：
 
 ```powershell
-node packages/mcp-server/dist/run.js --enable-writes
+node packages/mcp-server/dist/run.js
 ```
 
 环境变量：
@@ -74,20 +74,20 @@ node packages/mcp-server/dist/run.js --enable-writes
 - `COCOS_AI_IPC_TIMEOUT_MS`：可选单次 Creator IPC 请求超时，默认 180000 毫秒。
 - `COCOS_AI_SESSION_TOKEN`：可选本机会话令牌；配置后 Bridge、CLI 和 MCP 必须使用相同值。
 
-启动参数只接受可选的 `--enable-writes`：裸启动注册只读工具，写工具必须显式开启，环境变量不能开启写能力；其它参数以稳定错误拒绝。
+MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参数必须为空，其它参数以稳定错误拒绝。
 
 本机 Codex 可以用仓库脚本重复安装：
 
 ```powershell
-& scripts/install-codex-mcp.ps1 -SkipBuild      # 默认开放写工具
+& scripts/install-codex-mcp.ps1 -SkipBuild
 & scripts/check-codex-mcp.ps1
-& scripts/install-codex-mcp.ps1 -SkipBuild -Readonly   # 只读会话
-& scripts/check-codex-mcp.ps1 -Readonly
 ```
+
+升级到 0.9.0 后重新运行一次安装脚本，Codex 配置会移除旧的工具开关参数；此版本不再接受 `--enable-writes` 或 `-Readonly`，启动 MCP 即公开全部工具。
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（完整写模式 42 个）
+## MCP 工具面（全部公开 42 个）
 
 ### 编辑态只读 11 个（默认开放）
 
@@ -105,7 +105,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 | `cocos_prefab_open` | 当前文档 clean 时通过 Creator 打开 Prefab 并等待身份就绪；dirty 时返回 `DOCUMENT_SAVE_REQUIRED` 且不切换 |
 | `cocos_scene_open` | 当前文档 clean 时通过 Creator 打开 Scene 并等待身份就绪；dirty 时返回 `DOCUMENT_SAVE_REQUIRED` 且不切换 |
 
-### 编辑态动作与直写 18 个（`--enable-writes` 才注册；序列化写入自动保存并逐项重读回显）
+### 编辑态动作与直写 18 个（默认公开；序列化写入自动保存并逐项重读回显）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -134,7 +134,7 @@ node packages/mcp-server/dist/run.js --enable-writes
 
 `writeCapabilities` 会在写入前说明当前文档能否直接修改该节点。Prefab 编辑模式下，嵌套实例内容的已知无效写入会以 `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` 拒绝，并返回 `cocos_prefab_open` 的源 Prefab 路由；工具不会自动切换文档。文档身份暂不可判定时保持放行，继续由保存后的逐项重读验证兜底。
 
-### 运行态 13 个（只读组默认开放，动作组需 `--enable-writes`）
+### 运行态 13 个（默认公开；动作工具仍执行运行态校验）
 
 `cocos_preview_launch/stop/sessions`、`cocos_runtime_get_hierarchy/inspect_component/get_console/watch_property/capture/invoke_method/sample_window/dispatch_input/instantiate_prefab/run_scenario`：启动 Preview 页面、读取运行时节点树/组件/Console、监听属性变化、Game 视图截图（多分辨率/裁剪/节点边界叠加）、调用组件方法、派发输入和运行时实例化 Prefab。Scenario 支持 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；`stop(always:true)` 会在前序步骤默认中止后仍执行清理。视觉结果仅作辅助证据。
 
@@ -216,7 +216,7 @@ CLI 不再跨进程保存 Preview session。持续的 Preview 读取和操作使
 - Bridge 只监听当前 Windows 用户可访问的本机 Named Pipe，不开放网络端口。
 - 不允许执行任意 JavaScript。
 - 正式 Bridge 不注册任意 `Editor.Message` 或 cce 门面调试入口；临时调试探针不属于运行时能力。
-- 裸启动只暴露只读工具；写工具仅当显式 `--enable-writes` 启动时注册。
+- 裸启动默认公开全部 MCP 工具；工具的参数校验、AssetDB 操作确认和写后回读校验仍然生效。
 - 每个直写操作执行、自动保存并逐项重读；失败即停，已生效的修改保留在文档中。误操作的还原手段是 git。
 - 写后逐项重读是唯一生效性防线：Creator 对部分写入会静默不生效（如预制体编辑模式下嵌套实例内部），重读不符会显式报错。
 - 外部进程不得直接修改 `.prefab`、`.scene` 或 `.meta` JSON 内容；只有 `.prefab` 删除必须经过 Creator/MCP，非 Prefab 资源文件可直接删除并同时删除同名 `.meta`。

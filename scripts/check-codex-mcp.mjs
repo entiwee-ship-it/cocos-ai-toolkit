@@ -4,12 +4,11 @@ import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const TOOLKIT_VERSION = '0.8.0';
+const TOOLKIT_VERSION = '0.9.0';
 const entry = process.env.COCOS_AI_MCP_ENTRY;
 if (!entry) throw new Error('COCOS_AI_MCP_ENTRY_REQUIRED');
 const sourceCommit = process.env.COCOS_AI_SOURCE_COMMIT;
 if (!sourceCommit) throw new Error('COCOS_AI_SOURCE_COMMIT_REQUIRED');
-const enableWrites = process.env.COCOS_AI_MCP_ENABLE_WRITES !== 'false';
 const distDir = dirname(entry);
 const directModule = await import(pathToFileURL(join(distDir, 'direct-tools.js')).href);
 const runtimeModule = await import(pathToFileURL(join(distDir, 'runtime-tools.js')).href);
@@ -18,19 +17,17 @@ const bridgeModule = await import(pathToFileURL(join(bridgeDistDir, 'bridge-stat
 const bridgeBuildInfo = JSON.parse(await readFile(join(bridgeDistDir, 'build-info.json'), 'utf8'));
 const expectedBridgeBuildId = bridgeBuildInfo.buildId;
 const expectedBridgeCapabilities = [...bridgeModule.BRIDGE_CAPABILITIES].sort();
-const EXPECTED_READONLY = [
+const EXPECTED_TOOLS = [
   ...directModule.COCOS_DIRECT_READONLY_TOOL_NAMES,
-  ...runtimeModule.COCOS_RUNTIME_READONLY_TOOL_NAMES
-];
-const EXPECTED_WRITE = [
   ...directModule.COCOS_DIRECT_WRITE_TOOL_NAMES,
-  ...runtimeModule.COCOS_RUNTIME_GATED_TOOL_NAMES
+  ...runtimeModule.COCOS_RUNTIME_READONLY_TOOL_NAMES,
+  ...runtimeModule.COCOS_RUNTIME_ACTION_TOOL_NAMES
 ];
 
 const timeoutMs = Number(process.env.COCOS_AI_CHECK_TIMEOUT_MS ?? 15_000);
 const transport = new StdioClientTransport({
   command: process.execPath,
-  args: [entry, ...(enableWrites ? ['--enable-writes'] : [])],
+  args: [entry],
   env: process.env,
   stderr: 'pipe'
 });
@@ -60,7 +57,7 @@ try {
   }
   const listed = await withTimeout(client.listTools(), 'TOOLS_LIST');
   const names = listed.tools.map((tool) => tool.name);
-  const expectedNames = [...EXPECTED_READONLY, ...(enableWrites ? EXPECTED_WRITE : [])];
+  const expectedNames = EXPECTED_TOOLS;
   if (JSON.stringify(names) !== JSON.stringify(expectedNames)) {
     throw new Error(`MCP_TOOL_SET_MISMATCH:${JSON.stringify({ expectedNames, names })}`);
   }
@@ -114,7 +111,7 @@ try {
     serverVersion: client.getServerVersion(),
     bridgeVersions,
     bridgeBuildIds,
-  writeEnabled: enableWrites,
+    allToolsPublic: true,
   transport: 'named-pipe',
     toolCount: names.length,
     editors: editorResult.structuredContent ?? null

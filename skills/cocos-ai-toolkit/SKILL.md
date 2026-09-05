@@ -5,7 +5,7 @@ description: Use when a Cocos Creator 3.8.x task must create, inspect, edit, del
 
 # Cocos AI Toolkit（直写档）
 
-Use the Cocos MCP for Creator resources. Match namespaced tools by the `cocos_*` suffix.
+Use the Cocos MCP for Creator resources. All MCP tools are publicly registered by default; there is no write-mode switch. Keep operation-level validation, confirmation, and post-write rereads. Match namespaced tools by the `cocos_*` suffix.
 
 ## Non-negotiable boundary
 
@@ -13,7 +13,7 @@ Use the Cocos MCP for Creator resources. Match namespaced tools by the `cocos_*`
 
 删除边界：只有 `.prefab` 必须通过 Creator/MCP 删除。非 Prefab 资源文件可以直接通过文件系统删除，无需 Creator/MCP；同时删除同名 `.meta` 文件（如存在）。这是整文件删除，不是手改 `.meta` JSON。删除前确认目标和引用，删除后检查 git 状态；Creator 正在运行时让 AssetDB 自动刷新，但 Creator 不可用不阻塞这类删除。
 
-If MCP, Creator, Creator IPC, Bridge, target identity, or write capability is unavailable for Prefab operations or serialized-content writes, 停下并报告阻塞. Never fall back to editing serialized JSON. This block does not apply to non-Prefab file deletion.
+If MCP, Creator, Creator IPC, Bridge, target identity, or a required operation capability is unavailable for Prefab operations or serialized-content writes, 停下并报告阻塞. Never fall back to editing serialized JSON. This block does not apply to non-Prefab file deletion.
 
 ## 编辑主流程（按序组合）
 
@@ -95,6 +95,6 @@ Prefab/Scene 中的节点只要组件公开 Inspector 事件数组，就必须�
 
 截图默认每会话保留 100 张、全局保留 50 会话/14 天。报告盘点只运行 `npm run reports:doctor`；归档和清理必须显式确认。
 
-动作组（--enable-writes）：`cocos_preview_launch/stop`、`cocos_runtime_invoke_method`、`cocos_runtime_sample_window`、`cocos_runtime_dispatch_input`（坐标是画布 CSS 像素）、`cocos_runtime_instantiate_prefab`、`cocos_runtime_run_scenario`。Scenario 精确步骤为 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；用 `stop(always:true)` 确保前序失败后仍关闭 Preview。
+动作组（默认公开）：`cocos_preview_launch/stop`、`cocos_runtime_invoke_method`、`cocos_runtime_sample_window`、`cocos_runtime_dispatch_input`（坐标是画布 CSS 像素）、`cocos_runtime_instantiate_prefab`、`cocos_runtime_run_scenario`。Scenario 精确步骤为 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；用 `stop(always:true)` 确保前序失败后仍关闭 Preview。
 
 视觉结果仅作辅助证据；结构化状态以 Creator 编辑态重读为准。

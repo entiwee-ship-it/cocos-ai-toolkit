@@ -13,8 +13,7 @@ import { toToolResult } from './tool-result.js';
 
 /**
  * 运行态与视觉验证 MCP 工具。
- * 只读组默认开放；launch/stop/invoke/dispatch/scenario 属动作类，仅在显式
- * --enable-writes 时注册。运行态数据不应用回编辑态，视觉结果仅作辅助证据。
+ * 所有工具默认公开注册；运行态数据不应用回编辑态，视觉结果仅作辅助证据。
  */
 
 const READONLY_ANNOTATIONS = {
@@ -202,7 +201,7 @@ export class CocosRuntimeToolService {
     return output;
   }
 
-  /** 调用运行时组件方法（门控）。 */
+  /** 调用运行时组件方法。 */
   async invokeRuntimeMethod(input: {
     sessionId: string;
     path: string;
@@ -241,7 +240,7 @@ export class CocosRuntimeToolService {
     return output;
   }
 
-  /** 派发运行时输入（门控；坐标为画布 CSS 像素）。 */
+  /** 派发运行时输入（坐标为画布 CSS 像素）。 */
   async dispatchRuntimeInput(input: {
     sessionId: string;
     inputType: 'tap' | 'click' | 'key';
@@ -315,7 +314,7 @@ export class CocosRuntimeToolService {
     return output;
   }
 
-  /** 执行自动场景验证（门控）。 */
+  /** 执行自动场景验证。 */
   async runRuntimeScenario(input: {
     sessionId?: string;
     projectId?: string;
@@ -349,7 +348,7 @@ export const COCOS_RUNTIME_READONLY_TOOL_NAMES = [
   'cocos_runtime_capture'
 ] as const;
 
-export const COCOS_RUNTIME_GATED_TOOL_NAMES = [
+export const COCOS_RUNTIME_ACTION_TOOL_NAMES = [
   'cocos_preview_launch',
   'cocos_preview_stop',
   'cocos_runtime_invoke_method',
@@ -434,8 +433,8 @@ export function registerCocosRuntimeReadonlyTools(
   }, async (input) => toToolResult(service.captureRuntime(input)));
 }
 
-/** 登记仅在显式 enableWrites 时开放的运行态动作工具。 */
-export function registerCocosRuntimeGatedTools(
+/** 登记默认公开的运行态动作工具。 */
+export function registerCocosRuntimeActionTools(
   server: McpServer,
   service: CocosRuntimeToolService
 ): void {

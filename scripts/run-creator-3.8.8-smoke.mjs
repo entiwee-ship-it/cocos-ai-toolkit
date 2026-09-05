@@ -54,7 +54,7 @@ try {
 
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [mcpEntry, '--enable-writes'],
+      args: [mcpEntry],
     env: {
       ...process.env,
       ...(process.env.COCOS_AI_ENDPOINT_ROOT

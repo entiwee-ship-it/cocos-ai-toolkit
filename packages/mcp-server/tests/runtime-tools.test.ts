@@ -4,6 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ReadonlyCreatorClient } from '../src/tools.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCocosMcpServer } from '../src/server.js';
+import { COCOS_RUNTIME_ACTION_TOOL_NAMES } from '../src/runtime-tools.js';
 
 interface ProbeRequest {
   method: string;
@@ -28,7 +29,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.8.0',
+  bridgeVersion: '0.9.0',
   capabilities: ['probe.editorState', 'probe.previewOpen']
 };
 
@@ -96,15 +97,11 @@ afterEach(async () => {
 });
 
 async function createHarness(
-  creatorClient: ReadonlyCreatorClient,
-  options: { enableWrites?: boolean } = {}
+  creatorClient: ReadonlyCreatorClient
 ) {
-  const server = createCocosMcpServer(
-    { creatorClient },
-    { enableWrites: options.enableWrites }
-  );
+  const server = createCocosMcpServer({ creatorClient });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'runtime-test-client', version: '0.8.0' });
+  const client = new Client({ name: 'runtime-test-client', version: '0.9.0' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)
@@ -114,65 +111,22 @@ async function createHarness(
 }
 
 describe('运行态 MCP 工具', () => {
-  it('默认注册运行态只读工具，门控工具仅 enableWrites 时注册', async () => {
+  it('默认注册全部运行态工具，不再按写入能力锁定', async () => {
     const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
     const { client } = await createHarness(creatorClient);
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
 
-    const result = await client.listTools();
-    const names = result.tools.map((tool) => tool.name);
     for (const expected of [
       'cocos_preview_sessions',
       'cocos_runtime_get_hierarchy',
       'cocos_runtime_inspect_component',
       'cocos_runtime_get_console',
       'cocos_runtime_watch_property',
-      'cocos_runtime_capture'
+      'cocos_runtime_capture',
+      ...COCOS_RUNTIME_ACTION_TOOL_NAMES
     ]) {
       expect(names).toContain(expected);
     }
-    for (const gated of [
-      'cocos_preview_launch',
-      'cocos_preview_stop',
-      'cocos_runtime_invoke_method',
-      'cocos_runtime_sample_window',
-      'cocos_runtime_dispatch_input',
-      'cocos_runtime_instantiate_prefab',
-      'cocos_runtime_run_scenario'
-    ]) {
-      expect(names).not.toContain(gated);
-    }
-
-    const { client: writeClient } = await createHarness(creatorClient, { enableWrites: true });
-    const writeTools = await writeClient.listTools();
-    const writeNames = writeTools.tools.map((tool) => tool.name);
-    for (const gated of [
-      'cocos_preview_launch',
-      'cocos_preview_stop',
-      'cocos_runtime_invoke_method',
-      'cocos_runtime_sample_window',
-      'cocos_runtime_dispatch_input',
-      'cocos_runtime_instantiate_prefab',
-      'cocos_runtime_run_scenario'
-    ]) {
-      expect(writeNames).toContain(gated);
-    }
-    const launchTool = writeTools.tools.find((tool) => tool.name === 'cocos_preview_launch');
-    expect(launchTool?.annotations?.readOnlyHint).toBe(false);
-    const scenarioTool = writeTools.tools.find((tool) => tool.name === 'cocos_runtime_run_scenario');
-    for (const stepKind of [
-      'launch',
-      'wait-node',
-      'assert-property',
-      'dispatch-input',
-      'instantiate-prefab',
-      'assert-console',
-      'capture',
-      'assert-image-diff',
-      'stop'
-    ]) {
-      expect(scenarioTool?.description).toContain(stepKind);
-    }
-    expect(scenarioTool?.description).toContain('stop(always:true)');
   });
 
   it('cocos_preview_sessions 转发 server.previewSessions', async () => {
@@ -189,7 +143,7 @@ describe('运行态 MCP 工具', () => {
 
   it('cocos_preview_launch 校验编辑器与能力后启动会话', async () => {
     const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_preview_launch',
@@ -207,7 +161,7 @@ describe('运行态 MCP 工具', () => {
 
   it('cocos_preview_launch 在编辑器不在线时拒绝', async () => {
     const creatorClient = new RecordingCreatorClient((method) => method === 'server.editors' ? [] : {});
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({ name: 'cocos_preview_launch', arguments: { projectId: 'proj1' } });
     expect(result.isError).toBe(true);
@@ -246,9 +200,9 @@ describe('运行态 MCP 工具', () => {
     });
   });
 
-  it('cocos_runtime_invoke_method 经门控转发', async () => {
+  it('cocos_runtime_invoke_method 经公开转发', async () => {
     const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_runtime_invoke_method',
@@ -261,9 +215,9 @@ describe('运行态 MCP 工具', () => {
     });
   });
 
-  it('cocos_runtime_sample_window 经门控转发页面内采样请求', async () => {
+  it('cocos_runtime_sample_window 经公开转发页面内采样请求', async () => {
     const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_runtime_sample_window',
@@ -296,9 +250,9 @@ describe('运行态 MCP 工具', () => {
     });
   });
 
-  it('cocos_runtime_instantiate_prefab 仅在门控开启后转发并拒绝空父路径', async () => {
+  it('cocos_runtime_instantiate_prefab 仅在公开开启后转发并拒绝空父路径', async () => {
     const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_runtime_instantiate_prefab',
@@ -336,7 +290,7 @@ describe('运行态 MCP 工具', () => {
 
   it('cocos_runtime_run_scenario 校验步骤并返回报告', async () => {
     const creatorClient = new RecordingCreatorClient(createRuntimeRespond());
-    const { client } = await createHarness(creatorClient, { enableWrites: true });
+    const { client } = await createHarness(creatorClient);
     const steps = [
       { kind: 'launch' },
       { kind: 'instantiate-prefab', assetUuid: 'asset-1', parentPath: 'Canvas/LayerUI', x: 0, y: -10 },

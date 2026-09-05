@@ -1,12 +1,12 @@
 # Cocos AI Bridge
 
-The standalone manager window has status and current-version tool-list tabs. The `cocos_asset_manage` MCP tool routes resource move, rename, and delete operations through Creator AssetDB.
+The standalone manager window has status and current-version tool-list tabs. All MCP tools are public by default, and `cocos_asset_manage` routes resource move, rename, and delete operations through Creator AssetDB.
 
 Cocos AI Bridge is a project-local editor extension for Cocos Creator 3.8.x. It connects Cocos AI Toolkit to editor state, assets, nodes, components, Prefabs, document saving, and Preview workflows.
 
 | Item | Value |
 | --- | --- |
-| Current version | V0.8.0 |
+| Current version | V0.9.0 |
 | Release date | 2026-09-05 |
 | Author | Enti |
 | Creator version requirement | `>=3.8.0 <3.9.0` |

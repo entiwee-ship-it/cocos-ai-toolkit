@@ -14,9 +14,9 @@ describe('MCP 与 Creator 本机直连恢复', () => {
   it('Creator 后启动时同一 MCP Client 无需重连即可发现', async () => {
     const endpointRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-recovery-'));
     const creatorClient = new CreatorClient({ endpointRoot, requestTimeoutMs: 1_000 });
-    const server = createCocosMcpServer({ creatorClient }, { enableWrites: true });
+    const server = createCocosMcpServer({ creatorClient });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: 'recovery-test-client', version: '0.8.0' });
+    const client = new Client({ name: 'recovery-test-client', version: '0.9.0' });
     const [runtime] = await Promise.all([
       startMcpRuntime({ creatorClient, server, transport: serverTransport }),
       client.connect(clientTransport)
@@ -52,7 +52,7 @@ async function startBridge(endpointRoot: string) {
     projectId: 'project-1',
     projectPath: 'E:/project',
     creatorVersion: '3.8.8',
-    bridgeVersion: '0.8.0',
+    bridgeVersion: '0.9.0',
     bridgeBuildId: 'build-id',
     capabilities: ['probe.editorState'],
     processId: process.pid,

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 interface ToolCatalogEntry {
   name: string;
   group: string;
-  writeRequired: boolean;
+  mutating: boolean;
   destructive?: boolean;
   summary: string;
 }
@@ -14,7 +14,7 @@ const directToolsPath = new URL('../../mcp-server/src/direct-tools.ts', import.m
 const runtimeToolsPath = new URL('../../mcp-server/src/runtime-tools.ts', import.meta.url);
 
 describe('工具管理窗口清单', () => {
-  it('与 MCP 当前实际注册工具及写入门控保持一致', async () => {
+  it('与 MCP 当前实际注册工具及读写属性保持一致', async () => {
     const [catalogText, directSource, runtimeSource] = await Promise.all([
       readFile(catalogPath, 'utf8'),
       readFile(directToolsPath, 'utf8'),
@@ -24,13 +24,13 @@ describe('工具管理窗口清单', () => {
     const registeredNames = [directSource, runtimeSource].flatMap((source) =>
       [...source.matchAll(/server\.registerTool\('([^']+)'/g)].map((match) => match[1])
     );
-    const writeRequiredNames = [
+    const mutatingNames = [
       ...readNameArray(directSource, 'COCOS_DIRECT_WRITE_TOOL_NAMES'),
-      ...readNameArray(runtimeSource, 'COCOS_RUNTIME_GATED_TOOL_NAMES')
+      ...readNameArray(runtimeSource, 'COCOS_RUNTIME_ACTION_TOOL_NAMES')
     ];
 
     expect(catalog.map((tool) => tool.name)).toEqual(registeredNames);
-    expect(catalog.filter((tool) => tool.writeRequired).map((tool) => tool.name)).toEqual(writeRequiredNames);
+    expect(catalog.filter((tool) => tool.mutating).map((tool) => tool.name)).toEqual(mutatingNames);
     expect(new Set(catalog.map((tool) => tool.name)).size).toBe(catalog.length);
     expect(catalog.every((tool) => tool.group && tool.summary)).toBe(true);
   });

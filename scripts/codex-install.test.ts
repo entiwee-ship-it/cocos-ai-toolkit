@@ -6,30 +6,29 @@ const checkerPath = new URL('./check-codex-mcp.ps1', import.meta.url);
 const checkerRuntimePath = new URL('./check-codex-mcp.mjs', import.meta.url);
 
 describe('Codex MCP 安装入口', () => {
-  it('默认安装写工具，Readonly 才显式关闭', async () => {
+  it('安装脚本默认只注册一个全部工具公开的 MCP 入口', async () => {
     const installer = await readFile(installerPath, 'utf8');
-    expect(installer).toContain('[switch]$Readonly');
-    expect(installer).toMatch(/if\s*\(-not\s*\$Readonly\)[\s\S]*--enable-writes/);
-    expect(installer).toContain('默认写入');
-    expect(installer).toContain('Write-Output $(if ($Readonly)');
-    expect(installer).not.toContain('Write-Output (if ($Readonly)');
+    expect(installer).toContain("$installArgs += @('--', $NodePath, $entry)");
+    expect(installer).toContain('全部工具默认公开');
+    expect(installer).not.toContain('$Readonly');
+    expect(installer).not.toContain('--enable-writes');
   });
 
-  it('健康检查区分默认写入与显式只读模式', async () => {
-    const checker = await readFile(checkerPath, 'utf8');
-    expect(checker).toContain('[switch]$Readonly');
-    expect(checker).toContain('--enable-writes');
-    expect(checker).toContain('COCOS_AI_MCP_ENABLE_WRITES');
+  it('健康检查固定验证完整工具集合和 Bridge 身份', async () => {
+    const [checker, checkerRuntime] = await Promise.all([
+      readFile(checkerPath, 'utf8'),
+      readFile(checkerRuntimePath, 'utf8')
+    ]);
     expect(checker).toContain('E:/xile-workspace/worktrees/cocos-ai-toolkit-phase-0');
-  });
-
-  it('健康检查锁定当前直写工具面与 Bridge 身份', async () => {
-    const checkerRuntime = await readFile(checkerRuntimePath, 'utf8');
-
-    expect(checkerRuntime).toContain('direct-tools.js');
-    expect(checkerRuntime).toContain('COCOS_DIRECT_READONLY_TOOL_NAMES');
+    expect(checker).not.toContain('[switch]$Readonly');
+    expect(checker).toContain('仍包含已移除的 --enable-writes 参数');
+    expect(checker).not.toContain('COCOS_AI_MCP_ENABLE_WRITES');
+    expect(checkerRuntime).toContain('EXPECTED_TOOLS');
     expect(checkerRuntime).toContain('COCOS_DIRECT_WRITE_TOOL_NAMES');
-    expect(checkerRuntime).toContain('COCOS_RUNTIME_GATED_TOOL_NAMES');
+    expect(checkerRuntime).toContain('COCOS_RUNTIME_ACTION_TOOL_NAMES');
+    expect(checkerRuntime).toContain('allToolsPublic: true');
+    expect(checkerRuntime).not.toContain('COCOS_AI_MCP_ENABLE_WRITES');
+    expect(checkerRuntime).not.toContain('--enable-writes');
     expect(checkerRuntime).toContain('BRIDGE_BUILD_ID_MISMATCH');
     expect(checkerRuntime).toContain('BRIDGE_CAPABILITIES_MISMATCH');
     expect(checkerRuntime).toContain('COCOS_EDITOR_NOT_CONNECTED');

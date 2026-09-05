@@ -25,14 +25,13 @@ export interface McpRuntime {
 export interface McpRuntimeConfig {
   endpointRoot: string | undefined;
   captureRoot: string | undefined;
-  enableWrites: boolean;
   requestTimeoutMs: number;
   sessionToken: string | undefined;
 }
 
 /**
- * 从进程环境和启动参数读取 Creator IPC、写能力开关和请求超时。
- * 写工具仅当命令行显式传入 --enable-writes 时注册，环境变量不能开启写能力。
+ * 从进程环境和启动参数读取 Creator IPC 和请求超时。
+ * 所有 MCP 工具默认公开；当前入口不接受任何启动参数。
  * 请求超时经 COCOS_AI_IPC_TIMEOUT_MS 配置，与 CLI 共用同一环境变量。
  *
  * @param environment 环境变量键值；缺失值使用本机默认配置。
@@ -43,19 +42,18 @@ export function readMcpRuntimeConfig(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   argv: readonly string[] = process.argv.slice(2)
 ): McpRuntimeConfig {
+  validateMcpArguments(argv);
   return {
     endpointRoot: environment.COCOS_AI_ENDPOINT_ROOT || undefined,
     captureRoot: environment.COCOS_AI_CAPTURE_ROOT || undefined,
-    enableWrites: readEnableWrites(argv),
     requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_IPC_TIMEOUT_MS),
     sessionToken: environment.COCOS_AI_SESSION_TOKEN || undefined
   };
 }
 
-function readEnableWrites(argv: readonly string[]): boolean {
-  const invalid = argv.find((argument) => argument !== '--enable-writes');
+function validateMcpArguments(argv: readonly string[]): void {
+  const invalid = argv[0];
   if (invalid) throw new Error(`MCP_ARGUMENT_INVALID:${invalid}`);
-  return argv.includes('--enable-writes');
 }
 
 /** 解析有限的正整数毫秒超时，缺省或非法时回退默认值。 */
@@ -67,9 +65,9 @@ function readRequestTimeoutMs(rawValue: string | undefined): number {
 /**
  * 启动 MCP Transport 和本机 Creator Client，并返回幂等关闭句柄。
  *
- * @param options 已构造的 Creator Client、MCP Server（包含默认只读和可选门控工具）和 Transport。
+ * @param options 已构造的 Creator Client、包含全部公开工具的 MCP Server 和 Transport。
  * @param options.creatorClient 提供 Creator Named Pipe 请求的共享客户端。
- * @param options.server 已登记默认只读工具和可选门控工具的 MCP Server。
+ * @param options.server 已登记全部公开工具的 MCP Server。
  * @param options.transport 当前 MCP stdio Transport。
  * @returns 可安全重复调用的运行时关闭句柄。
  */
@@ -112,7 +110,7 @@ export async function runMcpServer(
     ...(config.captureRoot ? { captureRoot: config.captureRoot } : {}),
     ...(config.sessionToken ? { sessionToken: config.sessionToken } : {})
   });
-  const server = createCocosMcpServer({ creatorClient }, { enableWrites: config.enableWrites });
+  const server = createCocosMcpServer({ creatorClient });
   const transport = new StdioServerTransport();
   patchTransportSchemaRefs(transport);
   return startMcpRuntime({ creatorClient, server, transport });

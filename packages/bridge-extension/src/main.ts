@@ -16,13 +16,13 @@ import { ProbeError } from './probe-errors';
 interface ToolCatalogEntry {
   name: string;
   group: string;
-  writeRequired: boolean;
+  mutating: boolean;
   destructive?: boolean;
   summary: string;
 }
 
 const TOOL_CATALOG = require('../tool-catalog.json') as ToolCatalogEntry[];
-const BRIDGE_VERSION = '0.8.0';
+const BRIDGE_VERSION = '0.9.0';
 const BRIDGE_RELEASE_DATE = '2026-09-05';
 
 type JsonObject = Record<string, unknown>;

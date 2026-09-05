@@ -1722,7 +1722,7 @@ export function registerCocosDirectReadonlyTools(
   }, async (input) => toToolResult(service.openScene(input)));
 }
 
-/** 注册直写档写工具（仅显式 --enable-writes 时可见；每次写入自动保存并逐项重读回显）。 */
+/** 注册默认公开的直写工具；每次写入自动保存并逐项重读回显。 */
 export function registerCocosDirectWriteTools(
   server: McpServer,
   service: CocosDirectToolService

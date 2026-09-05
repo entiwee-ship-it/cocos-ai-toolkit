@@ -3,7 +3,7 @@ type RecordValue = Record<string, unknown>;
 interface ToolEntry {
   name: string;
   group: string;
-  writeRequired: boolean;
+  mutating: boolean;
   destructive: boolean;
   summary: string;
 }
@@ -79,8 +79,8 @@ const template = `
         <p id="toolSummary">正在读取工具清单</p>
       </div>
       <div class="legend">
-        <span class="tool-mode always">无需写入开关</span>
-        <span class="tool-mode gated">需开启写入</span>
+        <span class="tool-mode always">只读工具</span>
+        <span class="tool-mode action">编辑器操作</span>
       </div>
     </header>
     <div id="toolList" class="tool-list"></div>
@@ -136,7 +136,7 @@ dd { min-width: 0; margin: 0; color: #e1e5ea; overflow-wrap: anywhere; }
 .tool-description { color: #b5bcc6; }
 .tool-mode { flex: none; padding: 2px 7px; border: 1px solid; border-radius: 999px; font-size: 11px; white-space: nowrap; }
 .tool-mode.always { color: #9be7b1; background: #153b25; border-color: #28623d; }
-.tool-mode.gated { color: #ffd08c; background: #453219; border-color: #705126; }
+.tool-mode.action { color: #ffd08c; background: #453219; border-color: #705126; }
 .tool-mode.danger { color: #ffb0ad; background: #481d1d; border-color: #773333; }
 .error { margin-top: 12px; padding: 10px 12px; color: #ffc1bd; background: #401d1d; border: 1px solid #6f3333; border-radius: 5px; white-space: pre-wrap; }
 .hidden { display: none; }
@@ -207,7 +207,7 @@ module.exports = Editor.Panel.define({
       this.setText('toolCount', tools.length);
       this.setText(
         'toolSummary',
-        `${tools.length} 个公开 MCP 工具（版本 ${display(version)}）；“需开启写入”工具只有在 MCP 使用 --enable-writes 启动时可调用。`
+        `${tools.length} 个公开 MCP 工具（版本 ${display(version)}）；所有工具默认公开，编辑器操作仍按 Creator 参数校验和回读结果执行。`
       );
 
       const groups = new Map<string, ToolEntry[]>();
@@ -241,8 +241,8 @@ module.exports = Editor.Panel.define({
           description.className = 'tool-description';
           description.textContent = tool.summary;
           const mode = document.createElement('span');
-          mode.className = `tool-mode ${tool.destructive ? 'danger' : tool.writeRequired ? 'gated' : 'always'}`;
-          mode.textContent = tool.destructive ? '可能删除' : tool.writeRequired ? '需开启写入' : '无需写入开关';
+          mode.className = `tool-mode ${tool.destructive ? 'danger' : tool.mutating ? 'action' : 'always'}`;
+          mode.textContent = tool.destructive ? '可能删除' : tool.mutating ? '编辑器操作' : '只读';
           row.append(name, description, mode);
           group.append(row);
         }
@@ -330,7 +330,7 @@ function readToolEntry(value: unknown): ToolEntry | null {
   if (
     typeof item.name !== 'string'
     || typeof item.group !== 'string'
-    || typeof item.writeRequired !== 'boolean'
+    || typeof item.mutating !== 'boolean'
     || typeof item.summary !== 'string'
   ) {
     return null;
@@ -338,7 +338,7 @@ function readToolEntry(value: unknown): ToolEntry | null {
   return {
     name: item.name,
     group: item.group,
-    writeRequired: item.writeRequired,
+    mutating: item.mutating,
     destructive: item.destructive === true,
     summary: item.summary
   };
