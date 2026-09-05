@@ -49,7 +49,6 @@ const template = `
         <dl>
           <div><dt>传输方式</dt><dd>Windows Named Pipe</dd></div>
           <div><dt>状态</dt><dd id="ipcState">—</dd></div>
-          <div><dt>认证</dt><dd id="authentication">—</dd></div>
           <div><dt>活动请求</dt><dd id="activeRequests">—</dd></div>
           <div><dt>累计请求</dt><dd id="totalRequests">—</dd></div>
           <div><dt>管道</dt><dd id="pipeName" class="mono selectable">—</dd></div>
@@ -168,7 +167,6 @@ module.exports = Editor.Panel.define({
     author: '#author',
     buildId: '#buildId',
     ipcState: '#ipcState',
-    authentication: '#authentication',
     activeRequests: '#activeRequests',
     totalRequests: '#totalRequests',
     pipeName: '#pipeName',
@@ -268,7 +266,6 @@ module.exports = Editor.Panel.define({
         this.setText('buildId', extension.buildId);
         this.renderTools(tools.items, tools.version);
         this.setText('ipcState', ipc.state);
-        this.setText('authentication', ipc.authentication === 'enabled' ? '会话令牌' : '本机用户');
         this.setText('activeRequests', ipc.activeRequests);
         this.setText('totalRequests', ipc.totalRequests);
         this.setText('pipeName', ipc.pipeName);

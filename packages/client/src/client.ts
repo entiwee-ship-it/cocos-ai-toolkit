@@ -44,7 +44,6 @@ export interface CreatorClientOptions {
   maxPayloadBytes?: number;
   endpointRoot?: string;
   captureRoot?: string;
-  sessionToken?: string;
 }
 
 export class CreatorClientError extends Error {
@@ -179,8 +178,7 @@ export class CreatorClient {
           return null;
         }
         return { descriptor: described };
-      } catch (error) {
-        if (error instanceof CreatorClientError && error.code === 'IPC_UNAUTHORIZED') throw error;
+      } catch {
         await unlink(filePath).catch(() => undefined);
         return null;
       }
@@ -194,8 +192,7 @@ export class CreatorClient {
       type: 'request',
       requestId,
       method,
-      payload,
-      ...(this.options.sessionToken ? { sessionToken: this.options.sessionToken } : {})
+      payload
     })}\n`;
     const requestBytes = Buffer.byteLength(request);
     const startedAt = performance.now();

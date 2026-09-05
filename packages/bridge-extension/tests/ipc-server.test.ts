@@ -44,24 +44,6 @@ describe('CreatorIpcServer', () => {
     await server.stop();
     expect(await readdir(endpointRoot)).toEqual([]);
   });
-
-  it('配置会话令牌时拒绝未认证请求', async () => {
-    const endpointRoot = await mkdtemp(join(tmpdir(), 'cocos-ai-ipc-token-'));
-    roots.push(endpointRoot);
-    const descriptor = createDescriptor('token');
-    const server = new CreatorIpcServer({
-      endpointRoot,
-      sessionToken: 'secret',
-      describe: () => descriptor,
-      handlers: {}
-    });
-    await server.start();
-    await expect(send(descriptor.pipeName, 'bridge.describe', {})).rejects.toMatchObject({
-      code: 'IPC_UNAUTHORIZED'
-    });
-    expect(await send(descriptor.pipeName, 'bridge.describe', {}, 'secret')).toMatchObject(descriptor);
-    await server.stop();
-  });
 });
 
 function createDescriptor(suffix = 'default'): CreatorEndpointDescriptor {
@@ -81,7 +63,7 @@ function createDescriptor(suffix = 'default'): CreatorEndpointDescriptor {
   };
 }
 
-function send(pipeName: string, method: string, payload: unknown, sessionToken?: string): Promise<unknown> {
+function send(pipeName: string, method: string, payload: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const requestId = `${Date.now()}-${Math.random()}`;
     const socket = createConnection(pipeName);
@@ -90,8 +72,7 @@ function send(pipeName: string, method: string, payload: unknown, sessionToken?:
       type: 'request',
       requestId,
       method,
-      payload,
-      ...(sessionToken ? { sessionToken } : {})
+      payload
     })}\n`));
     socket.on('data', (chunk) => {
       const newline = chunk.indexOf(10);

@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -30,7 +30,6 @@ export interface CreatorIpcServerStatus {
   totalRequests: number;
   lastRequestAt: string | null;
   lastError: string | null;
-  authentication: 'enabled' | 'local-user';
 }
 
 export type CreatorIpcLifecycleEvent =
@@ -43,7 +42,6 @@ export interface CreatorIpcServerOptions {
   describe(): CreatorEndpointDescriptor;
   handlers: Readonly<Record<string, (payload: unknown) => Promise<unknown>>>;
   endpointRoot?: string;
-  sessionToken?: string;
   maxPayloadBytes?: number;
   requestTimeoutMs?: number;
   onLifecycleEvent?: (event: CreatorIpcLifecycleEvent) => void;
@@ -54,7 +52,6 @@ interface IpcRequest {
   requestId: string;
   method: string;
   payload: unknown;
-  sessionToken?: string;
 }
 
 /** Creator 主进程内的本机命名管道端点；每条连接只处理一个请求。 */
@@ -133,8 +130,7 @@ export class CreatorIpcServer {
       activeRequests: this.activeRequests,
       totalRequests: this.totalRequests,
       lastRequestAt: this.lastRequestAt,
-      lastError: this.lastError,
-      authentication: this.options.sessionToken ? 'enabled' : 'local-user'
+      lastError: this.lastError
     };
   }
 
@@ -191,15 +187,6 @@ export class CreatorIpcServer {
       request = value as IpcRequest;
     } catch (error) {
       this.respond(socket, 'invalid', false, toProbeErrorPayload(error));
-      return;
-    }
-
-    if (!hasValidToken(request.sessionToken, this.options.sessionToken)) {
-      this.respond(socket, request.requestId, false, {
-        code: 'IPC_UNAUTHORIZED',
-        message: 'IPC_UNAUTHORIZED',
-        details: {}
-      });
       return;
     }
 
@@ -273,14 +260,6 @@ function writeEndpointDescriptor(descriptor: CreatorEndpointDescriptor, endpoint
 
 function removeEndpointDescriptor(descriptor: CreatorEndpointDescriptor, endpointRoot?: string): void {
   rmSync(endpointFilePath(descriptor, endpointRoot), { force: true });
-}
-
-function hasValidToken(actual: string | undefined, expected: string | undefined): boolean {
-  if (!expected) return true;
-  if (!actual) return false;
-  const actualBuffer = Buffer.from(actual);
-  const expectedBuffer = Buffer.from(expected);
-  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
 function readReason(error: unknown): string {

@@ -27,7 +27,6 @@ const HELP = `用法:
 环境变量:
   COCOS_AI_ENDPOINT_ROOT     Creator 端点描述目录，通常无需配置
   COCOS_AI_IPC_TIMEOUT_MS    单次请求等待毫秒数，默认 180000
-  COCOS_AI_SESSION_TOKEN     Creator 本机直连启用认证时使用的会话令牌
 
 CLI 提供编辑态只读诊断和单进程 runtime-scenario；需要持续 Preview 会话时使用 MCP。`;
 
@@ -60,9 +59,6 @@ export async function runCli(
       : {}),
     ...(process.env.COCOS_AI_CAPTURE_ROOT
       ? { captureRoot: process.env.COCOS_AI_CAPTURE_ROOT }
-      : {}),
-    ...(process.env.COCOS_AI_SESSION_TOKEN
-      ? { sessionToken: process.env.COCOS_AI_SESSION_TOKEN }
       : {})
   });
   try {

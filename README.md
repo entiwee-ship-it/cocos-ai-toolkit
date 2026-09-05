@@ -58,7 +58,7 @@ Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，�
 
 管理窗口提供“运行状态”和“工具列表”两个切换页。“工具列表”由 Bridge 返回当前版本的完整 MCP 工具目录，按编辑器、资源、节点与组件、Prefab 与文档、Preview 与运行态分组，并标出只读、编辑器操作和潜在删除风险。
 
-通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`；可选的 `COCOS_AI_SESSION_TOKEN` 会要求 MCP/CLI 与 Creator 使用同一会话令牌。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
+通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 
 ## 启动 AI 正式入口 MCP Server
 
@@ -72,7 +72,6 @@ node packages/mcp-server/dist/run.js
 
 - `COCOS_AI_ENDPOINT_ROOT`：可选 Creator 端点描述目录，通常无需配置。
 - `COCOS_AI_IPC_TIMEOUT_MS`：可选单次 Creator IPC 请求超时，默认 180000 毫秒。
-- `COCOS_AI_SESSION_TOKEN`：可选本机会话令牌；配置后 Bridge、CLI 和 MCP 必须使用相同值。
 
 MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参数必须为空，其它参数以稳定错误拒绝。
 

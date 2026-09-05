@@ -94,7 +94,6 @@ export async function load(): Promise<void> {
   const server = new CreatorIpcServer({
     describe: buildDescriptor,
     handlers,
-    sessionToken: process.env.COCOS_AI_SESSION_TOKEN,
     onLifecycleEvent: logIpcLifecycle
   });
   ipcServer = server;
@@ -197,8 +196,7 @@ async function queryManagerState(): Promise<unknown> {
       activeRequests: 0,
       totalRequests: 0,
       lastRequestAt: null,
-      lastError: null,
-      authentication: process.env.COCOS_AI_SESSION_TOKEN ? 'enabled' : 'local-user'
+      lastError: null
     },
     editor,
     updatedAt: new Date().toISOString()

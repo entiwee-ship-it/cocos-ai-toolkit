@@ -54,27 +54,6 @@ describe('CreatorClient named-pipe behavior', () => {
     await client.close();
   });
 
-  it('会话令牌只随本机请求发送，不写入端点描述', async () => {
-    const endpointRoot = await temporaryRoot();
-    const tokens: Array<string | undefined> = [];
-    const bridge = await startFakeCreator(endpointRoot, async (request) => {
-      tokens.push(request.sessionToken);
-      if (request.sessionToken !== 'secret') {
-        return failure('IPC_UNAUTHORIZED');
-      }
-      return { ok: true };
-    });
-    const client = new CreatorClient({ endpointRoot, sessionToken: 'secret' });
-    await client.connect();
-    await client.request('probe.editorState', {
-      selector: { projectId: bridge.descriptor.projectId },
-      params: {}
-    });
-    expect(tokens).toEqual(['secret']);
-    expect(JSON.stringify(bridge.descriptor)).not.toContain('secret');
-    await client.close();
-  });
-
   it('忽略已经失效的端点描述文件', async () => {
     const endpointRoot = await temporaryRoot();
     const stale = descriptor('stale');
@@ -187,7 +166,6 @@ interface FakeRequest {
   requestId: string;
   method: string;
   payload: unknown;
-  sessionToken?: string;
 }
 
 async function temporaryRoot(): Promise<string> {

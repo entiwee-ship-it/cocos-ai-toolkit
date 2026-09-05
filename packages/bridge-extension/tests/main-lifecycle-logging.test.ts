@@ -41,8 +41,7 @@ vi.mock('../src/ipc-server', () => ({
         activeRequests: 0,
         totalRequests: 0,
         lastRequestAt: null,
-        lastError: null,
-        authentication: 'local-user'
+        lastError: null
       };
     }
   }

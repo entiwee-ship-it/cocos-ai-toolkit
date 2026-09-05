@@ -46,19 +46,16 @@ describe('Cocos MCP stdio runtime', () => {
   it('读取 Named Pipe 运行配置，不再接受 Probe 地址', () => {
     expect(readMcpRuntimeConfig({
       COCOS_AI_ENDPOINT_ROOT: 'C:/ipc/endpoints',
-      COCOS_AI_CAPTURE_ROOT: 'C:/captures',
-      COCOS_AI_SESSION_TOKEN: 'secret-token'
+      COCOS_AI_CAPTURE_ROOT: 'C:/captures'
     })).toEqual({
       endpointRoot: 'C:/ipc/endpoints',
       captureRoot: 'C:/captures',
-      requestTimeoutMs: 180_000,
-      sessionToken: 'secret-token'
+      requestTimeoutMs: 180_000
     });
     expect(readMcpRuntimeConfig({})).toEqual({
       endpointRoot: undefined,
       captureRoot: undefined,
-      requestTimeoutMs: 180_000,
-      sessionToken: undefined
+      requestTimeoutMs: 180_000
     });
   });
 

@@ -26,7 +26,6 @@ export interface McpRuntimeConfig {
   endpointRoot: string | undefined;
   captureRoot: string | undefined;
   requestTimeoutMs: number;
-  sessionToken: string | undefined;
 }
 
 /**
@@ -46,8 +45,7 @@ export function readMcpRuntimeConfig(
   return {
     endpointRoot: environment.COCOS_AI_ENDPOINT_ROOT || undefined,
     captureRoot: environment.COCOS_AI_CAPTURE_ROOT || undefined,
-    requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_IPC_TIMEOUT_MS),
-    sessionToken: environment.COCOS_AI_SESSION_TOKEN || undefined
+    requestTimeoutMs: readRequestTimeoutMs(environment.COCOS_AI_IPC_TIMEOUT_MS)
   };
 }
 
@@ -107,8 +105,7 @@ export async function runMcpServer(
   const creatorClient = new CreatorClient({
     requestTimeoutMs: config.requestTimeoutMs,
     ...(config.endpointRoot ? { endpointRoot: config.endpointRoot } : {}),
-    ...(config.captureRoot ? { captureRoot: config.captureRoot } : {}),
-    ...(config.sessionToken ? { sessionToken: config.sessionToken } : {})
+    ...(config.captureRoot ? { captureRoot: config.captureRoot } : {})
   });
   const server = createCocosMcpServer({ creatorClient });
   const transport = new StdioServerTransport();
