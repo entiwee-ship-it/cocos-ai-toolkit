@@ -11,4 +11,4 @@ Cocos AI Bridge 是面向 Cocos Creator 3.8.x 的项目内编辑器扩展，为 
 | 已验证 Creator 版本 | 3.8.8 |
 | 支持平台 | Windows (`win32`) |
 
-扩展通过项目 `extensions/cocos-ai-bridge` Junction 加载，与固定运行 Worktree 中的 MCP Server 和 Bridge 构建保持一致。可从 Creator 顶部菜单 **面板 → Cocos AI 工具管理** 打开本地管理面板。
+扩展通过项目 `extensions/cocos-ai-bridge` Junction 加载，与固定运行 Worktree 中的 MCP Server 和 Bridge 构建保持一致。可从 Creator 顶部的 **Cocos AI → 打开工具管理** 直接打开独立管理窗口。

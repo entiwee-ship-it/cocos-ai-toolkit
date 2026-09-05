@@ -54,7 +54,7 @@ Bridge 使用 Junction 指向运行时 Worktree 的 `packages/bridge-extension`�
 
 Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，并在当前用户的本地数据目录登记端点。MCP/CLI 每次工具调用建立一次短连接，返回结果后立即关闭；不监听 TCP 端口，不启动独立后台服务，也没有 WebSocket 心跳或重连状态机。
 
-在 Creator 顶部菜单选择 **面板 → Cocos AI 工具管理**，可以直接查看扩展版本、发布日期、构建指纹、项目身份、Named Pipe 状态、Scene/AssetDB、当前文档和 Preview 状态。面板内也可以刷新状态或打开 Creator 扩展管理器。
+在 Creator 顶部菜单选择 **Cocos AI → 打开工具管理**，会打开独立管理窗口，可以直接查看扩展版本、发布日期、构建指纹、项目身份、Named Pipe 状态、Scene/AssetDB、当前文档和 Preview 状态。窗口内也可以刷新状态或打开 Creator 扩展管理器。
 
 通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`；可选的 `COCOS_AI_SESSION_TOKEN` 会要求 MCP/CLI 与 Creator 使用同一会话令牌。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 

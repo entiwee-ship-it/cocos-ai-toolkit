@@ -20,7 +20,7 @@
   "panels": {
     "default": {
       "title": "i18n:cocos-ai-bridge.panel_title",
-      "type": "dockable",
+      "type": "simple",
       "main": "./dist/panels/default",
       "size": {
         "min-width": 460,
@@ -33,7 +33,7 @@
   "contributions": {
     "menu": [
       {
-        "path": "i18n:menu.panel",
+        "path": "Cocos AI",
         "label": "i18n:cocos-ai-bridge.open_panel",
         "message": "open-panel"
       }

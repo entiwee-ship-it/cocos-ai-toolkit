@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 describe('bridge extension manifest', () => {
-  it('注册主进程、Scene 进程和可停靠的工具管理面板', () => {
+  it('注册主进程、Scene 进程、独立工具管理窗口和最外层主菜单', () => {
     const manifest = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8')
     ) as {
@@ -19,11 +19,11 @@ describe('bridge extension manifest', () => {
     expect(manifest.contributions?.scene?.script).toBe('./dist/scene.js');
     expect(manifest.panels?.default).toMatchObject({
       title: 'i18n:cocos-ai-bridge.panel_title',
-      type: 'dockable',
+      type: 'simple',
       main: './dist/panels/default'
     });
     expect(manifest.contributions?.menu).toContainEqual(expect.objectContaining({
-      path: 'i18n:menu.panel',
+      path: 'Cocos AI',
       label: 'i18n:cocos-ai-bridge.open_panel',
       message: 'open-panel'
     }));

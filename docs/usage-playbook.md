@@ -10,7 +10,7 @@
 - `DIRECT_WRITE_OUTCOME_UNKNOWN` 表示写入可能已经生效。先用 `cocos_editor_state`、`cocos_hierarchy`、`cocos_node_read` 或 `cocos_asset_inspect` 重读，确认前禁止重试。
 - 节点寻址严格要求 UUID 或 path 二选一。运行期 UUID 会随文档重开变化，跨会话使用 path 或重新读取 hierarchy。
 
-Creator Bridge 使用 Windows Named Pipe 接受单次短连接，不需要启动端口服务。可从 Creator 顶部菜单 **面板 → Cocos AI 工具管理** 查看版本、发布日期、项目身份、直连状态、当前文档和 Preview 状态。
+Creator Bridge 使用 Windows Named Pipe 接受单次短连接，不需要启动端口服务。可从 Creator 顶部菜单 **Cocos AI → 打开工具管理** 打开独立窗口，查看版本、发布日期、项目身份、直连状态、当前文档和 Preview 状态。
 
 ## 2. 标准编辑流程
 
