@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本为 `0.9.0`，提供 42 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本为 `0.9.1`，提供 42 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -83,7 +83,7 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 & scripts/check-codex-mcp.ps1
 ```
 
-升级到 0.9.0 后重新运行一次安装脚本，Codex 配置会移除旧的工具开关参数；此版本不再接受 `--enable-writes` 或 `-Readonly`，启动 MCP 即公开全部工具。
+升级到 0.9.1 后重新运行一次安装脚本，Codex 配置会移除旧的工具开关参数；此版本不再接受 `--enable-writes` 或 `-Readonly`，启动 MCP 即公开全部工具。
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
@@ -99,11 +99,13 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 | `cocos_tool_manager_open` | 直接打开目标 Creator 中的 Cocos AI 工具管理面板 |
 | `cocos_asset_search` | Bridge 内大小写无关包含搜索，短缓存复用全量索引；Bridge 只返回当前结果页，MCP cursor 仅编码分页位置和 revision |
 | `cocos_asset_inspect` | 按 UUID 直接读取资产详情、Meta、依赖和反向使用者 |
-| `cocos_hierarchy` | 读取当前文档节点树；深层 `rootPath` 原生读取目标子树并保留 `truncated`，`query/fields/summary` 在 Bridge 内直接走紧凑响应，完整读取可用 `maxOutputBytes` 调整预算 |
-| `cocos_node_read` | 读取单节点、`prefabInstance`、`writeCapabilities` 和可选编辑态 bounds；投影模式不传结构 raw，完整读取可用 `maxOutputBytes` 调整预算 |
+| `cocos_hierarchy` | 读取当前文档节点树；默认返回紧凑结构并省略递归 `raw`，深层 `rootPath` 原生读取目标子树并保留 `truncated`；`query/fields/summary` 可进一步投影，明确 `compact=false` 才请求完整 raw |
+| `cocos_node_read` | 读取单节点、`prefabInstance`、`writeCapabilities` 和可选编辑态 bounds；默认省略节点/组件结构 raw，`fields/propertyPaths/summary` 可进一步投影，明确 `compact=false` 才请求完整 raw |
 | `cocos_nodes_read` | 批量读取最多 32 个 UUID/path，逐项返回 found/error；内部节点与寻址层级均走紧凑响应并限制输出预算 |
 | `cocos_prefab_open` | 当前文档 clean 时通过 Creator 打开 Prefab 并等待身份就绪；dirty 时返回 `DOCUMENT_SAVE_REQUIRED` 且不切换 |
 | `cocos_scene_open` | 当前文档 clean 时通过 Creator 打开 Scene 并等待身份就绪；dirty 时返回 `DOCUMENT_SAVE_REQUIRED` 且不切换 |
+
+节点和层级读取默认走紧凑结果。明确请求 `compact=false` 的完整 raw 如果超出 Bridge 预算，会自动降级为紧凑结果并返回 `output.compacted=true`；不要对 `PROBE_OUTPUT_TOO_LARGE` 反复重试同一请求。
 
 ### 编辑态动作与直写 18 个（默认公开；序列化写入自动保存并逐项重读回显）
 

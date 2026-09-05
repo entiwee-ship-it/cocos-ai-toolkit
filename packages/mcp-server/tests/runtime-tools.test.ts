@@ -29,7 +29,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.9.0',
+  bridgeVersion: '0.9.1',
   capabilities: ['probe.editorState', 'probe.previewOpen']
 };
 
@@ -101,7 +101,7 @@ async function createHarness(
 ) {
   const server = createCocosMcpServer({ creatorClient });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'runtime-test-client', version: '0.9.0' });
+  const client = new Client({ name: 'runtime-test-client', version: '0.9.1' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)

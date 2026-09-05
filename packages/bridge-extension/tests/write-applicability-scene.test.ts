@@ -80,7 +80,7 @@ describe('assertWriteOperationsApplicable', () => {
     installCreatorMocks({ nodes: { 'nested-root': nestedNode('nested-root', true) } });
     const { methods } = await loadSceneModule();
 
-    const response = await methods.probeNode({ uuid: 'nested-root' }) as {
+    const response = await methods.probeNode({ uuid: 'nested-root', compact: false }) as {
       data: Record<string, unknown>;
       raw?: unknown;
     };
@@ -139,7 +139,7 @@ describe('compact probe responses', () => {
     expect(response.data).not.toHaveProperty('raw');
     expect(response.data.children[0]).not.toHaveProperty('raw');
 
-    const fullResponse = await methods.probeHierarchy({ depth: 1 }) as {
+    const fullResponse = await methods.probeHierarchy({ depth: 1, compact: false }) as {
       data: { raw?: unknown; children: Array<{ raw?: unknown }> };
       raw?: unknown;
     };
@@ -148,7 +148,7 @@ describe('compact probe responses', () => {
     expect(fullResponse.data.children[0]).toHaveProperty('raw');
   });
 
-  it('完整 hierarchy/node 超出预算时在 Bridge 发送前拒绝，紧凑模式仍可读取', async () => {
+  it('完整 hierarchy/node 超出预算时自动降级为紧凑结果', async () => {
     installCreatorMocks({
       nodes: {
         'nested-root': {
@@ -166,19 +166,18 @@ describe('compact probe responses', () => {
     const { methods } = await loadSceneModule();
 
     for (const operation of [
-      methods.probeHierarchy({ depth: 1, maxOutputBytes: 16 * 1024 }),
-      methods.probeNode({ uuid: 'nested-root', maxOutputBytes: 16 * 1024 })
+      methods.probeHierarchy({ depth: 1, compact: false, maxOutputBytes: 16 * 1024 }),
+      methods.probeNode({ uuid: 'nested-root', compact: false, maxOutputBytes: 16 * 1024 })
     ]) {
-      const error = await operation.catch((caught: unknown) => caught);
-      expect(error).toMatchObject({
-        code: 'PROBE_OUTPUT_TOO_LARGE',
-        details: { tooLarge: true, maxOutputBytes: 16 * 1024 }
+      const response = await operation as { output?: Record<string, unknown>; raw?: unknown };
+      expect(response).toMatchObject({
+        output: { compacted: true, requestedRaw: true, maxOutputBytes: 16 * 1024 }
       });
-      expect(error.details.estimatedBytes).toBeGreaterThan(16 * 1024);
+      expect(response).not.toHaveProperty('raw');
     }
 
-    await expect(methods.probeHierarchy({ depth: 1, compact: true, maxOutputBytes: 16 * 1024 })).resolves.toBeDefined();
-    await expect(methods.probeNode({ uuid: 'nested-root', compact: true, maxOutputBytes: 16 * 1024 })).resolves.toBeDefined();
+    await expect(methods.probeHierarchy({ depth: 1, maxOutputBytes: 16 * 1024 })).resolves.toBeDefined();
+    await expect(methods.probeNode({ uuid: 'nested-root', maxOutputBytes: 16 * 1024 })).resolves.toBeDefined();
   });
 });
 

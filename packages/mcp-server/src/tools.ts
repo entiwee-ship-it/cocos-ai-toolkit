@@ -503,7 +503,7 @@ export class CocosReadonlyToolService {
         params: {
           ...(typeof input.depth === 'number' ? { depth: input.depth } : {}),
           ...(input.rootUuid ? { rootUuid: input.rootUuid } : {}),
-          ...(input.compact === true ? { compact: true } : {}),
+          ...(typeof input.compact === 'boolean' ? { compact: input.compact } : {}),
           ...(typeof input.maxOutputBytes === 'number' ? { maxOutputBytes: input.maxOutputBytes } : {})
         }
       })
@@ -539,7 +539,7 @@ export class CocosReadonlyToolService {
           ...(input.includeDescendantVisualUnion === true ? { includeDescendantVisualUnion: true } : {}),
           ...(input.relativeToUuid ? { relativeToUuid: input.relativeToUuid } : {}),
           ...(input.relativeToPath ? { relativeToPath: input.relativeToPath } : {}),
-          ...(input.compact === true ? { compact: true } : {}),
+          ...(typeof input.compact === 'boolean' ? { compact: input.compact } : {}),
           ...(typeof input.maxOutputBytes === 'number' ? { maxOutputBytes: input.maxOutputBytes } : {})
         }
       })

@@ -22,7 +22,7 @@ Creator Bridge 使用 Windows Named Pipe 接受单次短连接，不需要启动
 4. `cocos_asset_inspect`：按 UUID 直接读取资产类型、URL、依赖和反向使用者，不需要先调用或传输完整资产索引。
 5. `cocos_asset_manage`：通过 Creator AssetDB 移动、重命名或删除资源。移动传 `targetFolderUrl`，重命名传 `newName`；删除必须传回读得到的 `confirmAssetUrl`，存在反向引用时还需 `confirmReferenced=true`。文件夹删除不开放，子资源和只读资源会被拒绝。
 6. `cocos_prefab_open` 或 `cocos_scene_open`：仅在当前文档 clean 时打开目标文档；收到 `DOCUMENT_SAVE_REQUIRED` 时先调用 `cocos_document_save`，确认 dirty 已清除后再重试。
-7. `cocos_hierarchy`：优先传 `summary`、`fields` 或 `query` 读取紧凑节点树；`cocos_node_read` 优先使用 `summary/fields/propertyPaths` 查看单节点；多节点使用 `cocos_nodes_read`。这些投影会在 Bridge 内直接省略结构 raw；完整无投影调用返回完整结构，并可用 `maxOutputBytes` 调整 Bridge 发送前预算。
+7. `cocos_hierarchy` 和 `cocos_node_read` 默认读取紧凑结构并省略节点/组件结构 raw；需要诊断原始 Dump 时明确传 `compact=false`。完整读取超出预算会自动降级为紧凑结果并返回 `output.compacted=true`；多节点使用 `cocos_nodes_read`，投影仍可用 `summary/fields/query/propertyPaths` 进一步缩小结果。
 8. 调用写工具；成功响应中的 `outcome.verification.items` 是保存后重读证据。
 9. 手工编辑后需要显式落盘时调用 `cocos_document_save`；工具会重读并确认 dirty 已清除。
 
@@ -88,6 +88,7 @@ Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读
 | `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` | 读取 `writeCapabilities` 和错误中的 `route`，确认后用 `cocos_prefab_open` 打开源 Prefab；不要原地重试。 |
 | `PREFAB_IDENTITY_MISMATCH` | 当前节点的源 Prefab 已变化；重新读取实例元数据后再决定是否解包。 |
 | `COMPONENT_NOT_FOUND` | 使用错误中返回的组件候选重新选择。 |
+| `PROBE_OUTPUT_TOO_LARGE` | 不要重复原请求；使用默认紧凑读取，或传 `summary/fields/query/rootPath/propertyPaths` 缩小结果。 |
 | `ASSET_NOT_PREFAB` / `ASSET_NOT_SCENE` | 用 `cocos_asset_inspect` 核对 UUID 和资产类型。 |
 | `ASSET_ALREADY_EXISTS` | 选择新的目标名称或 URL。 |
 | `PREFAB_DELETE_CONFIRMATION_REQUIRED` | 传入工具返回的精确 `confirmAssetUrl`。 |

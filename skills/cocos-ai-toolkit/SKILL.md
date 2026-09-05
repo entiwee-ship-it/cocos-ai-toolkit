@@ -15,6 +15,12 @@ Use the Cocos MCP for Creator resources. All MCP tools are publicly registered b
 
 If MCP, Creator, Creator IPC, Bridge, target identity, or a required operation capability is unavailable for Prefab operations or serialized-content writes, 停下并报告阻塞. Never fall back to editing serialized JSON. This block does not apply to non-Prefab file deletion.
 
+## 读取输出预算
+
+- `cocos_hierarchy` 和 `cocos_node_read` 默认使用紧凑读取，省略节点/组件的结构 `raw`，避免大型 Prefab 把 Bridge 输出撑爆。
+- 只有明确需要诊断原始 Dump 时才传 `compact=false`；完整读取超出预算会自动降级为紧凑结果，并在 `output.compacted=true` 中说明。
+- 看到 `PROBE_OUTPUT_TOO_LARGE` 时不要重复原请求；改用 `compact=true`、`summary`、`fields`、`query`、`rootPath` 或 `propertyPaths`，并先读取 `structuredContent.error.details`。
+
 ## 编辑主流程（按序组合）
 
 1. `cocos_editor_list` 发现在线项目（按 projectPath 选择；同项目多实例时传 editorInstanceId）。Creator 未打开时仍会返回空 editors 和 backend IPC 状态；Bridge 发布 Named Pipe 端点后同一任务立即发现。

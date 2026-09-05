@@ -38,39 +38,37 @@ async function probeHierarchy(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const rootUuid = typeof input.rootUuid === 'string' ? input.rootUuid : undefined;
   const depth = typeof input.depth === 'number' ? input.depth : 4;
-  const includeRaw = input.compact !== true;
+  // 结构化紧凑结果是默认值；完整 raw 只在明确 compact=false 时请求。
+  const includeRaw = input.compact === false;
   const raw = await Editor.Message.request('scene', 'query-node-tree', ...(rootUuid ? [rootUuid] : []));
-  return assertProbeOutputBudget('probe.hierarchy', {
-    data: normalizeHierarchyTree(raw, depth, includeRaw),
-    ...(includeRaw ? { raw } : {}),
+  const buildResponse = (withRaw: boolean): Record<string, unknown> => ({
+    data: normalizeHierarchyTree(raw, depth, withRaw),
+    ...(withRaw ? { raw } : {}),
     source: 'message-api'
-  }, input);
+  });
+  return fitProbeOutput(
+    'probe.hierarchy',
+    buildResponse(includeRaw),
+    () => buildResponse(false),
+    input,
+    includeRaw
+  );
 }
 
 async function probeNode(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const uuid = requireUuid(input);
-  const includeRaw = input.compact !== true;
+  // 结构化紧凑结果是默认值；完整 raw 只在明确 compact=false 时请求。
+  const includeRaw = input.compact === false;
   const [raw, documentIdentity] = await Promise.all([
     Editor.Message.request('scene', 'query-node', uuid),
     resolveCreatorDocumentIdentity(globalThis)
   ]);
-  const normalized = normalizeNodeDump(raw, null, includeRaw);
-  const sourceUrl = normalized.prefabInstance.prefabAssetUuid
-    ? await readPrefabSourceUrl(normalized.prefabInstance.prefabAssetUuid)
+  const compactNormalized = normalizeNodeDump(raw, null, false);
+  const sourceUrl = compactNormalized.prefabInstance.prefabAssetUuid
+    ? await readPrefabSourceUrl(compactNormalized.prefabInstance.prefabAssetUuid)
     : null;
-  let data: Record<string, unknown> = {
-    ...normalized,
-    prefabInstance: { ...normalized.prefabInstance, sourceUrl },
-    writeCapabilities: buildNodeWriteCapabilities({
-      documentAssetUuid: documentIdentity.assetUuid,
-      documentMode: documentIdentity.mode,
-      nodeFileId: normalized.identity.fileId,
-      prefabAssetUuid: normalized.prefabInstance.prefabAssetUuid,
-      sourceUrl,
-      isInstanceRoot: normalized.prefabInstance.isInstanceRoot
-    })
-  };
+  let bounds: unknown;
   if (input.includeBounds === true) {
     const scene = readObject(director.getScene());
     const runtimeNode = findRuntimeNodeByUuid(scene, uuid);
@@ -80,19 +78,39 @@ async function probeNode(request: unknown): Promise<unknown> {
     if (relativeToUuid && !relativeNode) {
       throw new ProbeError('RELATIVE_NODE_NOT_FOUND', { nodeUuid: relativeToUuid });
     }
-    data = {
-      ...data,
-      bounds: readNodeBounds(runtimeNode, {
+    bounds = readNodeBounds(runtimeNode, {
         includeDescendantVisualUnion: input.includeDescendantVisualUnion === true,
         relativeNode,
         relativeToPath: typeof input.relativeToPath === 'string' ? input.relativeToPath : undefined
-      }, (x, y, z) => new Vec3(x, y, z))
-    };
+      }, (x, y, z) => new Vec3(x, y, z));
   }
-  return assertProbeOutputBudget(
+  const buildResponse = (withRaw: boolean): Record<string, unknown> => {
+    const normalized = withRaw ? normalizeNodeDump(raw, null, true) : compactNormalized;
+    const data: Record<string, unknown> = {
+      ...normalized,
+      prefabInstance: { ...normalized.prefabInstance, sourceUrl },
+      writeCapabilities: buildNodeWriteCapabilities({
+        documentAssetUuid: documentIdentity.assetUuid,
+        documentMode: documentIdentity.mode,
+        nodeFileId: normalized.identity.fileId,
+        prefabAssetUuid: normalized.prefabInstance.prefabAssetUuid,
+        sourceUrl,
+        isInstanceRoot: normalized.prefabInstance.isInstanceRoot
+      }),
+      ...(bounds !== undefined ? { bounds } : {})
+    };
+    return {
+      data,
+      ...(withRaw ? { raw } : {}),
+      source: 'message-api'
+    };
+  };
+  return fitProbeOutput(
     'probe.node',
-    { data, ...(includeRaw ? { raw } : {}), source: 'message-api' },
-    input
+    buildResponse(includeRaw),
+    () => buildResponse(false),
+    input,
+    includeRaw
   );
 }
 
@@ -102,16 +120,36 @@ async function probeNode(request: unknown): Promise<unknown> {
  * @param method 当前内部探针方法名。
  * @param response 即将返回给 Creator IPC 客户端的结果。
  * @param input 调用参数；maxOutputBytes 未提供时使用安全默认值。
- * @returns 未超出预算的原始响应。
+ * @returns 未超出预算的原始响应；完整 raw 超限时自动返回紧凑结果。
  */
-function assertProbeOutputBudget(
+function fitProbeOutput(
   method: 'probe.hierarchy' | 'probe.node',
-  response: unknown,
-  input: Record<string, unknown>
-): unknown {
+  response: Record<string, unknown>,
+  compactResponse: () => Record<string, unknown>,
+  input: Record<string, unknown>,
+  allowCompactFallback: boolean
+): Record<string, unknown> {
   const maxOutputBytes = readMaxOutputBytes(input.maxOutputBytes);
-  const estimatedBytes = Buffer.byteLength(JSON.stringify(response), 'utf8');
+  const estimatedBytes = estimateProbeOutputBytes(response);
   if (estimatedBytes <= maxOutputBytes) return response;
+
+  if (allowCompactFallback) {
+    const fallback = compactResponse();
+    const compactEstimatedBytes = estimateProbeOutputBytes(fallback);
+    if (compactEstimatedBytes <= maxOutputBytes) {
+      return {
+        ...fallback,
+        output: {
+          compacted: true,
+          requestedRaw: true,
+          estimatedBytes,
+          compactEstimatedBytes,
+          maxOutputBytes
+        }
+      };
+    }
+  }
+
   throw new ProbeError('PROBE_OUTPUT_TOO_LARGE', {
     method,
     tooLarge: true,
@@ -119,6 +157,10 @@ function assertProbeOutputBudget(
     maxOutputBytes,
     nextAction: '请改用 summary、fields、query、rootPath 或 propertyPaths 紧凑投影；确认必须读取完整 raw 时可提高 maxOutputBytes。'
   });
+}
+
+function estimateProbeOutputBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value) ?? '', 'utf8');
 }
 
 /** 读取并校验单次 hierarchy/node 的 Bridge 输出预算。 */

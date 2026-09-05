@@ -29,7 +29,7 @@ const ONLINE_EDITOR = {
   projectId: 'proj1',
   projectPath: 'E:/project',
   creatorVersion: '3.8.8',
-  bridgeVersion: '0.9.0',
+  bridgeVersion: '0.9.1',
   bridgeBuildId: 'sha256:bridge-build',
   capabilities: [
     'probe.editorState',
@@ -328,7 +328,7 @@ async function createHarness(
 ) {
   const server = createCocosMcpServer({ creatorClient });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'direct-test-client', version: '0.9.0' });
+  const client = new Client({ name: 'direct-test-client', version: '0.9.1' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport)
@@ -366,8 +366,8 @@ describe('直写档工具注册', () => {
 
     const hierarchyTool = tools.find((tool) => tool.name === 'cocos_hierarchy');
     const nodeReadTool = tools.find((tool) => tool.name === 'cocos_node_read');
-    expect(hierarchyTool?.description).toContain('结构/信封层重复 raw');
-    expect(nodeReadTool?.description).toContain('结构/信封层重复 raw');
+    expect(hierarchyTool?.description).toContain('默认返回紧凑结构');
+    expect(nodeReadTool?.description).toContain('默认返回紧凑结构');
     const batchTool = tools.find((tool) => tool.name === 'cocos_batch_write');
     const batchSchema = JSON.stringify(batchTool?.inputSchema);
     expect(batchSchema).not.toContain('asset.delete');
@@ -662,29 +662,51 @@ describe('直写档只读工具', () => {
     expect(result.structuredContent).toMatchObject({ hierarchy: { data: { name: 'Root' } } });
     expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.hierarchy',
-      payload: { selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' }, params: { depth: 6 } }
+      payload: { selector: { projectId: 'proj1', editorInstanceId: 'proj1:1234' }, params: { depth: 6, compact: true } }
     });
-    expect((creatorClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({ depth: 6 });
-    expect(JSON.stringify(result.structuredContent)).toContain('raw');
+    expect((creatorClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({ depth: 6, compact: true });
+    expect(result.structuredContent).toBeDefined();
   });
 
-  it('cocos_hierarchy 和 cocos_node_read 把完整读取预算转发给 Bridge', async () => {
+  it('cocos_hierarchy 和 cocos_node_read 仅为明确 raw 请求转发 Bridge 预算', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
     const { client } = await createHarness(creatorClient);
 
     await client.callTool({
       name: 'cocos_hierarchy',
-      arguments: { projectId: 'proj1', maxOutputBytes: 64 * 1024 }
+      arguments: { projectId: 'proj1', compact: false, maxOutputBytes: 64 * 1024 }
     });
     await client.callTool({
       name: 'cocos_node_read',
-      arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', maxOutputBytes: 64 * 1024 }
+      arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', compact: false, maxOutputBytes: 64 * 1024 }
     });
 
     const hierarchyRequest = creatorClient.requests.find((request) => request.method === 'probe.hierarchy');
     const nodeRequest = creatorClient.requests.find((request) => request.method === 'probe.node');
-    expect(hierarchyRequest).toMatchObject({ payload: { params: { maxOutputBytes: 64 * 1024 } } });
-    expect(nodeRequest).toMatchObject({ payload: { params: { uuid: 'panel-uuid', maxOutputBytes: 64 * 1024 } } });
+    expect(hierarchyRequest).toMatchObject({ payload: { params: { compact: false, maxOutputBytes: 64 * 1024 } } });
+    expect(nodeRequest).toMatchObject({ payload: { params: { uuid: 'panel-uuid', compact: false, maxOutputBytes: 64 * 1024 } } });
+  });
+
+  it('默认紧凑读取不会被过小 raw 预算提前拒绝', async () => {
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
+
+    await client.callTool({
+      name: 'cocos_hierarchy',
+      arguments: { projectId: 'proj1', maxOutputBytes: 16 * 1024 }
+    });
+    await client.callTool({
+      name: 'cocos_node_read',
+      arguments: { projectId: 'proj1', nodeUuid: 'panel-uuid', maxOutputBytes: 16 * 1024 }
+    });
+
+    const hierarchyRequest = creatorClient.requests.find((request) => request.method === 'probe.hierarchy');
+    const nodeRequest = creatorClient.requests.find((request) => request.method === 'probe.node');
+    expect((hierarchyRequest?.payload as { params: Record<string, unknown> }).params).toEqual({ compact: true });
+    expect((nodeRequest?.payload as { params: Record<string, unknown> }).params).toEqual({
+      uuid: 'panel-uuid',
+      compact: true
+    });
   });
 
   it('cocos_hierarchy 的紧凑参数按子树和查询投影并移除所有 raw', async () => {
@@ -754,17 +776,17 @@ describe('直写档只读工具', () => {
     });
   });
 
-  it('cocos_hierarchy summary=false 保持完整旧返回', async () => {
+  it('cocos_hierarchy compact=false 才返回完整 raw', async () => {
     const creatorClient = new RecordingCreatorClient(createRespond());
     const { client } = await createHarness(creatorClient);
 
     const result = await client.callTool({
       name: 'cocos_hierarchy',
-      arguments: { projectId: 'proj1', summary: false }
+      arguments: { projectId: 'proj1', compact: false }
     });
     expect(result.structuredContent).toMatchObject({ hierarchy: { data: { name: 'Root' } } });
     expect(JSON.stringify(result.structuredContent)).toContain('"raw"');
-    expect((creatorClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({});
+    expect((creatorClient.requests.at(-1)?.payload as { params: unknown }).params).toEqual({ compact: false });
   });
 
   it('cocos_hierarchy summary-only 不重复返回节点树', async () => {
@@ -796,7 +818,7 @@ describe('直写档只读工具', () => {
       component: { className: 'cc.Label' }
     });
     const nodeRequest = creatorClient.requests.find((request) => request.method === 'probe.node');
-    expect((nodeRequest?.payload as { params: unknown }).params).toEqual({ uuid: 'panel-uuid' });
+    expect((nodeRequest?.payload as { params: unknown }).params).toEqual({ uuid: 'panel-uuid', compact: true });
   });
 
   it('cocos_node_read 返回 Prefab 摘要并转发编辑态 bounds 选项', async () => {
@@ -1037,6 +1059,49 @@ describe('直写档只读工具', () => {
     expect(result.structuredContent).toMatchObject({
       node: { components: [{ class: { className: 'cc.Label' } }] }
     });
+  });
+
+  it('节点投影在 Bridge 归一化之后应用最终预算', async () => {
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
+
+    const result = await client.callTool({
+      name: 'cocos_node_read',
+      arguments: {
+        projectId: 'proj1',
+        nodeUuid: 'panel-uuid',
+        fields: ['name', 'path', 'uuid', 'active', 'components'],
+        summary: true,
+        maxOutputBytes: 30_000
+      }
+    });
+
+    expect(result.isError).not.toBe(true);
+    const request = creatorClient.requests.find((item) => item.method === 'probe.node');
+    expect(request).toMatchObject({
+      payload: { params: { uuid: 'panel-uuid', compact: true } }
+    });
+    expect((request?.payload as { params: Record<string, unknown> }).params).not.toHaveProperty('maxOutputBytes');
+  });
+
+  it('层级投影不把最终预算提前传给 Bridge', async () => {
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
+
+    const result = await client.callTool({
+      name: 'cocos_hierarchy',
+      arguments: {
+        projectId: 'proj1',
+        fields: ['name', 'path', 'uuid', 'active', 'components'],
+        summary: true,
+        maxOutputBytes: 30_000
+      }
+    });
+
+    expect(result.isError).not.toBe(true);
+    const request = creatorClient.requests.find((item) => item.method === 'probe.hierarchy');
+    expect(request).toMatchObject({ payload: { params: { compact: true } } });
+    expect((request?.payload as { params: Record<string, unknown> }).params).not.toHaveProperty('maxOutputBytes');
   });
 
   it('fields 拒绝原型链危险字段且不会污染 Object.prototype', async () => {

@@ -132,6 +132,7 @@ interface NodeReadInput extends NodeAddress {
   includeBounds?: boolean;
   includeDescendantVisualUnion?: boolean;
   relativeToPath?: string;
+  compact?: boolean;
   maxOutputBytes?: number;
 }
 
@@ -223,10 +224,13 @@ export class CocosDirectToolService {
     query?: string;
     fields?: string[];
     summary?: boolean;
+    compact?: boolean;
     maxOutputBytes?: number;
   }) {
     assertProjectionFieldsSafe(input.fields);
-    const compact = usesHierarchyProjection(input);
+    const compact = input.compact ?? true;
+    const projected = usesHierarchyProjection(input);
+    const { maxOutputBytes: requestedMaxOutputBytes, ...requestInput } = input;
     if (input.rootPath) {
       const editor = await this.readonlyService.resolveEditor(input);
       const root = await this.resolveNodeAddress(editor, { path: input.rootPath }, {
@@ -239,18 +243,22 @@ export class CocosDirectToolService {
         depth: input.depth ?? 50,
         rootUuid: root.uuid,
         compact,
-        ...(typeof input.maxOutputBytes === 'number' ? { maxOutputBytes: input.maxOutputBytes } : {})
+        ...(compact === false && typeof requestedMaxOutputBytes === 'number'
+          ? { maxOutputBytes: requestedMaxOutputBytes }
+          : {})
       });
-      return projectHierarchyResult(result, input, root.path);
+      return projected ? projectHierarchyResult(result, input, root.path) : result;
     }
     const depth = input.depth ?? (input.rootPath || input.query ? 50 : undefined);
     const result = await this.readonlyService.readHierarchy({
-      ...input,
+      ...requestInput,
       ...(depth === undefined ? {} : { depth }),
-      ...(compact ? { compact: true } : {}),
-      ...(typeof input.maxOutputBytes === 'number' ? { maxOutputBytes: input.maxOutputBytes } : {})
+      compact,
+      ...(compact === false && typeof requestedMaxOutputBytes === 'number'
+        ? { maxOutputBytes: requestedMaxOutputBytes }
+        : {})
     });
-    if (!usesHierarchyProjection(input)) return result;
+    if (!projected) return result;
     return projectHierarchyResult(result, input);
   }
 
@@ -368,12 +376,16 @@ export class CocosDirectToolService {
     bounds: ResolvedNodeBoundsInput | undefined,
     forceProjection: boolean
   ) {
+    const projected = forceProjection || usesNodeProjection(input);
+    const compact = projected ? true : (input.compact ?? true);
     const { node } = await this.readonlyService.readNode({
       projectId: editor.projectId,
       editorInstanceId: editor.editorInstanceId,
       uuid: nodeUuid,
-      ...((forceProjection || usesNodeProjection(input)) ? { compact: true } : {}),
-      ...(typeof input.maxOutputBytes === 'number' ? { maxOutputBytes: input.maxOutputBytes } : {}),
+      compact,
+      ...(compact === false && typeof input.maxOutputBytes === 'number'
+        ? { maxOutputBytes: input.maxOutputBytes }
+        : {}),
       ...bounds
     });
     const nodeData = readProbeData(node, 'NODE_RESPONSE_INVALID');
@@ -1649,7 +1661,7 @@ export function registerCocosDirectReadonlyTools(
   }, async (input) => toToolResult(service.inspectAsset(input)));
 
   server.registerTool('cocos_hierarchy', {
-    description: '读取当前文档节点树；rootPath 会先解析 UUID，再由 Creator 原生读取目标子树并保留 truncated。query/fields/summary 可启用紧凑投影，去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw；完整读取受 maxOutputBytes 预算保护。',
+    description: '读取当前文档节点树；默认返回紧凑结构并省略递归 raw。rootPath 会先解析 UUID，再由 Creator 原生读取目标子树并保留 truncated。query/fields/summary 可进一步投影；仅在明确 compact=false 且确需诊断 raw 时请求完整结果，仍受 maxOutputBytes 预算保护。',
     inputSchema: {
       ...ProjectSelectorInput,
       depth: z.number().int().min(1).max(50).optional(),
@@ -1657,6 +1669,7 @@ export function registerCocosDirectReadonlyTools(
       query: z.string().min(1).optional(),
       fields: z.array(z.string().min(1)).min(1).optional(),
       summary: z.boolean().optional(),
+      compact: z.boolean().optional(),
       maxOutputBytes: z.number().int().min(MIN_SINGLE_READ_OUTPUT_BYTES).max(MAX_SINGLE_READ_OUTPUT_BYTES).optional()
     },
     outputSchema: ToolOutputSchema,
@@ -1664,7 +1677,7 @@ export function registerCocosDirectReadonlyTools(
   }, async (input) => toToolResult(service.readHierarchy(input)));
 
   server.registerTool('cocos_node_read', {
-    description: '按 nodeUuid 或 path 读取节点详情；缺省保持完整旧返回。fields/propertyPaths/summary 启用紧凑投影，去除结构/信封层重复 raw，但保留 Inspector 业务值内部的 raw；完整读取受 maxOutputBytes 预算保护，propertyPaths 必须配合 componentType。',
+    description: '按 nodeUuid 或 path 读取节点详情；默认返回紧凑结构并省略节点/组件 raw。fields/propertyPaths/summary 可进一步投影；仅在明确 compact=false 且确需诊断 raw 时请求完整结果，仍受 maxOutputBytes 预算保护；propertyPaths 必须配合 componentType。',
     inputSchema: {
       ...ProjectSelectorInput,
       ...NodeAddressInput,
@@ -1676,6 +1689,7 @@ export function registerCocosDirectReadonlyTools(
       includeBounds: z.boolean().optional(),
       includeDescendantVisualUnion: z.boolean().optional(),
       relativeToPath: z.string().min(1).optional(),
+      compact: z.boolean().optional(),
       maxOutputBytes: z.number().int().min(MIN_SINGLE_READ_OUTPUT_BYTES).max(MAX_SINGLE_READ_OUTPUT_BYTES).optional()
     },
     outputSchema: ToolOutputSchema,
