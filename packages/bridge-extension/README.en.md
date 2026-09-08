@@ -6,7 +6,7 @@ Cocos AI Bridge is a project-local editor extension for Cocos Creator 3.8.x. It 
 
 | Item | Value |
 | --- | --- |
-| Current version | V0.9.2 |
+| Current version | V0.9.3 |
 | Release date | 2026-09-08 |
 | Author | Enti |
 | Creator version requirement | `>=3.8.0 <3.9.0` |
@@ -16,3 +16,5 @@ Cocos AI Bridge is a project-local editor extension for Cocos Creator 3.8.x. It 
 Node and hierarchy probes default to compact responses to keep large Prefabs within the IPC budget; an oversized explicit raw request is automatically downgraded to compact output.
 
 The extension is loaded through the project's `extensions/cocos-ai-bridge` junction and stays aligned with the MCP Server and Bridge build in the fixed runtime worktree. Use **Cocos AI → Open Tool Manager** in Creator's top menu to open the standalone manager window.
+
+Use **Cocos AI → Open Runtime Workbench** for the three-pane runtime view: the live node tree from Creator's third Simulator target, public properties of the selected runtime component, and the same native Simulator window embedded in the right pane for direct mouse and keyboard interaction. Property edits affect only the running process and never write back to Scene/Prefab assets. The local host listens only on `127.0.0.1` and does not use a Toolkit token.

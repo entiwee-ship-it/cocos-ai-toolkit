@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cocos AI 运行工作台</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><strong>Cocos AI 运行工作台</strong></div>
+      <div class="runtime-summary">
+        <span id="connectionState" class="connection disconnected"><span class="live-dot"></span>模拟器未连接</span>
+        <span>场景: <strong id="sceneName">—</strong></span>
+        <span>分辨率: <strong id="resolution">—</strong></span>
+      </div>
+      <div class="toolbar-actions">
+        <button id="startButton" class="primary" type="button">启动模拟器</button>
+        <button id="reconnectButton" type="button">重新连接</button>
+        <button id="refreshButton" type="button">刷新</button>
+      </div>
+    </header>
+
+    <main id="workspace" class="workspace">
+      <section class="pane tree-pane" aria-labelledby="treeTitle">
+        <header class="pane-header"><h1 id="treeTitle">实时节点树</h1></header>
+        <div class="tree-search">
+          <label class="search-control">
+            <span aria-hidden="true">⌕</span>
+            <input id="treeSearch" type="search" placeholder="搜索节点名称、UUID 或路径" autocomplete="off">
+          </label>
+        </div>
+        <div id="treeView" class="tree-view" role="tree" aria-label="实时运行节点树">
+          <div class="empty-state">启动或连接 Creator 模拟器后显示真实运行节点</div>
+        </div>
+        <footer class="pane-footer"><span id="treeMeta">0 个节点 · revision —</span></footer>
+      </section>
+
+      <div class="splitter" data-splitter="tree" role="separator" aria-orientation="vertical" aria-label="调整节点树宽度"></div>
+
+      <section class="pane inspector-pane" aria-labelledby="inspectorTitle">
+        <header class="pane-header"><h1 id="inspectorTitle">运行时属性</h1></header>
+        <div id="selectionHeader" class="selection-header empty">
+          <strong id="selectedName">未选择节点</strong>
+          <code id="selectedUuid">—</code>
+          <code id="selectedPath">—</code>
+        </div>
+        <nav id="componentTabs" class="component-tabs" aria-label="节点组件"></nav>
+        <div id="propertyView" class="property-view">
+          <div class="empty-state">从左侧选择一个运行时节点</div>
+        </div>
+        <footer class="inspector-actions">
+          <button id="applyButton" class="primary wide" type="button" disabled>应用并回读</button>
+          <p>仅修改当前运行进程，不写回 Scene / Prefab</p>
+        </footer>
+      </section>
+
+      <div class="splitter" data-splitter="inspector" role="separator" aria-orientation="vertical" aria-label="调整属性面板宽度"></div>
+
+      <section class="pane preview-pane" aria-labelledby="previewTitle">
+        <header class="pane-header preview-heading">
+          <h1 id="previewTitle">原生模拟器</h1>
+          <span id="liveState" class="live-state"><span class="live-dot"></span>等待连接</span>
+        </header>
+        <div class="preview-process"><span id="processName">SimulatorApp-Win32.exe · PID —</span></div>
+        <div id="previewStage" class="preview-stage">
+          <div id="nativeViewport" class="native-viewport" aria-label="Creator 原生模拟器交互区域">
+            <div id="previewPlaceholder" class="preview-placeholder">
+              <span class="preview-icon" aria-hidden="true">▶</span>
+              <strong>等待嵌入原生 Simulator</strong>
+              <span>启动或重新连接模拟器后可直接操作</span>
+            </div>
+          </div>
+        </div>
+        <footer class="preview-footer">
+          <span id="embedMeta">等待嵌入</span>
+          <button id="reembedButton" type="button">重新嵌入</button>
+        </footer>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span>runtimeId: <code id="runtimeId">—</code></span>
+      <span>sceneEpoch <code id="sceneEpoch">—</code></span>
+      <span class="status-last">最后更新 <span id="lastUpdated">—</span></span>
+    </footer>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

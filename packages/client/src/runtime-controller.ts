@@ -354,15 +354,6 @@ export class RuntimeController {
     return this.driver.dispose();
   }
 
-  /** Workbench 内部订阅真实 Native 画面；MCP 请求仍使用截图工具。 */
-  streamRuntimeFrames(
-    sessionId: string,
-    listener: (frame: { buffer: Buffer; width: number; height: number }) => void,
-    options?: { resolution?: { width: number; height: number } }
-  ): Promise<() => Promise<void>> {
-    return this.driver.streamFrames(sessionId, listener, options);
-  }
-
   /** Workbench 以 10Hz 读取真实运行树；revision 不变时不重复推送。 */
   async streamRuntimeHierarchy(
     sessionId: string,

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 describe('bridge extension manifest', () => {
-  it('注册主进程、Scene 进程、独立工具管理窗口和最外层主菜单', () => {
+  it('注册主进程、Scene 进程、工具管理与运行工作台窗口和最外层主菜单', () => {
     const manifest = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8')
     ) as {
@@ -29,12 +29,26 @@ describe('bridge extension manifest', () => {
       type: 'simple',
       main: './dist/panels/default'
     });
+    expect(manifest.panels?.workbench).toMatchObject({
+      title: 'i18n:cocos-ai-bridge.workbench_title',
+      type: 'simple',
+      main: './dist/panels/workbench',
+      size: { 'min-width': 1000, 'min-height': 640, width: 1500, height: 860 }
+    });
     expect(manifest.contributions?.menu).toContainEqual(expect.objectContaining({
       path: 'Cocos AI',
       label: 'i18n:cocos-ai-bridge.open_panel',
       message: 'open-panel'
     }));
     expect(manifest.contributions?.messages?.['open-panel']?.methods).toEqual(['openPanel']);
+    expect(manifest.contributions?.menu).toContainEqual(expect.objectContaining({
+      path: 'Cocos AI',
+      label: 'i18n:cocos-ai-bridge.open_workbench',
+      message: 'open-workbench'
+    }));
+    expect(manifest.contributions?.messages?.['open-workbench']?.methods).toEqual(['openWorkbench']);
+    expect(manifest.contributions?.messages?.['workbench-url']?.methods).toEqual(['queryWorkbenchUrl']);
+    expect(manifest.contributions?.messages?.['workbench-close']?.methods).toEqual(['closeWorkbench']);
     expect(manifest.contributions?.messages?.['manager-state']?.methods).toEqual(['queryManagerState']);
     expect(manifest.contributions?.messages?.['open-extension-manager']?.methods).toEqual([
       'openExtensionManager'
@@ -48,6 +62,31 @@ describe('bridge extension manifest', () => {
     expect(panelSource).toContain("Editor.Message.request('cocos-ai-bridge', 'manager-state')");
     expect(panelSource).toContain('发布日期');
     expect(panelSource).toContain('overflow: auto');
+
+    const workbenchPanel = readFileSync(
+      new URL('../src/panels/workbench/index.ts', import.meta.url),
+      'utf8'
+    );
+    const workbenchHtml = readFileSync(
+      new URL('../static/workbench/index.html', import.meta.url),
+      'utf8'
+    );
+    const workbenchApp = readFileSync(new URL('../static/workbench/app.js', import.meta.url), 'utf8');
+    const workbenchStyle = readFileSync(new URL('../static/workbench/style.css', import.meta.url), 'utf8');
+    expect(workbenchPanel).toContain('Editor.Panel.define');
+    expect(workbenchPanel).toContain("Editor.Message.request('cocos-ai-bridge', 'workbench-url')");
+    expect(workbenchPanel).toContain("Editor.Message.request('cocos-ai-bridge', 'workbench-close')");
+    expect(workbenchHtml).toContain('实时节点树');
+    expect(workbenchHtml).toContain('运行时属性');
+    expect(workbenchHtml).toContain('Creator 原生模拟器交互区域');
+    expect(workbenchHtml).not.toContain('previewImage');
+    expect(workbenchHtml).not.toMatch(/token/i);
+    expect(workbenchApp).toContain("api('/api/native-window'");
+    expect(workbenchApp).toContain("group.className = 'tree-children'");
+    expect(workbenchApp).toContain("row.setAttribute('aria-level', String(depth + 1))");
+    expect(workbenchApp).toContain('expandTreeToDepth(hierarchy.root, 3)');
+    expect(workbenchStyle).toContain('.tree-children::before');
+    expect(workbenchStyle).toContain('.tree-row.parent .tree-name');
   });
 
   it('为 Creator 本地扩展管理器提供双语摘要和详情元数据', () => {
@@ -81,6 +120,8 @@ describe('bridge extension manifest', () => {
       expect(detail).toContain('win32');
     }
     expect(zhI18n).toContain('Cocos AI 工具管理');
+    expect(zhI18n).toContain('Cocos AI 运行工作台');
     expect(enI18n).toContain('Cocos AI Tool Manager');
+    expect(enI18n).toContain('Cocos AI Runtime Workbench');
   });
 });

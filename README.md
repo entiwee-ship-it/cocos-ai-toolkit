@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本为 `0.9.2`，提供 43 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本为 `0.9.3`，提供 43 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -58,6 +58,8 @@ Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，�
 
 管理窗口提供“运行状态”和“工具列表”两个切换页。“工具列表”由 Bridge 返回当前版本的完整 MCP 工具目录，按编辑器、资源、节点与组件、Prefab 与文档、Preview 与运行态分组，并标出只读、编辑器操作和潜在删除风险。
 
+选择 **Cocos AI → 打开运行工作台** 可打开三栏运行界面：左侧订阅 Creator 第三项 Simulator 中真实场景的实时节点树，中间读取并修改所选运行时组件的公开属性，右侧把同一 `SimulatorApp-Win32.exe` 原生窗口嵌入工作台，可直接接收鼠标和键盘操作。运行时写入只作用于当前进程，不会写回 Scene 或 Prefab；Workbench Host 只监听 `127.0.0.1`，不使用 Toolkit Token。
+
 通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 
 ## 启动 AI 正式入口 MCP Server
@@ -82,7 +84,7 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 & scripts/check-codex-mcp.ps1
 ```
 
-升级到 0.9.2 后重新运行一次安装脚本，Codex 配置会移除旧的工具开关参数；此版本不再接受 `--enable-writes` 或 `-Readonly`，启动 MCP 即公开全部工具。
+升级到 0.9.3 后重新运行一次安装脚本，Codex 配置会移除旧的工具开关参数；此版本不再接受 `--enable-writes` 或 `-Readonly`，启动 MCP 即公开全部工具。
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 

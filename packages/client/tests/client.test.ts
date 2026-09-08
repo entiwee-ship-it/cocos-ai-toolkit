@@ -158,6 +158,29 @@ describe('CreatorClient named-pipe behavior', () => {
     stderr.mockRestore();
     await client.close();
   });
+
+  it('Workbench 节点树订阅直接透传到同一 RuntimeController', async () => {
+    const client = new CreatorClient({ endpointRoot: await temporaryRoot() });
+    await client.connect();
+    const runtime = (client as unknown as {
+      runtime: {
+        streamRuntimeHierarchy: (...args: any[]) => Promise<() => Promise<void>>;
+      };
+    }).runtime;
+    const stopHierarchy = vi.fn(async () => undefined);
+    const streamHierarchy = vi.spyOn(runtime, 'streamRuntimeHierarchy').mockResolvedValue(stopHierarchy);
+    const hierarchyListener = vi.fn();
+
+    await expect(client.streamRuntimeHierarchy('session-1', hierarchyListener, {
+      intervalMs: 100,
+      includeInactive: true
+    })).resolves.toBe(stopHierarchy);
+    expect(streamHierarchy).toHaveBeenCalledWith('session-1', hierarchyListener, {
+      intervalMs: 100,
+      includeInactive: true
+    });
+    await client.close();
+  });
 });
 
 const noResponse = Symbol('no-response');
@@ -233,7 +256,7 @@ function descriptor(suffix: string): CreatorEndpointDescriptor {
     projectId: 'project-id',
     projectPath: 'E:/project',
     creatorVersion: '3.8.8',
-    bridgeVersion: '0.9.2',
+    bridgeVersion: '0.9.3',
     bridgeBuildId: 'build-id',
     capabilities: ['probe.editorState', 'probe.node', 'probe.directWrite'],
     processId: process.pid,

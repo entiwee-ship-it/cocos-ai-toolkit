@@ -72,7 +72,9 @@ $distMissing = @(
     'packages/mcp-server/dist/run.js',
     'packages/cli/dist/index.js',
     'packages/bridge-extension/dist/main.js',
-    'packages/bridge-extension/dist/panels/default/index.js'
+    'packages/bridge-extension/dist/native/simulator-embed-host.exe',
+    'packages/bridge-extension/dist/panels/default/index.js',
+    'packages/bridge-extension/dist/panels/workbench/index.js'
 ) | Where-Object { -not (Test-Path -LiteralPath (Join-Path $worktree $_) -PathType Leaf) }
 
 try {

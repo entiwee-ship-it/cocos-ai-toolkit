@@ -118,6 +118,22 @@ export class CreatorClient {
     };
   }
 
+  /** Workbench 直接复用当前进程中的 revision 去重节点树订阅。 */
+  streamRuntimeHierarchy(
+    sessionId: string,
+    listener: (snapshot: any) => void,
+    options?: {
+      intervalMs?: number;
+      maxDepth?: number;
+      maxNodes?: number;
+      includeInactive?: boolean;
+      onError?: (error: unknown) => void;
+    }
+  ): Promise<() => Promise<void>> {
+    if (this.state !== 'ready') throw new Error('CREATOR_CLIENT_NOT_READY');
+    return this.runtime.streamRuntimeHierarchy(sessionId, listener, options);
+  }
+
   async close(): Promise<void> {
     if (this.state === 'closed') return;
     this.state = 'closed';

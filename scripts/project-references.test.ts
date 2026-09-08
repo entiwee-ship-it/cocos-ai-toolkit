@@ -14,6 +14,7 @@ describe('TypeScript project references', () => {
 
     expect(packageJson.scripts?.build).toContain('tsc -b');
     expect(packageJson.scripts?.build).toContain('--force');
+    expect(packageJson.scripts?.build).toContain('build-native-window-host.mjs');
     expect(packageJson.scripts?.build).toContain('write-bridge-build-info.mjs');
     expect(packageJson.scripts?.typecheck).toBe('tsc -b --pretty false');
     expect(solution.references?.map((item) => item.path)).toEqual([

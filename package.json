@@ -1,6 +1,6 @@
 {
   "name": "cocos-ai-toolkit",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "private": true,
   "engines": {
     "node": ">=20.19 <26"
@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run clean && tsc -b --force --pretty false && node scripts/write-bridge-build-info.mjs",
+    "build": "npm run clean && tsc -b --force --pretty false && node scripts/build-native-window-host.mjs && node scripts/write-bridge-build-info.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b --pretty false",

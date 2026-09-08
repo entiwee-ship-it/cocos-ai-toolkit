@@ -2,7 +2,7 @@
   "package_version": 2,
   "name": "cocos-ai-bridge",
   "title": "Cocos AI Bridge",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "i18n:cocos-ai-bridge.description",
   "author": "Enti",
   "date": "2026-09-08",
@@ -13,7 +13,7 @@
   "editor": ">=3.8.0 <3.9.0",
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "tsc -p tsconfig.json && node ../../scripts/write-bridge-build-info.mjs",
+    "build": "tsc -p tsconfig.json && node ../../scripts/build-native-window-host.mjs && node ../../scripts/write-bridge-build-info.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
@@ -27,6 +27,17 @@
         "min-height": 360,
         "width": 760,
         "height": 620
+      }
+    },
+    "workbench": {
+      "title": "i18n:cocos-ai-bridge.workbench_title",
+      "type": "simple",
+      "main": "./dist/panels/workbench",
+      "size": {
+        "min-width": 1000,
+        "min-height": 640,
+        "width": 1500,
+        "height": 860
       }
     }
   },
@@ -45,6 +56,11 @@
         "path": "Cocos AI",
         "label": "i18n:cocos-ai-bridge.open_panel",
         "message": "open-panel"
+      },
+      {
+        "path": "Cocos AI",
+        "label": "i18n:cocos-ai-bridge.open_workbench",
+        "message": "open-workbench"
       }
     ],
     "scene": {
@@ -54,6 +70,21 @@
       "open-panel": {
         "methods": [
           "openPanel"
+        ]
+      },
+      "open-workbench": {
+        "methods": [
+          "openWorkbench"
+        ]
+      },
+      "workbench-url": {
+        "methods": [
+          "queryWorkbenchUrl"
+        ]
+      },
+      "workbench-close": {
+        "methods": [
+          "closeWorkbench"
         ]
       },
       "manager-state": {

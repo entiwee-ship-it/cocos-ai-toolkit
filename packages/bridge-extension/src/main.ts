@@ -22,6 +22,7 @@ import {
   reloadPreviewPages
 } from './preview';
 import { ProbeError } from './probe-errors';
+import { WorkbenchHost } from './workbench-host';
 
 interface ToolCatalogEntry {
   name: string;
@@ -32,12 +33,13 @@ interface ToolCatalogEntry {
 }
 
 const TOOL_CATALOG = require('../tool-catalog.json') as ToolCatalogEntry[];
-const BRIDGE_VERSION = '0.9.2';
+const BRIDGE_VERSION = '0.9.3';
 const BRIDGE_RELEASE_DATE = '2026-09-08';
 
 type JsonObject = Record<string, unknown>;
 
 let ipcServer: CreatorIpcServer | null = null;
+let workbenchHost: WorkbenchHost | null = null;
 let extensionStartedAt = new Date().toISOString();
 
 const sceneMethods = {
@@ -128,6 +130,9 @@ export async function load(): Promise<void> {
 }
 
 export async function unload(): Promise<void> {
+  const host = workbenchHost;
+  workbenchHost = null;
+  await host?.stop();
   const server = ipcServer;
   ipcServer = null;
   invalidateAssetIndexCache();
@@ -230,6 +235,35 @@ async function openToolManager(): Promise<{ panel: string; opened: boolean }> {
   return { panel, opened: await Editor.Panel.has(panel) };
 }
 
+async function openWorkbench(): Promise<{ panel: string; opened: boolean; url: string }> {
+  const { url } = await ensureWorkbenchHost();
+  const panel = 'cocos-ai-bridge.workbench';
+  await Editor.Panel.open(panel);
+  return { panel, opened: await Editor.Panel.has(panel), url };
+}
+
+async function ensureWorkbenchHost(): Promise<{ url: string }> {
+  if (!workbenchHost) {
+    const descriptor = buildDescriptor();
+    workbenchHost = new WorkbenchHost({
+      projectId: descriptor.projectId,
+      editorInstanceId: descriptor.editorInstanceId
+    });
+  }
+  try {
+    return await workbenchHost.start();
+  } catch (error) {
+    await workbenchHost.stop().catch(() => undefined);
+    workbenchHost = null;
+    throw error;
+  }
+}
+
+async function closeWorkbench(): Promise<{ detached: boolean }> {
+  await workbenchHost?.detachNativeWindow();
+  return { detached: true };
+}
+
 /** 组合主进程公开状态探针与 Scene 进程当前文档身份。 */
 async function probeEditorStateWithDocumentIdentity(): Promise<unknown> {
   const identity = await forwardToScene('editorStateDocumentIdentity', {})
@@ -300,6 +334,9 @@ function readReason(error: unknown): string {
 
 export const methods: Record<string, (request: JsonObject) => Promise<unknown>> = {
   openPanel: () => openToolManager(),
+  openWorkbench: () => openWorkbench(),
+  queryWorkbenchUrl: () => ensureWorkbenchHost(),
+  closeWorkbench: () => closeWorkbench(),
   queryManagerState: () => queryManagerState(),
   openExtensionManager: () => openExtensionManager(),
   'probe-editor-state': () => probeEditorStateWithDocumentIdentity(),
