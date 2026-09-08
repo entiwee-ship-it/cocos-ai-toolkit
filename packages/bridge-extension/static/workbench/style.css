@@ -129,7 +129,7 @@ button.primary:hover:not(:disabled) { background: #398fe9; }
 
 @media (max-width: 1100px) {
   .runtime-summary span:not(.connection) { display: none; }
-  .workspace { grid-template-columns: 260px 5px 330px 5px minmax(420px, 1fr); overflow-x: auto; }
+  .workspace { overflow-x: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

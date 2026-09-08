@@ -111,7 +111,7 @@
     elements.reembedButton.disabled = !connected || state.nativeBusy;
     if (host.error) showToast(host.error, true);
     if (nativeWindow.error) showToast(nativeWindow.error, true);
-    if (connected && session.sessionId) scheduleNativeEmbed(false);
+    if (connected && session.sessionId && nativeWindow.state === 'idle') scheduleNativeEmbed(false);
   }
 
   function renderTree() {
@@ -408,10 +408,7 @@
         body: JSON.stringify(Object.assign({ parentTitle: document.title }, nativeWindowBounds()))
       });
       state.host.nativeWindow = result;
-      elements.previewPlaceholder.classList.add('hidden');
-      elements.liveState.className = 'live-state connected';
-      elements.liveState.innerHTML = '<span class="live-dot"></span>已嵌入';
-      elements.embedMeta.textContent = '原生窗口已嵌入 · 可直接操作';
+      renderState();
     } catch (error) {
       state.host.nativeWindow = { state: 'error', error: error.message || String(error) };
       elements.previewPlaceholder.classList.remove('hidden');
@@ -482,13 +479,17 @@
       splitter.addEventListener('pointerdown', function (event) {
         var kind = splitter.dataset.splitter;
         var startX = event.clientX;
-        var styles = getComputedStyle(document.documentElement);
         var property = kind === 'tree' ? '--tree-width' : '--inspector-width';
-        var startWidth = parseFloat(styles.getPropertyValue(property)) / 100 * window.innerWidth;
+        var minimum = kind === 'tree' ? 220 : 300;
+        var startWidth = splitter.previousElementSibling.getBoundingClientRect().width;
+        var otherPane = document.querySelector(kind === 'tree' ? '.inspector-pane' : '.tree-pane');
+        var workspaceStyle = getComputedStyle(elements.workspace);
+        var workspacePadding = parseFloat(workspaceStyle.paddingLeft) + parseFloat(workspaceStyle.paddingRight);
+        var maximum = Math.max(minimum, elements.workspace.clientWidth - workspacePadding - otherPane.getBoundingClientRect().width - 430);
         splitter.classList.add('dragging');
         splitter.setPointerCapture(event.pointerId);
         function move(moveEvent) {
-          var width = Math.max(kind === 'tree' ? 220 : 300, startWidth + moveEvent.clientX - startX);
+          var width = Math.min(maximum, Math.max(minimum, startWidth + moveEvent.clientX - startX));
           document.documentElement.style.setProperty(property, width + 'px');
         }
         function up() {

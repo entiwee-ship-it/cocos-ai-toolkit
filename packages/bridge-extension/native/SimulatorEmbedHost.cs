@@ -38,6 +38,9 @@ internal static class SimulatorEmbedHost
     private static Rect originalRect;
     private static int simulatorProcessId;
     private static bool attached;
+    private static volatile bool trackingBounds;
+    private static volatile double[] latestBounds;
+    private static Thread boundsThread;
 
     private delegate bool EnumWindowsCallback(IntPtr window, IntPtr state);
 
@@ -84,6 +87,9 @@ internal static class SimulatorEmbedHost
 
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr window);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int maxCount);
@@ -161,8 +167,10 @@ internal static class SimulatorEmbedHost
             string[] parentTitles = Encoding.UTF8.GetString(Convert.FromBase64String(args[2])).Split('\n');
             parentWindow = WaitForWindow(0, parentTitles, 10000);
             simulatorWindow = WaitForSimulatorWindow(requestedSimulatorProcessId, parentProcessId, 10000);
+            latestBounds = ParseBounds(args, 3);
             Attach();
-            UpdateBounds(ParseBounds(args, 3));
+            UpdateBounds(latestBounds, true);
+            StartBoundsTracking();
             WriteLine("READY|" + parentWindow.ToInt64() + "|" + simulatorWindow.ToInt64() + "|" + simulatorProcessId);
 
             string line;
@@ -170,6 +178,7 @@ internal static class SimulatorEmbedHost
             {
                 if (line == "DETACH")
                 {
+                    StopBoundsTracking();
                     Detach();
                     WriteLine("DETACHED");
                     continue;
@@ -179,7 +188,7 @@ internal static class SimulatorEmbedHost
                 {
                     string[] parts = line.Split('|');
                     if (parts.Length != 7) throw new InvalidOperationException("INVALID_BOUNDS_COMMAND");
-                    UpdateBounds(ParseBounds(parts, 1));
+                    latestBounds = ParseBounds(parts, 1);
                 }
             }
             return 0;
@@ -191,6 +200,7 @@ internal static class SimulatorEmbedHost
         }
         finally
         {
+            StopBoundsTracking();
             try { Detach(); } catch { }
         }
     }
@@ -221,11 +231,40 @@ internal static class SimulatorEmbedHost
         }
     }
 
-    private static void UpdateBounds(double[] bounds)
+    private static void StartBoundsTracking()
+    {
+        trackingBounds = true;
+        boundsThread = new Thread(delegate()
+        {
+            while (trackingBounds)
+            {
+                try
+                {
+                    double[] bounds = latestBounds;
+                    if (bounds != null) UpdateBounds(bounds, false);
+                }
+                catch { }
+                Thread.Sleep(8);
+            }
+        });
+        boundsThread.IsBackground = true;
+        boundsThread.Start();
+    }
+
+    private static void StopBoundsTracking()
+    {
+        trackingBounds = false;
+        Thread thread = boundsThread;
+        boundsThread = null;
+        if (thread != null && thread != Thread.CurrentThread) thread.Join(250);
+    }
+
+    private static void UpdateBounds(double[] bounds, bool frameChanged)
     {
         if (!attached || !IsWindow(parentWindow) || !IsWindow(simulatorWindow)) {
             throw new InvalidOperationException("EMBED_WINDOW_LOST");
         }
+        if (IsIconic(parentWindow)) return;
         Rect client;
         if (!GetClientRect(parentWindow, out client)) ThrowLastError("GET_PARENT_CLIENT_RECT_FAILED");
         double scaleX = (client.Right - client.Left) / bounds[4];
@@ -236,6 +275,17 @@ internal static class SimulatorEmbedHost
         int height = Math.Max(1, (int)Math.Round(bounds[3] * scaleY));
         Point origin = new Point { X = x, Y = y };
         if (!ClientToScreen(parentWindow, ref origin)) ThrowLastError("CLIENT_TO_SCREEN_FAILED");
+        Rect current;
+        if (
+            !frameChanged
+            && GetWindowRect(simulatorWindow, out current)
+            && current.Left == origin.X
+            && current.Top == origin.Y
+            && current.Right - current.Left == width
+            && current.Bottom - current.Top == height
+        ) return;
+        uint flags = SwpNoActivate | SwpShowWindow | SwpAsyncWindowPos;
+        if (frameChanged) flags |= SwpFrameChanged;
         if (!SetWindowPos(
             simulatorWindow,
             IntPtr.Zero,
@@ -243,7 +293,7 @@ internal static class SimulatorEmbedHost
             origin.Y,
             width,
             height,
-            SwpNoActivate | SwpFrameChanged | SwpShowWindow | SwpAsyncWindowPos
+            flags
         )) ThrowLastError("SET_WINDOW_POS_FAILED");
     }
 

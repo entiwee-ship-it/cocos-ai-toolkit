@@ -73,6 +73,7 @@ describe('bridge extension manifest', () => {
     );
     const workbenchApp = readFileSync(new URL('../static/workbench/app.js', import.meta.url), 'utf8');
     const workbenchStyle = readFileSync(new URL('../static/workbench/style.css', import.meta.url), 'utf8');
+    const nativeHost = readFileSync(new URL('../native/SimulatorEmbedHost.cs', import.meta.url), 'utf8');
     expect(workbenchPanel).toContain('Editor.Panel.define');
     expect(workbenchPanel).toContain("Editor.Message.request('cocos-ai-bridge', 'workbench-url')");
     expect(workbenchPanel).toContain("Editor.Message.request('cocos-ai-bridge', 'workbench-close')");
@@ -85,8 +86,13 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).toContain("group.className = 'tree-children'");
     expect(workbenchApp).toContain("row.setAttribute('aria-level', String(depth + 1))");
     expect(workbenchApp).toContain('expandTreeToDepth(hierarchy.root, 3)');
+    expect(workbenchApp).toContain("nativeWindow.state === 'idle'");
+    expect(workbenchApp).toContain('splitter.previousElementSibling.getBoundingClientRect().width');
+    expect(workbenchApp).not.toContain("parseFloat(styles.getPropertyValue(property)) / 100 * window.innerWidth");
     expect(workbenchStyle).toContain('.tree-children::before');
     expect(workbenchStyle).toContain('.tree-row.parent .tree-name');
+    expect(nativeHost).toContain('StartBoundsTracking();');
+    expect(nativeHost).toContain('Thread.Sleep(8);');
   });
 
   it('为 Creator 本地扩展管理器提供双语摘要和详情元数据', () => {
