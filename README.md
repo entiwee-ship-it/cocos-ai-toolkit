@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本为 `0.9.1`，提供 43 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本为 `0.9.2`，提供 43 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -82,7 +82,7 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 & scripts/check-codex-mcp.ps1
 ```
 
-升级到 0.9.1 后重新运行一次安装脚本，Codex 配置会移除旧的工具开关参数；此版本不再接受 `--enable-writes` 或 `-Readonly`，启动 MCP 即公开全部工具。
+升级到 0.9.2 后重新运行一次安装脚本，Codex 配置会移除旧的工具开关参数；此版本不再接受 `--enable-writes` 或 `-Readonly`，启动 MCP 即公开全部工具。
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 

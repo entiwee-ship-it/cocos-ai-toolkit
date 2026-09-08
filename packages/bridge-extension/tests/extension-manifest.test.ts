@@ -69,7 +69,7 @@ describe('bridge extension manifest', () => {
     expect(manifest).toMatchObject({
       description: 'i18n:cocos-ai-bridge.description',
       author: 'Enti',
-      date: '2026-09-05',
+      date: '2026-09-08',
       platform: ['win32'],
       editor: '>=3.8.0 <3.9.0'
     });

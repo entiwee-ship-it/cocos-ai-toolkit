@@ -233,7 +233,7 @@ function descriptor(suffix: string): CreatorEndpointDescriptor {
     projectId: 'project-id',
     projectPath: 'E:/project',
     creatorVersion: '3.8.8',
-    bridgeVersion: '0.9.1',
+    bridgeVersion: '0.9.2',
     bridgeBuildId: 'build-id',
     capabilities: ['probe.editorState', 'probe.node', 'probe.directWrite'],
     processId: process.pid,

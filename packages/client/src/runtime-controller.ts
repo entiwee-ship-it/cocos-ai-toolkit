@@ -430,7 +430,11 @@ export class RuntimeController {
     }
     if (params?.platform === 'creator-simulator') {
       if (!isCreatorSimulatorOptions(params.native)) throw new Error('CREATOR_SIMULATOR_OPTIONS_INVALID');
-      await this.options.requestCreator(selector, 'probe.simulatorOpen', {});
+      const current = await this.options.requestCreator(selector, 'probe.simulatorRuntimeStatus', {})
+        .catch(() => null) as { connected?: unknown } | null;
+      if (current?.connected !== true) {
+        await this.options.requestCreator(selector, 'probe.simulatorOpen', {});
+      }
       return this.driver.launch({
         projectId: selector.projectId,
         ...(selector.editorInstanceId ? { editorInstanceId: selector.editorInstanceId } : {}),

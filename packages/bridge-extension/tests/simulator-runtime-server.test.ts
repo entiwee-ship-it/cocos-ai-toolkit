@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, expect, it } from 'vitest';
-import contributions, { resetSimulatorRuntimeServer } from '../src/simulator-runtime-server.js';
+import { get, post, resetSimulatorRuntimeServer } from '../src/simulator-runtime-server.js';
 
 type Handler = (request: Record<string, any>, response: MockResponse, next: () => void) => void | Promise<void>;
 
@@ -31,13 +31,20 @@ class MockResponse extends EventEmitter {
   }
 }
 
-const staticHandler = contributions[0].handle as Handler;
-const runtimeHandler = contributions[1].handle as Handler;
+const staticHandler = get[0].handle as Handler;
+const getRuntimeHandler = get[1].handle as Handler;
+const postRuntimeHandler = post[0].handle as Handler;
 const loopback = { remoteAddress: '127.0.0.1' };
 
 beforeEach(resetSimulatorRuntimeServer);
 
 describe('simulator runtime preview server', () => {
+  it('按 Creator 3.8.x 约定分别导出 GET 与 POST 路由', () => {
+    expect(get).toHaveLength(2);
+    expect(post).toHaveLength(1);
+    expect(post[0]).toBe(get[1]);
+  });
+
   it('只提供固定运行代理文件', () => {
     const response = new MockResponse();
     let next = 0;
@@ -47,10 +54,10 @@ describe('simulator runtime preview server', () => {
   });
 
   it('在同一 runtimeId 上完成 evaluate 命令往返', async () => {
-    await runtimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-1', socket: loopback }, new MockResponse(), () => {});
+    await getRuntimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-1', socket: loopback }, new MockResponse(), () => {});
 
     const evaluation = new MockResponse();
-    await runtimeHandler({
+    await postRuntimeHandler({
       method: 'POST',
       path: '/cocos-ai/runtime/evaluate',
       body: { runtimeId: 'sim-1', expression: '1 + 1' },
@@ -59,12 +66,12 @@ describe('simulator runtime preview server', () => {
     expect(evaluation.ended).toBe(false);
 
     const command = new MockResponse();
-    await runtimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-1', socket: loopback }, command, () => {});
+    await getRuntimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-1', socket: loopback }, command, () => {});
     expect(command.body).toMatchObject({ runtimeId: 'sim-1', expression: '1 + 1' });
     const id = (command.body as { id: string }).id;
 
     const receipt = new MockResponse();
-    await runtimeHandler({
+    await postRuntimeHandler({
       method: 'POST',
       path: '/cocos-ai/runtime/result',
       body: { id, runtimeId: 'sim-1', ok: true, value: 2 },
@@ -76,9 +83,16 @@ describe('simulator runtime preview server', () => {
 
   it('拒绝非回环地址发起运行时命令', async () => {
     const response = new MockResponse();
-    await runtimeHandler({ method: 'GET', path: '/cocos-ai/runtime/status', socket: { remoteAddress: '192.168.1.50' } }, response, () => {});
+    await getRuntimeHandler({ method: 'GET', path: '/cocos-ai/runtime/status', socket: { remoteAddress: '192.168.1.50' } }, response, () => {});
     expect(response.statusCode).toBe(403);
     expect(response.body).toEqual({ error: 'LOOPBACK_REQUIRED' });
   });
-});
 
+  it('当前代理健康时不被第二个短暂启动的 Simulator 抢占', async () => {
+    await getRuntimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-1', socket: loopback }, new MockResponse(), () => {});
+    await getRuntimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-2', socket: loopback }, new MockResponse(), () => {});
+    const status = new MockResponse();
+    await getRuntimeHandler({ method: 'GET', path: '/cocos-ai/runtime/status', socket: loopback }, status, () => {});
+    expect(status.body).toMatchObject({ connected: true, runtimeId: 'sim-1' });
+  });
+});

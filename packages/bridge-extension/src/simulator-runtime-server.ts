@@ -43,17 +43,17 @@ let lastSeenAt = 0;
 const commands: RuntimeCommand[] = [];
 const pending = new Map<string, PendingEvaluation>();
 
-const contributions = [
-  {
-    url: '/plugins/cocos-ai/*',
-    handle(request: RequestLike, response: ResponseLike, next: () => void): void {
-      if (requestPath(request) !== '/plugins/cocos-ai/runtime-agent.js') return next();
-      response.sendFile?.(RUNTIME_AGENT_FILE);
-    }
-  },
-  {
-    url: '/cocos-ai/runtime/*',
-    async handle(request: RequestLike, response: ResponseLike, next: () => void): Promise<void> {
+const staticAgentRoute = {
+  url: '/plugins/cocos-ai/*',
+  handle(request: RequestLike, response: ResponseLike, next: () => void): void {
+    if (requestPath(request) !== '/plugins/cocos-ai/runtime-agent.js') return next();
+    response.sendFile?.(RUNTIME_AGENT_FILE);
+  }
+};
+
+const runtimeRoute = {
+  url: '/cocos-ai/runtime/*',
+  async handle(request: RequestLike, response: ResponseLike, next: () => void): Promise<void> {
       if (!isLoopback(request.socket?.remoteAddress)) {
         sendJson(response, 403, { error: 'LOOPBACK_REQUIRED' });
         return;
@@ -69,7 +69,10 @@ const contributions = [
           sendJson(response, 400, { error: 'RUNTIME_ID_REQUIRED' });
           return;
         }
-        markRuntimeActive(runtimeId);
+        if (!markRuntimeActive(runtimeId)) {
+          sendEmpty(response, 204);
+          return;
+        }
         const index = commands.findIndex((command) => command.runtimeId === runtimeId);
         if (index < 0) {
           sendEmpty(response, 204);
@@ -118,12 +121,13 @@ const contributions = [
         sendEmpty(response, 204);
         return;
       }
-      next();
-    }
+    next();
   }
-];
+};
 
-export default contributions;
+/** Creator 3.8.x Server Contribution 按 HTTP 动词读取同名路由数组。 */
+export const get = [staticAgentRoute, runtimeRoute];
+export const post = [runtimeRoute];
 
 /** 测试复位；运行时不会调用。 */
 export function resetSimulatorRuntimeServer(): void {
@@ -133,7 +137,10 @@ export function resetSimulatorRuntimeServer(): void {
   for (const id of [...pending.keys()]) clearPending(id);
 }
 
-function markRuntimeActive(runtimeId: string): void {
+function markRuntimeActive(runtimeId: string): boolean {
+  if (activeRuntimeId && activeRuntimeId !== runtimeId && Date.now() - lastSeenAt <= RUNTIME_ACTIVE_MS) {
+    return false;
+  }
   if (activeRuntimeId && activeRuntimeId !== runtimeId) {
     for (const [id, evaluation] of pending) {
       if (evaluation.runtimeId !== runtimeId) {
@@ -146,6 +153,7 @@ function markRuntimeActive(runtimeId: string): void {
   }
   activeRuntimeId = runtimeId;
   lastSeenAt = Date.now();
+  return true;
 }
 
 function runtimeStatus(): { connected: boolean; runtimeId: string | null; lastSeenAt: string | null } {
@@ -232,4 +240,3 @@ function sendEmpty(response: ResponseLike, status: number): void {
   target.statusCode = status;
   target.end?.();
 }
-

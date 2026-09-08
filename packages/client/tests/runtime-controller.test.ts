@@ -98,6 +98,11 @@ describe('RuntimeController', () => {
     });
     expect(requestCreator).toHaveBeenCalledWith(
       { projectId: 'project-1', editorInstanceId: 'editor-1' },
+      'probe.simulatorRuntimeStatus',
+      {}
+    );
+    expect(requestCreator).toHaveBeenCalledWith(
+      { projectId: 'project-1', editorInstanceId: 'editor-1' },
       'probe.simulatorOpen',
       {}
     );
@@ -107,6 +112,28 @@ describe('RuntimeController', () => {
       platform: 'creator-simulator',
       native: undefined
     });
+  });
+
+  it('已有健康 Simulator 时直接附着，不重复 open-terminal', async () => {
+    const captureRoot = await tempRoot();
+    const requestCreator = vi.fn(async (_selector, method) => (
+      method === 'probe.simulatorRuntimeStatus'
+        ? { connected: true, runtimeId: 'sim-1' }
+        : { opened: true }
+    ));
+    const driver = fakeDriver();
+    const controller = new RuntimeController({
+      captureRoot,
+      requestCreator,
+      driver: driver as unknown as RuntimeDriver
+    });
+
+    await controller.request('server.previewLaunch', {
+      selector: { projectId: 'project-1' },
+      params: { platform: 'creator-simulator' }
+    });
+    expect(requestCreator.mock.calls.some((call) => call[1] === 'probe.simulatorOpen')).toBe(false);
+    expect(driver.launch).toHaveBeenCalledOnce();
   });
 
   it('实时节点树只在 revision 或 sceneEpoch 变化时推送', async () => {
