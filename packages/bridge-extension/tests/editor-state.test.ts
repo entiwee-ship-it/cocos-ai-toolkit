@@ -27,6 +27,7 @@ describe('buildBridgeHello', () => {
     expect(BRIDGE_CAPABILITIES).toContain('probe.nodeSelect');
     expect(BRIDGE_CAPABILITIES).toContain('probe.extensionManagerOpen');
     expect(BRIDGE_CAPABILITIES).toContain('probe.managerPanelOpen');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.simulatorRuntimeEvaluate');
   });
 });
 

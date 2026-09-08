@@ -81,6 +81,59 @@ describe('RuntimeController', () => {
     expect(driver.launch).toHaveBeenCalledOnce();
     expect(driver.close).toHaveBeenCalledWith('session-1');
   });
+
+  it('Creator 第三项模拟器先由 Creator 启动，再绑定同一运行会话', async () => {
+    const captureRoot = await tempRoot();
+    const requestCreator = vi.fn(async () => ({ opened: true }));
+    const driver = fakeDriver();
+    const controller = new RuntimeController({
+      captureRoot,
+      requestCreator,
+      driver: driver as unknown as RuntimeDriver
+    });
+
+    await controller.request('server.previewLaunch', {
+      selector: { projectId: 'project-1', editorInstanceId: 'editor-1' },
+      params: { platform: 'creator-simulator' }
+    });
+    expect(requestCreator).toHaveBeenCalledWith(
+      { projectId: 'project-1', editorInstanceId: 'editor-1' },
+      'probe.simulatorOpen',
+      {}
+    );
+    expect(driver.launch).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      editorInstanceId: 'editor-1',
+      platform: 'creator-simulator',
+      native: undefined
+    });
+  });
+
+  it('实时节点树只在 revision 或 sceneEpoch 变化时推送', async () => {
+    const captureRoot = await tempRoot();
+    const driver = fakeDriver();
+    driver.evaluate
+      .mockResolvedValueOnce(runtimeTree(1, 1))
+      .mockResolvedValueOnce(runtimeTree(1, 1))
+      .mockResolvedValueOnce(runtimeTree(2, 1));
+    const controller = new RuntimeController({
+      captureRoot,
+      requestCreator: vi.fn(),
+      driver: driver as unknown as RuntimeDriver
+    });
+    const received: number[] = [];
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const stop = await controller.streamRuntimeHierarchy('session-1', (snapshot) => {
+      received.push(snapshot.revision ?? -1);
+      if (received.length === 2) release();
+    }, { intervalMs: 50 });
+
+    await ready;
+    await stop();
+    expect(received).toEqual([1, 2]);
+    expect(driver.evaluate).toHaveBeenCalledTimes(3);
+  });
 });
 
 function fakeDriver() {
@@ -109,6 +162,21 @@ function fakeDriver() {
       actualResolution: { width: 320, height: 180 }
     })),
     dispose: vi.fn(async () => undefined)
+  };
+}
+
+function runtimeTree(revision: number, sceneEpoch: number) {
+  return {
+    uuid: 'scene-uuid',
+    name: 'main',
+    path: '/main~0',
+    active: true,
+    dynamic: false,
+    components: [],
+    sceneUuid: 'scene-uuid',
+    sceneEpoch,
+    revision,
+    nodeCount: 1
   };
 }
 

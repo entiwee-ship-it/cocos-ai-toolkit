@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本为 `0.9.1`，提供 42 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本为 `0.9.1`，提供 43 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -86,7 +86,7 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（全部公开 42 个）
+## MCP 工具面（全部公开 43 个）
 
 ### 编辑态只读 11 个（默认开放）
 
@@ -135,9 +135,9 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 
 `writeCapabilities` 会在写入前说明当前文档能否直接修改该节点。Prefab 编辑模式下，嵌套实例内容的已知无效写入会以 `NODE_NOT_EDITABLE_IN_CURRENT_DOCUMENT` 拒绝，并返回 `cocos_prefab_open` 的源 Prefab 路由；工具不会自动切换文档。文档身份暂不可判定时保持放行，继续由保存后的逐项重读验证兜底。
 
-### 运行态 13 个（默认公开；动作工具仍执行运行态校验）
+### 运行态 14 个（默认公开；动作工具仍执行运行态校验）
 
-`cocos_preview_launch/stop/sessions`、`cocos_runtime_get_hierarchy/inspect_component/get_console/watch_property/capture/invoke_method/sample_window/dispatch_input/instantiate_prefab/run_scenario`：启动 Preview 页面、读取运行时节点树/组件/Console、监听属性变化、Game 视图截图（多分辨率/裁剪/节点边界叠加）、调用组件方法、派发输入和运行时实例化 Prefab。Scenario 支持 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；`stop(always:true)` 会在前序步骤默认中止后仍执行清理。视觉结果仅作辅助证据。
+`cocos_preview_launch/stop/sessions`、`cocos_runtime_get_hierarchy/inspect_component/set_property/get_console/watch_property/capture/invoke_method/sample_window/dispatch_input/instantiate_prefab/run_scenario`：启动 Preview、读取运行时节点树/组件/Console、修改并回读运行时公开属性、监听变化、截图、调用组件方法和运行时实例化 Prefab。`platform=creator-simulator` 会启动 Creator 工具栏第三项原生 Simulator，并由预览扩展脚本通过本机回环地址读取同一真实运行进程，不占用 Creator 已连接的 5086 Inspector，也不写回 Scene/Prefab。Scenario 支持 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；`stop(always:true)` 会在前序步骤默认中止后仍执行清理。视觉结果仅作辅助证据。
 
 典型编辑流程：`cocos_editor_state` 确认当前文档；若 dirty，先用 `cocos_document_save` 确认已清除 → `cocos_asset_search` 找 UUID → `cocos_asset_inspect` 看类型/引用 → `cocos_prefab_open` / `cocos_scene_open` 打开 → `cocos_hierarchy` 寻址 → `cocos_node_read` 看现值 → 写工具修改（自动保存+回显）→ 需要视觉确认时 `cocos_preview_launch` + `cocos_runtime_capture`。
 

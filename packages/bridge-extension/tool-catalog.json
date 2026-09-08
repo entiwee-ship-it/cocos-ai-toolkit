@@ -36,6 +36,7 @@
   { "name": "cocos_runtime_capture", "group": "Preview 与运行态", "mutating": false, "summary": "截取 Game 视图并可叠加节点边界" },
   { "name": "cocos_preview_launch", "group": "Preview 与运行态", "mutating": true, "summary": "启动 Preview 会话" },
   { "name": "cocos_preview_stop", "group": "Preview 与运行态", "mutating": true, "summary": "停止 Preview 会话" },
+  { "name": "cocos_runtime_set_property", "group": "Preview 与运行态", "mutating": true, "summary": "修改运行时公开组件属性并回读" },
   { "name": "cocos_runtime_invoke_method", "group": "Preview 与运行态", "mutating": true, "summary": "调用运行时组件方法" },
   { "name": "cocos_runtime_sample_window", "group": "Preview 与运行态", "mutating": true, "summary": "在时间窗口内采样组件属性" },
   { "name": "cocos_runtime_dispatch_input", "group": "Preview 与运行态", "mutating": true, "summary": "向 Preview 派发点击或按键" },

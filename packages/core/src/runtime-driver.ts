@@ -1,4 +1,12 @@
-import { ConsoleEntrySchema, PreviewSessionSchema, ResolutionSchema, type ConsoleEntry, type PreviewSession, type Resolution } from '@cocos-ai/protocol';
+import {
+  ConsoleEntrySchema,
+  PreviewSessionSchema,
+  ResolutionSchema,
+  type ConsoleEntry,
+  type PreviewSession,
+  type Resolution,
+  type RuntimePlatform
+} from '@cocos-ai/protocol';
 import { randomUUID } from 'node:crypto';
 
 /**
@@ -23,16 +31,34 @@ export interface RuntimeBrowserPage {
   setViewportSize(size: { width: number; height: number }): Promise<void>;
   /** 截取指定元素（CSS 选择器）的 PNG 图像。 */
   screenshotElement(selector: string): Promise<Buffer>;
+  /** Native 页面直接按运行画布坐标派发输入；浏览器页面继续走 DOM 坐标换算。 */
+  dispatchCanvasInput?(input: RuntimeDispatchInput, resolution?: Resolution): Promise<RuntimeDispatchReceipt>;
+  /** Native 页面无法设置浏览器 viewport 时返回真实物理画布尺寸。 */
+  getRuntimeResolution?(): Promise<Resolution>;
 }
 
 /** 浏览器实例抽象。 */
 export interface RuntimeBrowser {
   newPage(): Promise<RuntimeBrowserPage>;
   close(): Promise<void>;
+  /** Native Provider 在进程启动后回传设备、Inspector 和传输身份。 */
+  getSessionMetadata?(): Partial<PreviewSession> | Promise<Partial<PreviewSession>>;
+  /** Native Provider 可把真实画面帧推给 Workbench；回调方只应保留最新帧。 */
+  streamFrames?(
+    listener: (frame: { buffer: Buffer; width: number; height: number }) => void,
+    options?: { resolution?: Resolution }
+  ): Promise<() => Promise<void>>;
 }
 
 /** 浏览器启动器：由装配方（MCP/CLI 进程）以 playwright-core 实现注入。 */
-export type RuntimeBrowserLauncher = (options: { channel: string; headless: boolean }) => Promise<RuntimeBrowser>;
+export type RuntimeBrowserLauncher = (options: {
+  projectId: string;
+  editorInstanceId?: string;
+  channel: string;
+  headless: boolean;
+  platform?: RuntimePlatform;
+  native?: unknown;
+}) => Promise<RuntimeBrowser>;
 
 export interface RuntimeDriverOptions {
   launcher: RuntimeBrowserLauncher;
@@ -50,9 +76,12 @@ export interface RuntimeDriverOptions {
 export interface RuntimeLaunchOptions {
   projectId: string;
   editorInstanceId?: string;
-  url: string;
+  /** Browser 必填；Native 使用 synthetic URL。 */
+  url?: string;
   resolution?: Resolution;
   channel?: string;
+  platform?: RuntimePlatform;
+  native?: unknown;
 }
 
 /** 输入描述：tap/click 为画布内坐标点击，key 为按键。 */
@@ -195,24 +224,36 @@ export class RuntimeDriver {
   /**
    * 启动浏览器并打开 preview 页面，等待游戏就绪后返回会话。
    *
-   * @param options 启动参数：项目标识、preview URL、可选请求分辨率与浏览器通道。
+  * @param options 启动参数：项目标识、preview URL、可选请求分辨率与浏览器通道。
    * @returns 就绪态会话（含实际生效分辨率）。
    */
   async launch(options: RuntimeLaunchOptions): Promise<PreviewSession> {
-    const url = normalizePreviewUrl(options.url);
-    const channels = resolveChannelChain(options.channel);
+    const platform = options.platform ?? 'browser';
+    const url = platform === 'browser'
+      ? normalizePreviewUrl(options.url ?? '')
+      : (options.url ?? `${platform}://runtime`);
+    const channels = platform === 'browser'
+      ? resolveChannelChain(options.channel)
+      : [options.channel ?? platform];
     let browser: RuntimeBrowser | null = null;
     const launchErrors: string[] = [];
     for (const channel of channels) {
       try {
-        browser = await this.options.launcher({ channel, headless: false });
+        browser = await this.options.launcher({
+          projectId: options.projectId,
+          ...(options.editorInstanceId ? { editorInstanceId: options.editorInstanceId } : {}),
+          channel,
+          headless: false,
+          platform,
+          ...(options.native !== undefined ? { native: options.native } : {})
+        });
         break;
       } catch (error) {
         launchErrors.push(`${channel}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     if (!browser) {
-      throw new Error(`PREVIEW_BROWSER_LAUNCH_FAILED:${launchErrors.join(';')}`);
+      throw new Error(`${platform === 'browser' ? 'PREVIEW_BROWSER' : 'RUNTIME'}_LAUNCH_FAILED:${launchErrors.join(';')}`);
     }
 
     const sessionId = this.options.createSessionId?.() ?? `preview-${randomUUID()}`;
@@ -236,7 +277,8 @@ export class RuntimeDriver {
           projectId: options.projectId,
           ...(options.editorInstanceId ? { editorInstanceId: options.editorInstanceId } : {}),
           url,
-          pageSource: 'self-launched',
+          pageSource: platform === 'browser' ? 'self-launched' : 'native-runtime',
+          platform,
           state: 'launching',
           ...(options.resolution ? { requestedResolution: options.resolution } : {}),
           launchedAt: (this.options.now?.() ?? new Date()).toISOString()
@@ -250,7 +292,7 @@ export class RuntimeDriver {
       registered = true;
       await page.goto(url);
       await this.waitGameReady(managed);
-      if (options.resolution) {
+      if (options.resolution && platform === 'browser') {
         // 视口留余量容纳预览页工具栏，与 capture 一致保证请求分辨率精确生效
         await page.setViewportSize({
           width: options.resolution.width + 200,
@@ -262,9 +304,18 @@ export class RuntimeDriver {
         );
       } else {
         const { readRuntimeResolution } = await import('./runtime-inject.js');
-        managed.session.actualResolution = ResolutionSchema.parse(
-          await page.evaluate(readRuntimeResolution as never, undefined as never)
-        );
+        try {
+          managed.session.actualResolution = ResolutionSchema.parse(
+            await page.evaluate(readRuntimeResolution as never, undefined as never)
+          );
+        } catch (error) {
+          if (platform !== 'browser' || !page.getRuntimeResolution) throw error;
+          managed.session.actualResolution = await page.getRuntimeResolution();
+        }
+      }
+      const metadata = await browser.getSessionMetadata?.();
+      if (metadata) {
+        managed.session = PreviewSessionSchema.parse({ ...managed.session, ...metadata });
       }
       managed.session.state = 'ready';
       return { ...managed.session };
@@ -368,6 +419,9 @@ export class RuntimeDriver {
     if (this.syncLostState(sessionId, managed)) {
       throw new Error('PREVIEW_SESSION_LOST');
     }
+    if (managed.page.dispatchCanvasInput) {
+      return managed.page.dispatchCanvasInput(input, managed.session.actualResolution);
+    }
     if (input.inputType === 'key') {
       if (!input.key) throw new Error('INPUT_KEY_REQUIRED');
       await managed.page.keyPress(input.key);
@@ -407,7 +461,7 @@ export class RuntimeDriver {
     const { cropPng, decodePng, drawOverlay } = await import('./runtime-capture.js');
 
     let actualResolution: Resolution;
-    if (request.resolution) {
+    if (request.resolution && managed.session.platform === 'browser') {
       // 视口留余量容纳预览页工具栏，避免画布被容器约束压缩
       await managed.page.setViewportSize({
         width: request.resolution.width + 200,
@@ -417,9 +471,14 @@ export class RuntimeDriver {
         await managed.page.evaluate(buildRuntimeScript('setRuntimeResolution', request.resolution))
       );
     } else {
-      actualResolution = ResolutionSchema.parse(
-        await managed.page.evaluate(buildRuntimeScript('readRuntimeResolution'))
-      );
+      try {
+        actualResolution = ResolutionSchema.parse(
+          await managed.page.evaluate(buildRuntimeScript('readRuntimeResolution'))
+        );
+      } catch (error) {
+        if (!managed.page.getRuntimeResolution) throw error;
+        actualResolution = await managed.page.getRuntimeResolution();
+      }
     }
 
     const boundsPaths = [...new Set([...request.overlay?.nodeBounds ?? [], ...request.overlay?.anchors ?? []])];
@@ -474,6 +533,20 @@ export class RuntimeDriver {
     if (errors.length) {
       throw new Error(`PREVIEW_DISPOSE_FAILED:${JSON.stringify(errors)}`);
     }
+  }
+
+  /** 订阅真实 Native 画面帧；浏览器 Provider 未实现时明确报错。 */
+  async streamFrames(
+    sessionId: string,
+    listener: (frame: { buffer: Buffer; width: number; height: number }) => void,
+    options?: { resolution?: Resolution }
+  ): Promise<() => Promise<void>> {
+    const managed = this.requireSession(sessionId);
+    if (managed.session.state === 'closed' || this.syncLostState(sessionId, managed)) {
+      throw new Error('PREVIEW_SESSION_LOST');
+    }
+    if (!managed.browser.streamFrames) throw new Error('RUNTIME_FRAME_STREAM_UNAVAILABLE');
+    return managed.browser.streamFrames(listener, options);
   }
 
   /** 游戏就绪有界轮询：注入探测脚本直至场景出现或超时。 */

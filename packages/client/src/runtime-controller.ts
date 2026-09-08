@@ -3,9 +3,12 @@ import { join, resolve, sep } from 'node:path';
 import {
   ResolutionSchema,
   RuntimeComponentSnapshotSchema,
+  RuntimePropertyWriteSnapshotSchema,
   RuntimeSampleWindowInputSchema,
   RuntimeSampleWindowSnapshotSchema,
-  ScenarioStepSchema
+  ScenarioStepSchema,
+  RuntimePlatformSchema,
+  type RuntimeNodeSnapshot
 } from '@cocos-ai/protocol';
 import {
   assembleRuntimeNodeSnapshot,
@@ -18,6 +21,12 @@ import {
 } from '@cocos-ai/core';
 import { z } from 'zod';
 import { launchPlaywrightBrowser } from './playwright-launcher.js';
+import {
+  isAndroidNativeOptions,
+  isCreatorSimulatorOptions,
+  launchAndroidRuntimeBrowser,
+  launchCreatorSimulatorRuntimeBrowser
+} from './native-runtime-driver.js';
 
 const DEFAULT_CAPTURE_FILES_PER_SESSION = 100;
 const DEFAULT_CAPTURE_MAX_SESSIONS = 50;
@@ -32,7 +41,9 @@ const PreviewLaunchSchema = z.object({
   selector: SelectorSchema,
   params: z.object({
     resolution: ResolutionSchema.optional(),
-    channel: z.string().min(1).optional()
+    channel: z.string().min(1).optional(),
+    platform: RuntimePlatformSchema.optional(),
+    native: z.unknown().optional()
   }).optional()
 });
 const PreviewSessionsSchema = z.object({ projectId: z.string().min(1).optional() });
@@ -53,6 +64,10 @@ const RuntimeComponentSchema = SessionSchema.extend({
 const RuntimeInvokeSchema = RuntimeComponentSchema.extend({
   method: z.string().min(1),
   args: z.array(z.unknown()).optional()
+});
+const RuntimeSetPropertySchema = RuntimeComponentSchema.extend({
+  property: z.string().min(1),
+  value: z.unknown()
 });
 const RuntimeSampleWindowSchema = RuntimeSampleWindowInputSchema.extend({
   sessionId: z.string().min(1)
@@ -106,6 +121,7 @@ export const RUNTIME_METHODS = new Set([
   'server.runtimeConsole',
   'server.runtimeHierarchy',
   'server.runtimeComponent',
+  'server.runtimeSetProperty',
   'server.runtimeInvoke',
   'server.runtimeSampleWindow',
   'server.runtimeWatch',
@@ -134,7 +150,31 @@ export class RuntimeController {
   private captureIndex = 0;
 
   constructor(private readonly options: RuntimeControllerOptions) {
-    this.driver = options.driver ?? new RuntimeDriver({ launcher: launchPlaywrightBrowser });
+    this.driver = options.driver ?? new RuntimeDriver({
+      launcher: async ({ projectId, editorInstanceId, channel, headless, platform, native }) => {
+        if (platform === 'android-emulator') {
+          if (!isAndroidNativeOptions(native)) throw new Error('ANDROID_OPTIONS_REQUIRED');
+          return launchAndroidRuntimeBrowser(native);
+        }
+        if (platform === 'creator-simulator') {
+          if (!isCreatorSimulatorOptions(native)) throw new Error('CREATOR_SIMULATOR_OPTIONS_INVALID');
+          const selector = { projectId, ...(editorInstanceId ? { editorInstanceId } : {}) };
+          return launchCreatorSimulatorRuntimeBrowser(native ?? {}, {
+            status: () => this.options.requestCreator(
+              selector,
+              'probe.simulatorRuntimeStatus',
+              {}
+            ) as Promise<{ connected: boolean; runtimeId: string | null }>,
+            evaluate: (_runtimeId, expression) => this.options.requestCreator(
+              selector,
+              'probe.simulatorRuntimeEvaluate',
+              { runtimeId: _runtimeId, expression }
+            )
+          });
+        }
+        return launchPlaywrightBrowser({ channel, headless });
+      }
+    });
   }
 
   async request(method: string, payload: unknown): Promise<unknown> {
@@ -158,19 +198,7 @@ export class RuntimeController {
       }
       case 'server.runtimeHierarchy': {
         const input = RuntimeHierarchySchema.parse(payload);
-        const raw = await this.driver.evaluate(
-          input.sessionId,
-          buildRuntimeScript('readRuntimeHierarchy', {
-            ...(input.maxDepth !== undefined ? { maxDepth: input.maxDepth } : {}),
-            ...(input.maxNodes !== undefined ? { maxNodes: input.maxNodes } : {}),
-            ...(input.path ? { path: input.path } : {}),
-            ...(input.includeInactive !== undefined ? { includeInactive: input.includeInactive } : {})
-          })
-        );
-        if (raw && typeof raw === 'object' && (raw as { found?: unknown }).found === false) {
-          throw new Error(`RUNTIME_HIERARCHY_UNAVAILABLE:${JSON.stringify(raw)}`);
-        }
-        return assembleRuntimeNodeSnapshot(raw, input.sessionId);
+        return this.readRuntimeHierarchy(input);
       }
       case 'server.runtimeComponent': {
         const input = RuntimeComponentSchema.parse(payload);
@@ -191,10 +219,37 @@ export class RuntimeController {
             nodeUuid: typeof raw.nodeUuid === 'string' && raw.nodeUuid ? raw.nodeUuid : 'unknown',
             componentType: input.componentType,
             properties: raw.properties ?? {},
+            ...(typeof raw.revision === 'number' ? { revision: raw.revision } : {}),
             capturedAt: new Date().toISOString()
           }),
           ...(Array.isArray(raw.skipped) ? { skipped: raw.skipped } : {})
         };
+      }
+      case 'server.runtimeSetProperty': {
+        const input = RuntimeSetPropertySchema.parse(payload);
+        const raw = await this.driver.evaluate<Record<string, unknown>>(
+          input.sessionId,
+          buildRuntimeScript('writeRuntimeProperty', {
+            path: input.path,
+            componentType: input.componentType,
+            property: input.property,
+            value: input.value
+          })
+        );
+        if (!raw || raw.found !== true || raw.written !== true) {
+          throw new Error(`RUNTIME_PROPERTY_WRITE_FAILED:${JSON.stringify(raw ?? null)}`);
+        }
+        return RuntimePropertyWriteSnapshotSchema.parse({
+          source: 'preview-runtime',
+          previewSessionId: input.sessionId,
+          nodeUuid: raw.nodeUuid,
+          componentType: raw.componentType ?? input.componentType,
+          property: input.property,
+          value: raw.value,
+          readback: raw.readback,
+          ...(typeof raw.revision === 'number' ? { revision: raw.revision } : {}),
+          capturedAt: new Date().toISOString()
+        });
       }
       case 'server.runtimeInvoke': {
         const input = RuntimeInvokeSchema.parse(payload);
@@ -299,10 +354,90 @@ export class RuntimeController {
     return this.driver.dispose();
   }
 
+  /** Workbench 内部订阅真实 Native 画面；MCP 请求仍使用截图工具。 */
+  streamRuntimeFrames(
+    sessionId: string,
+    listener: (frame: { buffer: Buffer; width: number; height: number }) => void,
+    options?: { resolution?: { width: number; height: number } }
+  ): Promise<() => Promise<void>> {
+    return this.driver.streamFrames(sessionId, listener, options);
+  }
+
+  /** Workbench 以 10Hz 读取真实运行树；revision 不变时不重复推送。 */
+  async streamRuntimeHierarchy(
+    sessionId: string,
+    listener: (snapshot: RuntimeNodeSnapshot) => void,
+    options?: {
+      intervalMs?: number;
+      maxDepth?: number;
+      maxNodes?: number;
+      includeInactive?: boolean;
+      onError?: (error: unknown) => void;
+    }
+  ): Promise<() => Promise<void>> {
+    const intervalMs = Math.max(50, Math.floor(options?.intervalMs ?? 100));
+    let stopped = false;
+    let timer: NodeJS.Timeout | undefined;
+    let running: Promise<void> | undefined;
+    let previous = '';
+    const poll = async (): Promise<void> => {
+      try {
+        const snapshot = await this.readRuntimeHierarchy({
+          sessionId,
+          ...(options?.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
+          ...(options?.maxNodes !== undefined ? { maxNodes: options.maxNodes } : {}),
+          ...(options?.includeInactive !== undefined ? { includeInactive: options.includeInactive } : {})
+        });
+        const revision = `${snapshot.sceneEpoch ?? ''}:${snapshot.revision ?? JSON.stringify(snapshot.root)}`;
+        if (revision !== previous) {
+          previous = revision;
+          listener(snapshot);
+        }
+      } catch (error) {
+        options?.onError?.(error);
+        const reason = error instanceof Error ? error.message : String(error);
+        if (reason.includes('PREVIEW_SESSION_LOST') || reason.includes('PREVIEW_SESSION_NOT_FOUND')) stopped = true;
+      } finally {
+        if (!stopped) timer = setTimeout(() => { running = poll(); }, intervalMs);
+      }
+    };
+    running = poll();
+    return async () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      await running;
+    };
+  }
+
   private async launchPreview(
     selector: { projectId: string; editorInstanceId?: string },
-    params?: { resolution?: { width: number; height: number }; channel?: string }
+    params?: {
+      resolution?: { width: number; height: number };
+      channel?: string;
+      platform?: 'browser' | 'android-emulator' | 'creator-simulator';
+      native?: unknown;
+    }
   ) {
+    if (params?.platform === 'android-emulator') {
+      if (!isAndroidNativeOptions(params.native)) throw new Error('ANDROID_OPTIONS_REQUIRED');
+      return this.driver.launch({
+        projectId: selector.projectId,
+        ...(selector.editorInstanceId ? { editorInstanceId: selector.editorInstanceId } : {}),
+        platform: 'android-emulator',
+        native: params.native,
+        ...(params.resolution ? { resolution: params.resolution } : {})
+      });
+    }
+    if (params?.platform === 'creator-simulator') {
+      if (!isCreatorSimulatorOptions(params.native)) throw new Error('CREATOR_SIMULATOR_OPTIONS_INVALID');
+      await this.options.requestCreator(selector, 'probe.simulatorOpen', {});
+      return this.driver.launch({
+        projectId: selector.projectId,
+        ...(selector.editorInstanceId ? { editorInstanceId: selector.editorInstanceId } : {}),
+        platform: 'creator-simulator',
+        native: params.native
+      });
+    }
     const opened = await this.options.requestCreator(selector, 'probe.previewOpen', {}) as { url?: unknown };
     if (!opened || typeof opened.url !== 'string' || !opened.url) {
       throw new Error('PREVIEW_URL_UNAVAILABLE');
@@ -384,6 +519,24 @@ export class RuntimeController {
         };
       }
     };
+  }
+
+  private async readRuntimeHierarchy(
+    input: z.infer<typeof RuntimeHierarchySchema>
+  ): Promise<RuntimeNodeSnapshot> {
+    const raw = await this.driver.evaluate(
+      input.sessionId,
+      buildRuntimeScript('readRuntimeHierarchy', {
+        ...(input.maxDepth !== undefined ? { maxDepth: input.maxDepth } : {}),
+        ...(input.maxNodes !== undefined ? { maxNodes: input.maxNodes } : {}),
+        ...(input.path ? { path: input.path } : {}),
+        ...(input.includeInactive !== undefined ? { includeInactive: input.includeInactive } : {})
+      })
+    );
+    if (raw && typeof raw === 'object' && (raw as { found?: unknown }).found === false) {
+      throw new Error(`RUNTIME_HIERARCHY_UNAVAILABLE:${JSON.stringify(raw)}`);
+    }
+    return assembleRuntimeNodeSnapshot(raw, input.sessionId);
   }
 
   private async capture(input: z.infer<typeof RuntimeCaptureSchema>) {

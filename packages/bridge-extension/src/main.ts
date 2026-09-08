@@ -10,7 +10,17 @@ import {
   type CreatorEndpointDescriptor,
   type CreatorIpcLifecycleEvent
 } from './ipc-server';
-import { editorPreviewMessageSource, nodeHttpPreviewProbe, openPreviewServer, readPreviewStatus, reloadPreviewPages } from './preview';
+import {
+  editorPreviewMessageSource,
+  editorSimulatorPreviewSource,
+  evaluateSimulatorRuntime,
+  nodeHttpPreviewProbe,
+  openPreviewServer,
+  openSimulatorPreview,
+  readPreviewStatus,
+  readSimulatorRuntimeStatus,
+  reloadPreviewPages
+} from './preview';
 import { ProbeError } from './probe-errors';
 
 interface ToolCatalogEntry {
@@ -69,6 +79,17 @@ const handlers: Readonly<Record<string, (payload: unknown) => Promise<unknown>>>
   'probe.previewOpen': () => openPreviewServer(editorPreviewMessageSource, nodeHttpPreviewProbe),
   'probe.previewStatus': () => readPreviewStatus(editorPreviewMessageSource),
   'probe.previewReload': () => reloadPreviewPages(editorPreviewMessageSource),
+  'probe.simulatorOpen': () => openSimulatorPreview(editorSimulatorPreviewSource),
+  'probe.simulatorRuntimeStatus': () => readSimulatorRuntimeStatus(editorPreviewMessageSource),
+  'probe.simulatorRuntimeEvaluate': (payload) => {
+    const input = readObject(payload);
+    if (typeof input.runtimeId !== 'string' || !input.runtimeId) throw new ProbeError('RUNTIME_ID_REQUIRED');
+    if (typeof input.expression !== 'string' || !input.expression) throw new ProbeError('RUNTIME_EXPRESSION_REQUIRED');
+    return evaluateSimulatorRuntime(editorPreviewMessageSource, {
+      runtimeId: input.runtimeId,
+      expression: input.expression
+    });
+  },
   ...Object.fromEntries(Object.entries(sceneMethods).map(([method, sceneMethod]) => [
     method,
     (payload: unknown) => forwardToScene(sceneMethod, payload)

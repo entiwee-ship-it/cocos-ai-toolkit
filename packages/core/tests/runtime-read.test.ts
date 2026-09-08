@@ -57,6 +57,21 @@ describe('buildRuntimeScript', () => {
 });
 
 describe('readRuntimeHierarchy（页面注入：层级序列化）', () => {
+  it('为同名运行时节点返回稳定路径与 revision', async () => {
+    const first = fakeNode({ name: '按钮', fileId: 'f1' });
+    const second = fakeNode({ name: '按钮', fileId: 'f2' });
+    const scene = fakeNode({ name: 'Scene', fileId: 'scene-file', children: [first, second] });
+    installScene(scene);
+    const initial = await runScript('readRuntimeHierarchy', {}) as {
+      revision: number;
+      children: Array<{ path?: string }>;
+    };
+    expect(initial.children.map((child) => child.path)).toEqual(['/Scene~0/%E6%8C%89%E9%92%AE~0', '/Scene~0/%E6%8C%89%E9%92%AE~1']);
+    scene.children[0].active = false;
+    const changed = await runScript('readRuntimeHierarchy', {}) as { revision: number };
+    expect(changed.revision).not.toBe(initial.revision);
+  });
+
   it('序列化节点树并标注动态创建节点', async () => {
     installScene(fakeNode({
       name: 'Scene',
@@ -213,6 +228,23 @@ describe('readRuntimeHierarchy（页面注入：层级序列化）', () => {
 });
 
 describe('readRuntimeComponent（页面注入：组件属性读取）', () => {
+  it('写入原型 setter 暴露的公开属性并返回回读值', async () => {
+    const component = Object.create({
+      get text() { return this._text; },
+      set text(value: string) { this._text = value; }
+    }) as Record<string, unknown>;
+    component.__typename__ = 'Label';
+    component._text = '旧值';
+    const node = fakeNode({ name: 'label', fileId: 'f2' });
+    node.components = [component];
+    node.getComponent = () => component;
+    installScene(fakeNode({ name: 'Canvas', fileId: 'f1', children: [node] }));
+    const result = await runScript('writeRuntimeProperty', {
+      path: 'Canvas/label', componentType: 'Label', property: 'text', value: '新值'
+    }) as Record<string, unknown>;
+    expect(result).toMatchObject({ found: true, written: true, readback: '新值' });
+  });
+
   it('按节点路径与组件类型读取属性包', async () => {
     installScene(fakeNode({
       name: 'Canvas',

@@ -10,6 +10,8 @@ describe('bridge extension manifest', () => {
       panels?: Record<string, Record<string, unknown>>;
       contributions?: {
         scene?: { script?: string };
+        preview?: { simulator?: { methods?: string; hooks?: { settings?: string } } };
+        server?: string;
         menu?: Array<Record<string, unknown>>;
         messages?: Record<string, { methods?: string[] }>;
       };
@@ -17,6 +19,11 @@ describe('bridge extension manifest', () => {
 
     expect(manifest.main).toBe('./dist/main.js');
     expect(manifest.contributions?.scene?.script).toBe('./dist/scene.js');
+    expect(manifest.contributions?.preview?.simulator).toEqual({
+      methods: './dist/simulator-runtime-preview.js',
+      hooks: { settings: 'onSettingsSimulator' }
+    });
+    expect(manifest.contributions?.server).toBe('./dist/simulator-runtime-server.js');
     expect(manifest.panels?.default).toMatchObject({
       title: 'i18n:cocos-ai-bridge.panel_title',
       type: 'simple',

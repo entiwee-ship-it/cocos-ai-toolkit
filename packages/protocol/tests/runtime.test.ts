@@ -6,6 +6,7 @@ import {
   RuntimeCaptureOptionsSchema,
   RuntimeCaptureResultSchema,
   RuntimeComponentSnapshotSchema,
+  RuntimePropertyWriteSnapshotSchema,
   RuntimeSampleWindowInputSchema,
   RuntimeSampleWindowSnapshotSchema,
   RuntimeNodeSnapshotSchema,
@@ -14,6 +15,35 @@ import {
 } from '../src/runtime.js';
 
 describe('运行态协议', () => {
+  it('接受 Android Native 会话身份与运行时属性回读结果', () => {
+    expect(PreviewSessionSchema.parse({
+      sessionId: 'android-1',
+      projectId: 'proj1',
+      url: 'android://runtime',
+      pageSource: 'native-runtime',
+      platform: 'android-emulator',
+      state: 'ready',
+      deviceId: 'emulator-5554',
+      appPid: 3799,
+      inspectorDevicePort: 43086,
+      inspectorLocalPort: 16086,
+      runtimeTransport: 'android-emulator-grpc+v8-inspector',
+      actualResolution: { width: 2400, height: 1080 },
+      launchedAt: '2026-09-05T00:00:00.000Z'
+    })).toMatchObject({ platform: 'android-emulator', pageSource: 'native-runtime' });
+    expect(RuntimePropertyWriteSnapshotSchema.parse({
+      source: 'preview-runtime',
+      previewSessionId: 'android-1',
+      nodeUuid: 'node-1',
+      componentType: 'Label',
+      property: 'string',
+      value: '新文本',
+      readback: '新文本',
+      revision: 12,
+      capturedAt: '2026-09-05T00:00:01.000Z'
+    })).toBeTruthy();
+  });
+
   it('接受带数据来源与动态节点标注的运行时节点快照', () => {
     expect(RuntimeNodeSnapshotSchema.parse({
       source: 'preview-runtime',

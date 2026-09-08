@@ -31,6 +31,15 @@
     }
   },
   "contributions": {
+    "preview": {
+      "simulator": {
+        "methods": "./dist/simulator-runtime-preview.js",
+        "hooks": {
+          "settings": "onSettingsSimulator"
+        }
+      }
+    },
+    "server": "./dist/simulator-runtime-server.js",
     "menu": [
       {
         "path": "Cocos AI",

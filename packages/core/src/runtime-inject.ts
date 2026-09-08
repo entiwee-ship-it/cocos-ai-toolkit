@@ -229,6 +229,59 @@ function serializeRuntimeValue(value: unknown, depth: number, seen: Set<unknown>
   return null;
 }
 
+/** 收集公开 own/prototype 属性，覆盖 Cocos 组件的 getter/setter。 */
+function listRuntimeProperties(value: unknown): string[] {
+  const properties = new Set<string>();
+  const root = value;
+  let cursor = value as Record<string, unknown> | null;
+  while (cursor && cursor !== Object.prototype) {
+    for (const key of Object.getOwnPropertyNames(cursor)) {
+      if (key === 'constructor' || key.startsWith('_') || key.startsWith('__')) continue;
+      const descriptor = Object.getOwnPropertyDescriptor(cursor, key);
+      if (!descriptor) continue;
+      if (typeof descriptor.value === 'function' && !descriptor.get && !descriptor.set && cursor !== root) continue;
+      properties.add(key);
+    }
+    cursor = Object.getPrototypeOf(cursor) as Record<string, unknown> | null;
+  }
+  return [...properties];
+}
+
+/** 运行时树的轻量稳定哈希；用于 UI/AI 判断 revision 是否变化。 */
+function hashRuntimeText(value: string): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
+}
+
+function readRuntimeSceneState(scene: Record<string, unknown>): { sceneEpoch: number; revision: number; sceneUuid?: string } {
+  const globalObject = globalThis as Record<string, unknown>;
+  const sceneUuid = typeof scene.uuid === 'string' && scene.uuid ? scene.uuid : undefined;
+  const identity = `${sceneUuid ?? ''}:${typeof scene.name === 'string' ? scene.name : ''}`;
+  const key = '__cocosAiRuntimeSceneState__';
+  const previous = globalObject[key] as { identity?: string; epoch?: number } | undefined;
+  const sceneEpoch = previous?.identity === identity ? (previous.epoch ?? 1) : (previous?.epoch ?? 0) + 1;
+  globalObject[key] = { identity, epoch: sceneEpoch };
+
+  const signature = (node: Record<string, unknown>): string => {
+    const components = Array.isArray(node.components)
+      ? node.components.map((component) => readRuntimeComponentType(component)).join(',')
+      : '';
+    const children = Array.isArray(node.children)
+      ? node.children.map((child) => signature(child as Record<string, unknown>)).join('|')
+      : '';
+    return `${typeof node.uuid === 'string' ? node.uuid : ''}:${typeof node.name === 'string' ? node.name : ''}:${node.active !== false}:${components}[${children}]`;
+  };
+  return {
+    sceneEpoch,
+    revision: hashRuntimeText(signature(scene)),
+    ...(sceneUuid ? { sceneUuid } : {})
+  };
+}
+
 /**
  * 序列化运行时场景层级：节点身份、active、组件类型、动态创建标注；
  * 深度与节点数上限截断并显式标注（AI 必须知晓读取不完整）。
@@ -255,6 +308,7 @@ async function readRuntimeHierarchy(options: {
   };
   const scene = cc?.director?.getScene?.();
   if (!scene) return { found: false, reason: 'scene-missing' };
+  const sceneState = readRuntimeSceneState(scene);
 
   // 指定路径时从目标节点开始序列化；未命中沿用组件定位的候选子节点证据。
   let root = scene;
@@ -282,11 +336,18 @@ async function readRuntimeHierarchy(options: {
     maxNodes: typeof options.maxNodes === 'number' && options.maxNodes > 0 ? Math.floor(options.maxNodes) : 2_000
   };
 
-  const serializeNode = (node: Record<string, unknown>, depth: number): Record<string, unknown> => {
+  const serializeNode = (
+    node: Record<string, unknown>,
+    depth: number,
+    path: string,
+    parentUuid?: string
+  ): Record<string, unknown> => {
     state.nodeCount += 1;
     const result: Record<string, unknown> = {
       uuid: typeof node.uuid === 'string' ? node.uuid : '',
       name: typeof node.name === 'string' ? node.name : '',
+      path,
+      ...(parentUuid ? { parentUuid } : {}),
       active: node.active !== false,
       // 场景序列化来源的节点带 fileId（_id），运行时动态创建的为空。
       dynamic: !node._id,
@@ -311,19 +372,45 @@ async function readRuntimeHierarchy(options: {
         state.truncated = true;
         break;
       }
-      serializedChildren.push(serializeNode(child, depth + 1));
+      const childName = typeof child.name === 'string' ? child.name : '';
+      const sameNameIndex = children
+        .slice(0, children.indexOf(child))
+        .filter((sibling) => sibling.name === childName).length;
+      const childPath = `${path}/${encodeURIComponent(childName)}~${sameNameIndex}`;
+      serializedChildren.push(serializeNode(
+        child,
+        depth + 1,
+        childPath,
+        typeof node.uuid === 'string' ? node.uuid : undefined
+      ));
     }
     if (serializedChildren.length > 0) result.children = serializedChildren;
     return result;
   };
 
-  const tree = serializeNode(root, 1);
+  const rootName = typeof root.name === 'string' ? root.name : '';
+  const tree = serializeNode(root, 1, `/${encodeURIComponent(rootName)}~0`);
+  tree.sceneUuid = sceneState.sceneUuid;
+  tree.sceneEpoch = sceneState.sceneEpoch;
+  tree.revision = sceneState.revision;
   tree.nodeCount = state.nodeCount;
   if (state.truncated) tree.truncated = true;
   return tree;
 }
 
-/** 按 `/` 分隔的名称路径查找节点；首段与场景名相同则跳过。 */
+/** 读取兼容旧名称路径与 `/url-encoded-name~same-name-index` 稳定路径的段。 */
+function parseRuntimePathSegment(segment: string): { name: string; sameNameIndex: number } {
+  const matched = /^(.*)~(\d+)$/.exec(segment);
+  const encodedName = matched?.[1] ?? segment;
+  const sameNameIndex = matched ? Number(matched[2]) : 0;
+  try {
+    return { name: decodeURIComponent(encodedName), sameNameIndex };
+  } catch {
+    return { name: encodedName, sameNameIndex };
+  }
+}
+
+/** 按 `/` 分隔的名称/稳定路径查找节点；首段与场景名相同则跳过。 */
 function findRuntimeNodeByPath(
   scene: Record<string, unknown>,
   path: string,
@@ -331,10 +418,13 @@ function findRuntimeNodeByPath(
 ): { node?: Record<string, unknown>; failedAtParent?: Record<string, unknown>; inactive?: boolean } {
   const segments = path.split('/').filter((segment) => segment.length > 0);
   let current = scene;
-  let index = segments[0] === (scene.name as string) ? 1 : 0;
+  const first = segments[0] ? parseRuntimePathSegment(segments[0]) : undefined;
+  let index = first && first.name === (scene.name as string) && first.sameNameIndex === 0 ? 1 : 0;
   for (; index < segments.length; index += 1) {
+    const segment = parseRuntimePathSegment(segments[index]);
     const children = Array.isArray(current.children) ? current.children as Array<Record<string, unknown>> : [];
-    const next = children.find((child) => child.name === segments[index]);
+    const matches = children.filter((child) => child.name === segment.name);
+    const next = matches[segment.sameNameIndex] ?? (segment.sameNameIndex === 0 ? matches[0] : undefined);
     if (!next) return { failedAtParent: current };
     if (!includeInactive && (current.active === false || next.active === false)) {
       return { failedAtParent: current, inactive: true };
@@ -411,7 +501,7 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
   const skipped: string[] = [];
   const seen = new Set<unknown>([component]);
   const properties: Record<string, unknown> = {};
-  for (const key of Object.keys(component)) {
+  for (const key of listRuntimeProperties(component)) {
     if (key === 'constructor' || key.startsWith('__')) continue;
     let value: unknown;
     try {
@@ -781,6 +871,86 @@ async function readRuntimeProperty(options: { path: string; componentType: strin
   };
 }
 
+function isWritableRuntimePropertyPath(property: string): boolean {
+  const segments = property.split('.').filter((segment) => segment.length > 0);
+  return segments.length > 0 && segments.every((segment) => (
+    !segment.startsWith('_')
+    && segment !== '__proto__'
+    && segment !== 'prototype'
+    && segment !== 'constructor'
+  ));
+}
+
+function findRuntimePropertyDescriptor(target: unknown, key: string): PropertyDescriptor | undefined {
+  let cursor = target as object | null;
+  while (cursor && cursor !== Object.prototype) {
+    const descriptor = Object.getOwnPropertyDescriptor(cursor, key);
+    if (descriptor) return descriptor;
+    cursor = Object.getPrototypeOf(cursor) as object | null;
+  }
+  return undefined;
+}
+
+/** 写入公开运行时属性并立即回读；默认拒绝内部字段与原型污染路径。 */
+async function writeRuntimeProperty(options: {
+  path: string;
+  componentType: string;
+  property: string;
+  value: unknown;
+}): Promise<Record<string, unknown>> {
+  const located = await locateRuntimeComponent({ path: options.path, componentType: options.componentType });
+  if (located.found !== true) return located;
+  if (!isWritableRuntimePropertyPath(options.property) || !isRuntimeArgsSafe(options.value, 1)) {
+    return { found: false, reason: 'property-write-not-allowed', nodeUuid: located.nodeUuid, property: options.property };
+  }
+  const segments = options.property.split('.').filter((segment) => segment.length > 0);
+  const component = located.component as Record<string, unknown>;
+  let owner: Record<string, unknown> = component;
+  for (const segment of segments.slice(0, -1)) {
+    const next = owner[segment];
+    if (next === null || typeof next !== 'object') {
+      return { found: false, reason: 'property-parent-not-found', nodeUuid: located.nodeUuid, property: options.property };
+    }
+    owner = next as Record<string, unknown>;
+  }
+  const key = segments[segments.length - 1];
+  const descriptor = findRuntimePropertyDescriptor(owner, key);
+  if (descriptor && descriptor.set === undefined && descriptor.writable === false) {
+    return { found: false, reason: 'property-read-only', nodeUuid: located.nodeUuid, property: options.property };
+  }
+  try {
+    owner[key] = options.value;
+    const readback = owner[key];
+    const globalObject = globalThis as {
+      System?: { import?: (name: string) => Promise<Record<string, unknown>> };
+    };
+    const scene = (await globalObject.System!.import!('cc') as {
+      director?: { getScene?: () => Record<string, unknown> | null };
+    }).director?.getScene?.();
+    const sceneState = scene ? readRuntimeSceneState(scene) : undefined;
+    return {
+      found: true,
+      written: true,
+      nodeUuid: located.nodeUuid,
+      componentType: located.actualComponentType,
+      property: options.property,
+      value: serializeRuntimeValue(options.value, 1, new Set()),
+      readback: serializeRuntimeValue(readback, 1, new Set([component])),
+      ...(sceneState ? { revision: sceneState.revision } : {})
+    };
+  } catch (error) {
+    return {
+      found: true,
+      written: false,
+      nodeUuid: located.nodeUuid,
+      componentType: located.actualComponentType,
+      property: options.property,
+      reason: 'property-write-failed',
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 /**
  * 运行时实例化 Prefab 并挂到指定节点（仅运行时，不写工程文件）。
  * 用于 UI 效果的快速预览验证。
@@ -852,7 +1022,11 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   readRuntimeResolution,
   readRuntimeComponentType,
   serializeRuntimeValue,
+  listRuntimeProperties,
+  hashRuntimeText,
+  readRuntimeSceneState,
   readRuntimeHierarchy,
+  parseRuntimePathSegment,
   findRuntimeNodeByPath,
   readRuntimeComponent,
   locateRuntimeComponent,
@@ -862,6 +1036,9 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   invokeRuntimeComponentMethod,
   sampleRuntimeWindow,
   readRuntimeProperty,
+  isWritableRuntimePropertyPath,
+  findRuntimePropertyDescriptor,
+  writeRuntimeProperty,
   readCanvasRect,
   readRuntimeNodeBounds,
   instantiateRuntimePrefab

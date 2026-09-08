@@ -12,15 +12,34 @@ export const ResolutionSchema = z.object({
   height: z.number().int().positive()
 });
 
-/** Preview 页面会话：仅支持工具自 launch 的页面（pageSource 固定）。 */
+/** 运行会话平台；Android 是 Native Workbench 的默认验收平台。 */
+export const RuntimePlatformSchema = z.enum([
+  'browser',
+  'android-emulator',
+  'creator-simulator'
+]);
+
+/** Preview/Native 会话：结构化数据始终来自同一个真实运行进程。 */
 export const PreviewSessionSchema = z.object({
   sessionId: z.string().min(1),
   projectId: z.string().min(1),
   editorInstanceId: z.string().min(1).optional(),
-  /** 实际打开的 URL（自 launch 一律规范化为 127.0.0.1）。 */
+  /** 浏览器为真实 URL，Native 为可追踪的 synthetic URL。 */
   url: z.string().url(),
-  pageSource: z.literal('self-launched'),
+  pageSource: z.enum(['self-launched', 'native-runtime']),
+  platform: RuntimePlatformSchema.default('browser'),
   state: z.enum(['launching', 'ready', 'closed', 'lost']),
+  deviceId: z.string().min(1).optional(),
+  appPid: z.number().int().positive().optional(),
+  /** 同一 Creator Simulator 进程内运行代理的实例身份。 */
+  runtimeInstanceId: z.string().min(1).optional(),
+  inspectorDevicePort: z.number().int().positive().optional(),
+  inspectorLocalPort: z.number().int().positive().optional(),
+  runtimeTransport: z.string().min(1).optional(),
+  /** 场景 epoch 与节点 revision 由真实运行进程计算。 */
+  sceneUuid: z.string().min(1).optional(),
+  sceneEpoch: z.number().int().nonnegative().optional(),
+  revision: z.number().int().nonnegative().optional(),
   /** 请求分辨率（可选）。 */
   requestedResolution: ResolutionSchema.optional(),
   /** 实际生效分辨率：受页面容器约束可能与请求值不同，必须回传。 */
@@ -37,6 +56,9 @@ export const RuntimeComponentSummarySchema = z.object({
 export interface RuntimeNodeInput {
   uuid: string;
   name: string;
+  /** 同名节点带稳定索引的运行时路径，例如 /Canvas~0/Button~1。 */
+  path?: string;
+  parentUuid?: string;
   active: boolean;
   /** 动态创建节点（非场景序列化来源），与编辑态节点严格区分。 */
   dynamic: boolean;
@@ -47,10 +69,12 @@ export interface RuntimeNodeInput {
 
 /** 运行时节点（递归）。 */
 export const RuntimeNodeSchema: z.ZodType<RuntimeNodeInput> = z.lazy(() =>
-  z.object({
-    uuid: z.string(),
-    name: z.string(),
-    active: z.boolean(),
+      z.object({
+        uuid: z.string(),
+        name: z.string(),
+        path: z.string().min(1).optional(),
+        parentUuid: z.string().min(1).optional(),
+        active: z.boolean(),
     dynamic: z.boolean(),
     components: z.array(RuntimeComponentSummarySchema),
     children: z.array(RuntimeNodeSchema).optional(),
@@ -65,6 +89,9 @@ export const RuntimeNodeSnapshotSchema = z.object({
   previewSessionId: z.string().min(1),
   capturedAt: z.string().min(1),
   root: RuntimeNodeSchema,
+  sceneUuid: z.string().min(1).optional(),
+  sceneEpoch: z.number().int().nonnegative().optional(),
+  revision: z.number().int().nonnegative().optional(),
   /** 实际序列化的节点总数。 */
   nodeCount: z.number().int().positive().optional(),
   /** 整树被截断标记。 */
@@ -78,6 +105,20 @@ export const RuntimeComponentSnapshotSchema = z.object({
   nodeUuid: z.string().min(1),
   componentType: z.string().min(1),
   properties: z.record(z.string(), z.unknown()),
+  revision: z.number().int().nonnegative().optional(),
+  capturedAt: z.string().min(1)
+});
+
+/** 运行时公开属性写入结果；写入必须携带回读值。 */
+export const RuntimePropertyWriteSnapshotSchema = z.object({
+  source: z.literal('preview-runtime'),
+  previewSessionId: z.string().min(1),
+  nodeUuid: z.string().min(1),
+  componentType: z.string().min(1),
+  property: z.string().min(1),
+  value: z.unknown(),
+  readback: z.unknown(),
+  revision: z.number().int().nonnegative().optional(),
   capturedAt: z.string().min(1)
 });
 
@@ -294,9 +335,11 @@ export const ScenarioReportSchema = z.object({
 });
 
 export type Resolution = z.infer<typeof ResolutionSchema>;
+export type RuntimePlatform = z.infer<typeof RuntimePlatformSchema>;
 export type PreviewSession = z.infer<typeof PreviewSessionSchema>;
 export type RuntimeNodeSnapshot = z.infer<typeof RuntimeNodeSnapshotSchema>;
 export type RuntimeComponentSnapshot = z.infer<typeof RuntimeComponentSnapshotSchema>;
+export type RuntimePropertyWriteSnapshot = z.infer<typeof RuntimePropertyWriteSnapshotSchema>;
 export type RuntimeSampleWindowMode = z.infer<typeof RuntimeSampleWindowModeSchema>;
 export type RuntimeSampleWindowInput = z.infer<typeof RuntimeSampleWindowInputSchema>;
 export type RuntimeSampleFrame = z.infer<typeof RuntimeSampleFrameSchema>;

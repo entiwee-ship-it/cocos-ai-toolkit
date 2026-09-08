@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ConsoleBuffer,
   normalizePreviewUrl,
@@ -300,6 +300,49 @@ describe('RuntimeDriver', () => {
     expect(browser.closed).toBe(true);
     expect(() => driver.get('s6')).toThrow('PREVIEW_SESSION_NOT_FOUND');
     expect(driver.list()).toEqual([]);
+    await driver.dispose();
+  });
+
+  it('Native 会话保留平台身份并把输入交给真实画布适配器', async () => {
+    const { page } = createFakePage({ actualResolution: { width: 2400, height: 1080 } });
+    const dispatchCanvasInput = vi.fn(async () => ({
+      dispatched: true as const,
+      inputType: 'tap',
+      pageX: 120,
+      pageY: 54
+    }));
+    page.dispatchCanvasInput = dispatchCanvasInput;
+    const browser = createFakeBrowser(page) as RuntimeBrowser & {
+      getSessionMetadata: () => Record<string, unknown>;
+    };
+    browser.getSessionMetadata = () => ({
+      platform: 'android-emulator',
+      pageSource: 'native-runtime',
+      deviceId: 'emulator-5554',
+      appPid: 3799,
+      inspectorDevicePort: 43086,
+      inspectorLocalPort: 16086,
+      runtimeTransport: 'android-emulator-grpc+v8-inspector'
+    });
+    const driver = new RuntimeDriver({
+      launcher: async () => browser,
+      createSessionId: () => 'native-1'
+    });
+    const session = await driver.launch({
+      projectId: 'proj1',
+      platform: 'android-emulator',
+      native: { packageName: 'com.example.game' }
+    });
+    expect(session).toMatchObject({
+      platform: 'android-emulator',
+      pageSource: 'native-runtime',
+      deviceId: 'emulator-5554',
+      appPid: 3799,
+      inspectorDevicePort: 43086
+    });
+    await expect(driver.dispatchInput('native-1', { inputType: 'tap', x: 10, y: 20 }))
+      .resolves.toMatchObject({ dispatched: true, pageX: 120, pageY: 54 });
+    expect(dispatchCanvasInput).toHaveBeenCalledOnce();
     await driver.dispose();
   });
 

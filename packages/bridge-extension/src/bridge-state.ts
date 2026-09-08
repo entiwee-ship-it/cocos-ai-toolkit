@@ -21,7 +21,10 @@ export const BRIDGE_CAPABILITIES = [
   'probe.refreshAsset',
   'probe.previewOpen',
   'probe.previewStatus',
-  'probe.previewReload'
+  'probe.previewReload',
+  'probe.simulatorOpen',
+  'probe.simulatorRuntimeStatus',
+  'probe.simulatorRuntimeEvaluate'
 ] as const;
 
 /**

@@ -21,12 +21,22 @@ export function assembleRuntimeNodeSnapshot(
   const record = root && typeof root === 'object' && !Array.isArray(root)
     ? root as Record<string, unknown>
     : {};
-  const { nodeCount, truncated, ...rootNode } = record;
+  const {
+    nodeCount,
+    truncated,
+    sceneUuid,
+    sceneEpoch,
+    revision,
+    ...rootNode
+  } = record;
   return RuntimeNodeSnapshotSchema.parse({
     source: 'preview-runtime',
     previewSessionId,
     capturedAt: now().toISOString(),
     root: rootNode,
+    ...(typeof sceneUuid === 'string' && sceneUuid ? { sceneUuid } : {}),
+    ...(typeof sceneEpoch === 'number' ? { sceneEpoch } : {}),
+    ...(typeof revision === 'number' ? { revision } : {}),
     ...(typeof nodeCount === 'number' ? { nodeCount } : {}),
     ...(truncated === true ? { truncated: true } : {})
   });

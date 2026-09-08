@@ -29,7 +29,7 @@ Creator Bridge 使用 Windows Named Pipe 接受单次短连接，不需要启动
 `cocos_prefab_create` 复用直写通道执行 `prefab.create_from_node`，自动保存并重开验证重建后的 Prefab 实例；若重开后 dirty，会自动补一次保存并再次确认 clean，仍 dirty 才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`cocos_document_save` 保存后仍 dirty 会返回 `DOCUMENT_DIRTY_AFTER_SAVE`，都不能当成成功。
 10. 需要视觉或交互验证时运行 Preview 工具，最后用 `cocos_preview_stop` 清理会话。
 
-Creator 未打开或 Bridge 未启用时，MCP 仍会正常注册 42 个公开工具；`cocos_editor_list` 返回空 `editors` 和 `backend` IPC 状态。Creator Bridge 发布 Named Pipe 端点后，同一 MCP 任务会立即发现，不需要重新加载工具表。其它工具在 Creator 不可达时通过 `structuredContent.error.code=CREATOR_IPC_UNAVAILABLE` 返回可重试错误。
+Creator 未打开或 Bridge 未启用时，MCP 仍会正常注册 43 个公开工具；`cocos_editor_list` 返回空 `editors` 和 `backend` IPC 状态。Creator Bridge 发布 Named Pipe 端点后，同一 MCP 任务会立即发现，不需要重新加载工具表。其它工具在 Creator 不可达时通过 `structuredContent.error.code=CREATOR_IPC_UNAVAILABLE` 返回可重试错误。
 
 `cocos_nodes_read` 默认并发 4，仍保持输入顺序、单项错误隔离、32 项上限和输出预算。所有工具失败都同时提供人读文本与 `structuredContent.error`；程序应读取 `code/details/stage/nextAction/retryable`。
 

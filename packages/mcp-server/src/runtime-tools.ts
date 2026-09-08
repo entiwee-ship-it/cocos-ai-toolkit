@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   PreviewSessionSchema,
   RuntimeNodeSnapshotSchema,
+  RuntimePlatformSchema,
+  RuntimePropertyWriteSnapshotSchema,
   RuntimeSampleWindowInputSchema,
   RuntimeSampleWindowSnapshotSchema,
   ScenarioStepSchema,
@@ -39,6 +41,27 @@ const NodePathComponentInput = {
 const ResolutionInput = zod.object({
   width: zod.number().int().positive(),
   height: zod.number().int().positive()
+});
+
+const NativeLaunchInput = zod.object({
+  packageName: zod.string().min(1),
+  activity: zod.string().min(1).optional(),
+  apkPath: zod.string().min(1).optional(),
+  adbPath: zod.string().min(1).optional(),
+  deviceId: zod.string().min(1).optional(),
+  inspectorPort: zod.number().int().positive().optional(),
+  inspectorPortOffset: zod.number().int().positive().optional(),
+  grpcPort: zod.number().int().positive().optional(),
+  grpcToken: zod.string().min(1).optional(),
+  rotation: zod.enum(['portrait', 'landscape', 'reverse-portrait', 'reverse-landscape']).optional(),
+  screenSize: ResolutionInput.optional(),
+  startTimeoutMs: zod.number().int().positive().max(120_000).optional()
+});
+const CreatorSimulatorLaunchInput = zod.object({
+  windowTitle: zod.string().min(1).optional(),
+  ffmpegPath: zod.string().min(1).optional(),
+  screenSize: ResolutionInput.optional(),
+  startTimeoutMs: zod.number().int().positive().max(120_000).optional()
 });
 
 const CropInput = zod.object({
@@ -80,6 +103,18 @@ function assertPreviewCapability(editor: { capabilities: string[] }): void {
   }
 }
 
+function assertCreatorSimulatorCapabilities(editor: { capabilities: string[] }): void {
+  for (const capability of [
+    'probe.simulatorOpen',
+    'probe.simulatorRuntimeStatus',
+    'probe.simulatorRuntimeEvaluate'
+  ]) {
+    if (!editor.capabilities.includes(capability)) {
+      throw new Error(`BRIDGE_CAPABILITY_MISSING:${capability}`);
+    }
+  }
+}
+
 /**
  * 运行态工具服务：经共享 Creator Client 调用当前 MCP 进程内的运行态控制器。
  */
@@ -104,14 +139,19 @@ export class CocosRuntimeToolService {
     editorInstanceId?: string;
     resolution?: { width: number; height: number };
     channel?: string;
+    platform?: 'browser' | 'android-emulator' | 'creator-simulator';
+    native?: unknown;
   }) {
     const editor = await this.editors.resolveEditor(input);
-    assertPreviewCapability(editor);
+    if (input.platform === 'creator-simulator') assertCreatorSimulatorCapabilities(editor);
+    else if (input.platform !== 'android-emulator') assertPreviewCapability(editor);
     const session = await this.options.creatorClient.request('server.previewLaunch', {
       selector: { projectId: editor.projectId, editorInstanceId: editor.editorInstanceId },
       params: {
         ...(input.resolution ? { resolution: input.resolution } : {}),
-        ...(input.channel ? { channel: input.channel } : {})
+        ...(input.channel ? { channel: input.channel } : {}),
+        ...(input.platform ? { platform: input.platform } : {}),
+        ...(input.native !== undefined ? { native: input.native } : {})
       }
     });
     const output = PreviewSessionSchema.parse(session);
@@ -158,6 +198,18 @@ export class CocosRuntimeToolService {
     });
     const output = zod.record(zod.string(), zod.unknown()).parse(result);
     return output;
+  }
+
+  /** 写入运行时公开属性并返回立即回读值；不会修改 Scene/Prefab 文件。 */
+  async setRuntimeProperty(input: {
+    sessionId: string;
+    path: string;
+    componentType: string;
+    property: string;
+    value: unknown;
+  }) {
+    const result = await this.options.creatorClient.request('server.runtimeSetProperty', input);
+    return RuntimePropertyWriteSnapshotSchema.parse(result);
   }
 
   /** 读取运行时 Console（游标增量 + 级别过滤）。 */
@@ -351,6 +403,7 @@ export const COCOS_RUNTIME_READONLY_TOOL_NAMES = [
 export const COCOS_RUNTIME_ACTION_TOOL_NAMES = [
   'cocos_preview_launch',
   'cocos_preview_stop',
+  'cocos_runtime_set_property',
   'cocos_runtime_invoke_method',
   'cocos_runtime_sample_window',
   'cocos_runtime_dispatch_input',
@@ -439,12 +492,14 @@ export function registerCocosRuntimeActionTools(
   service: CocosRuntimeToolService
 ): void {
   server.registerTool('cocos_preview_launch', {
-    description: '启动 Preview 并打开工具自管的浏览器页面（返回就绪会话与实际生效分辨率）。',
+    description: '启动真实运行会话；platform=android-emulator 时连接 Android APK/V8 Inspector/Emulator gRPC，返回同一进程身份。',
     inputSchema: {
       projectId: zod.string().min(1),
       editorInstanceId: zod.string().min(1).optional(),
       resolution: ResolutionInput.optional(),
-      channel: zod.enum(['chrome', 'msedge']).optional()
+      channel: zod.enum(['chrome', 'msedge']).optional(),
+      platform: RuntimePlatformSchema.optional(),
+      native: zod.union([NativeLaunchInput, CreatorSimulatorLaunchInput]).optional()
     },
     outputSchema: PreviewSessionSchema,
     annotations: WRITE_ANNOTATIONS
@@ -458,6 +513,17 @@ export function registerCocosRuntimeActionTools(
     outputSchema: RuntimeRecordOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(service.stopPreview(input)));
+
+  server.registerTool('cocos_runtime_set_property', {
+    description: '修改同一真实运行进程中的公开组件属性并立即回读；只影响当前运行会话，不写 Scene/Prefab 文件。',
+    inputSchema: {
+      ...NodePathComponentInput,
+      property: zod.string().min(1),
+      value: zod.unknown()
+    },
+    outputSchema: RuntimePropertyWriteSnapshotSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(service.setRuntimeProperty(input)));
 
   server.registerTool('cocos_runtime_invoke_method', {
     description: '调用运行时组件方法（白名单参数、生命周期与危险方法黑名单、返回值序列化回传）。',
