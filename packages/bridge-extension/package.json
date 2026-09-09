@@ -2,10 +2,10 @@
   "package_version": 2,
   "name": "cocos-ai-bridge",
   "title": "Cocos AI Bridge",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "i18n:cocos-ai-bridge.description",
   "author": "Enti",
-  "date": "2026-09-08",
+  "date": "2026-09-09",
   "platform": [
     "win32"
   ],

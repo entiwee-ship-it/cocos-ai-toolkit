@@ -91,8 +91,8 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).not.toContain("parseFloat(styles.getPropertyValue(property)) / 100 * window.innerWidth");
     expect(workbenchStyle).toContain('.tree-children::before');
     expect(workbenchStyle).toContain('.tree-row.parent .tree-name');
-    expect(nativeHost).toContain('StartBoundsTracking();');
-    expect(nativeHost).toContain('Thread.Sleep(8);');
+    expect(nativeHost).toContain('SetParentChecked(simulatorWindow, parentWindow);');
+    expect(nativeHost).not.toContain('StartBoundsTracking');
   });
 
   it('为 Creator 本地扩展管理器提供双语摘要和详情元数据', () => {
@@ -114,7 +114,7 @@ describe('bridge extension manifest', () => {
     expect(manifest).toMatchObject({
       description: 'i18n:cocos-ai-bridge.description',
       author: 'Enti',
-      date: '2026-09-08',
+      date: '2026-09-09',
       platform: ['win32'],
       editor: '>=3.8.0 <3.9.0'
     });

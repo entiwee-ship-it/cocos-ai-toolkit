@@ -33,8 +33,8 @@ interface ToolCatalogEntry {
 }
 
 const TOOL_CATALOG = require('../tool-catalog.json') as ToolCatalogEntry[];
-const BRIDGE_VERSION = '0.9.4';
-const BRIDGE_RELEASE_DATE = '2026-09-08';
+const BRIDGE_VERSION = '0.9.5';
+const BRIDGE_RELEASE_DATE = '2026-09-09';
 
 type JsonObject = Record<string, unknown>;
 

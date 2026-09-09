@@ -84,7 +84,7 @@ describe('Bridge 扩展生命周期控制台日志', () => {
     expect(loadMessage).toBeDefined();
     const details = JSON.parse(loadMessage!.slice(loadMessage!.indexOf('{'))) as Record<string, unknown>;
     expect(details).toMatchObject({
-      扩展版本: '0.9.4',
+      扩展版本: '0.9.5',
       Creator版本: '3.8.8',
       项目ID: 'project-id',
       项目路径: 'E:/project',
