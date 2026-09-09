@@ -8,6 +8,7 @@ internal static class SimulatorEmbedHost
 {
     private const int GwlStyle = -16;
     private const int GwlExStyle = -20;
+    private const int GwlHwndParent = -8;
     private const long WsChild = 0x40000000L;
     private const long WsPopup = unchecked((long)0x80000000L);
     private const long WsVisible = 0x10000000L;
@@ -37,6 +38,9 @@ internal static class SimulatorEmbedHost
     private static Rect originalRect;
     private static int simulatorProcessId;
     private static bool attached;
+    private static volatile bool trackingBounds;
+    private static volatile double[] latestBounds;
+    private static Thread boundsThread;
 
     private delegate bool EnumWindowsCallback(IntPtr window, IntPtr state);
 
@@ -47,6 +51,13 @@ internal static class SimulatorEmbedHost
         public int Top;
         public int Right;
         public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point
+    {
+        public int X;
+        public int Y;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -77,6 +88,9 @@ internal static class SimulatorEmbedHost
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr window);
 
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr window);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int maxCount);
 
@@ -88,9 +102,6 @@ internal static class SimulatorEmbedHost
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetParent(IntPtr window);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SetParent(IntPtr child, IntPtr newParent);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr GetWindowLongPtr64(IntPtr window, int index);
@@ -109,6 +120,9 @@ internal static class SimulatorEmbedHost
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetClientRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool ClientToScreen(IntPtr window, ref Point point);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(
@@ -153,8 +167,10 @@ internal static class SimulatorEmbedHost
             string[] parentTitles = Encoding.UTF8.GetString(Convert.FromBase64String(args[2])).Split('\n');
             parentWindow = WaitForWindow(0, parentTitles, 10000);
             simulatorWindow = WaitForSimulatorWindow(requestedSimulatorProcessId, parentProcessId, 10000);
+            latestBounds = ParseBounds(args, 3);
             Attach();
-            UpdateBounds(ParseBounds(args, 3));
+            UpdateBounds(latestBounds, true);
+            StartBoundsTracking();
             WriteLine("READY|" + parentWindow.ToInt64() + "|" + simulatorWindow.ToInt64() + "|" + simulatorProcessId);
 
             string line;
@@ -162,6 +178,7 @@ internal static class SimulatorEmbedHost
             {
                 if (line == "DETACH")
                 {
+                    StopBoundsTracking();
                     Detach();
                     WriteLine("DETACHED");
                     continue;
@@ -171,7 +188,7 @@ internal static class SimulatorEmbedHost
                 {
                     string[] parts = line.Split('|');
                     if (parts.Length != 7) throw new InvalidOperationException("INVALID_BOUNDS_COMMAND");
-                    UpdateBounds(ParseBounds(parts, 1));
+                    latestBounds = ParseBounds(parts, 1);
                 }
             }
             return 0;
@@ -183,6 +200,7 @@ internal static class SimulatorEmbedHost
         }
         finally
         {
+            StopBoundsTracking();
             try { Detach(); } catch { }
         }
     }
@@ -196,7 +214,7 @@ internal static class SimulatorEmbedHost
         attached = true;
         try
         {
-            // SDL 渲染窗口保持顶层语义，由 Win32 父窗口关系同步位置与生命周期。
+            // SDL 渲染窗口保持顶层语义，由 Workbench owner 统一层级与生命周期。
             long style = originalStyle.ToInt64();
             style &= ~(WsChild | WsCaption | WsThickFrame | WsSysMenu | WsMinimizeBox | WsMaximizeBox | WsClipChildren);
             style |= WsPopup | WsVisible | WsClipSiblings;
@@ -204,7 +222,7 @@ internal static class SimulatorEmbedHost
             exStyle &= ~(WsExDlgModalFrame | WsExWindowEdge | WsExClientEdge | WsExAppWindow);
             SetWindowLongPtrChecked(simulatorWindow, GwlStyle, new IntPtr(style));
             SetWindowLongPtrChecked(simulatorWindow, GwlExStyle, new IntPtr(exStyle));
-            SetParentChecked(simulatorWindow, parentWindow);
+            SetWindowLongPtrChecked(simulatorWindow, GwlHwndParent, parentWindow);
         }
         catch
         {
@@ -213,11 +231,40 @@ internal static class SimulatorEmbedHost
         }
     }
 
-    private static void UpdateBounds(double[] bounds)
+    private static void StartBoundsTracking()
+    {
+        trackingBounds = true;
+        boundsThread = new Thread(delegate()
+        {
+            while (trackingBounds)
+            {
+                try
+                {
+                    double[] bounds = latestBounds;
+                    if (bounds != null) UpdateBounds(bounds, false);
+                }
+                catch { }
+                Thread.Sleep(8);
+            }
+        });
+        boundsThread.IsBackground = true;
+        boundsThread.Start();
+    }
+
+    private static void StopBoundsTracking()
+    {
+        trackingBounds = false;
+        Thread thread = boundsThread;
+        boundsThread = null;
+        if (thread != null && thread != Thread.CurrentThread) thread.Join(250);
+    }
+
+    private static void UpdateBounds(double[] bounds, bool frameChanged)
     {
         if (!attached || !IsWindow(parentWindow) || !IsWindow(simulatorWindow)) {
             throw new InvalidOperationException("EMBED_WINDOW_LOST");
         }
+        if (IsIconic(parentWindow)) return;
         Rect client;
         if (!GetClientRect(parentWindow, out client)) ThrowLastError("GET_PARENT_CLIENT_RECT_FAILED");
         double scaleX = (client.Right - client.Left) / bounds[4];
@@ -226,14 +273,27 @@ internal static class SimulatorEmbedHost
         int y = (int)Math.Round(bounds[1] * scaleY);
         int width = Math.Max(1, (int)Math.Round(bounds[2] * scaleX));
         int height = Math.Max(1, (int)Math.Round(bounds[3] * scaleY));
+        Point origin = new Point { X = x, Y = y };
+        if (!ClientToScreen(parentWindow, ref origin)) ThrowLastError("CLIENT_TO_SCREEN_FAILED");
+        Rect current;
+        if (
+            !frameChanged
+            && GetWindowRect(simulatorWindow, out current)
+            && current.Left == origin.X
+            && current.Top == origin.Y
+            && current.Right - current.Left == width
+            && current.Bottom - current.Top == height
+        ) return;
+        uint flags = SwpNoActivate | SwpShowWindow | SwpAsyncWindowPos;
+        if (frameChanged) flags |= SwpFrameChanged;
         if (!SetWindowPos(
             simulatorWindow,
             IntPtr.Zero,
-            x,
-            y,
+            origin.X,
+            origin.Y,
             width,
             height,
-            SwpNoActivate | SwpFrameChanged | SwpShowWindow | SwpAsyncWindowPos
+            flags
         )) ThrowLastError("SET_WINDOW_POS_FAILED");
     }
 
@@ -242,7 +302,7 @@ internal static class SimulatorEmbedHost
         if (!attached) return;
         attached = false;
         if (!IsWindow(simulatorWindow)) return;
-        SetParentChecked(simulatorWindow, originalParent);
+        SetWindowLongPtrChecked(simulatorWindow, GwlHwndParent, originalParent);
         SetWindowLongPtrChecked(simulatorWindow, GwlStyle, originalStyle);
         SetWindowLongPtrChecked(simulatorWindow, GwlExStyle, originalExStyle);
         int width = Math.Max(1, originalRect.Right - originalRect.Left);
@@ -450,14 +510,6 @@ internal static class SimulatorEmbedHost
             : new IntPtr(SetWindowLong32(window, index, value.ToInt32()));
         int errorCode = Marshal.GetLastWin32Error();
         if (previous == IntPtr.Zero && errorCode != 0) ThrowError("SET_WINDOW_LONG_FAILED", errorCode);
-    }
-
-    private static void SetParentChecked(IntPtr window, IntPtr newParent)
-    {
-        SetLastError(0);
-        IntPtr previous = SetParent(window, newParent);
-        int errorCode = Marshal.GetLastWin32Error();
-        if (previous == IntPtr.Zero && errorCode != 0) ThrowError("SET_PARENT_FAILED", errorCode);
     }
 
     private static void TryEnablePerMonitorDpi()

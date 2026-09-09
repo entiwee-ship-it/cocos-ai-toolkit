@@ -91,8 +91,11 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).not.toContain("parseFloat(styles.getPropertyValue(property)) / 100 * window.innerWidth");
     expect(workbenchStyle).toContain('.tree-children::before');
     expect(workbenchStyle).toContain('.tree-row.parent .tree-name');
-    expect(nativeHost).toContain('SetParentChecked(simulatorWindow, parentWindow);');
-    expect(nativeHost).not.toContain('StartBoundsTracking');
+    expect(nativeHost).toContain('SetWindowLongPtrChecked(simulatorWindow, GwlHwndParent, parentWindow);');
+    expect(nativeHost).toContain('ClientToScreen(parentWindow, ref origin)');
+    expect(nativeHost).toContain('StartBoundsTracking();');
+    expect(nativeHost).toContain('Thread.Sleep(8);');
+    expect(nativeHost).not.toContain('SetParent(');
   });
 
   it('为 Creator 本地扩展管理器提供双语摘要和详情元数据', () => {
