@@ -43,13 +43,17 @@
           <strong id="selectedName">未选择节点</strong>
           <code id="selectedUuid">—</code>
           <code id="selectedPath">—</code>
+          <span id="selectionMeta" class="selection-meta">选择节点后显示可用属性</span>
         </div>
         <div id="propertyView" class="property-view">
           <div class="empty-state">从左侧选择一个运行时节点</div>
         </div>
         <footer class="inspector-actions">
-          <button id="applyButton" class="primary wide" type="button" disabled>应用并回读</button>
-          <p>仅修改当前运行进程，不写回 Scene / Prefab</p>
+          <div class="inspector-action-row">
+            <button id="applyButton" class="primary" type="button" disabled>应用并回读</button>
+            <button id="revertButton" class="icon-button" type="button" disabled title="还原未应用修改" aria-label="还原未应用修改">↶</button>
+          </div>
+          <p id="applyStatus">与运行时一致</p>
         </footer>
       </section>
 

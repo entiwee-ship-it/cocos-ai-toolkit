@@ -359,6 +359,77 @@ describe('readRuntimeComponent（页面注入：组件属性读取）', () => {
     }) as { properties: Record<string, unknown> };
     expect(result.properties.color).toEqual({ r: 255, g: 128, b: 0, a: 255 });
   });
+
+  it('按 Cocos 类属性元数据返回 Inspector 可见性、分组、范围和 setter 状态', async () => {
+    class InspectorComponent {
+      amount = 3;
+      hiddenRuntimeState = 99;
+
+      get readOnlyValue() {
+        return 7;
+      }
+    }
+    const constructor = InspectorComponent as unknown as Record<string, unknown>;
+    constructor.__props__ = ['amount', 'readOnlyValue'];
+    constructor.__attrs__ = {
+      'amount$_$type': 'Number',
+      'amount$_$displayName': '数量',
+      'amount$_$group': '基本',
+      'amount$_$min': 0,
+      'amount$_$max': 10,
+      'amount$_$step': 1,
+      'amount$_$hasSetter': true,
+      'readOnlyValue$_$type': 'Number',
+      'readOnlyValue$_$visible': true
+    };
+    const component = new InspectorComponent() as unknown as Record<string, unknown>;
+    component.__typename__ = 'InspectorComponent';
+    const node = fakeNode({ name: 'inspector', fileId: 'f2' });
+    node.components = [component as never];
+    node.getComponent = () => component;
+    installScene(fakeNode({ name: 'Canvas', fileId: 'f1', children: [node] }));
+
+    const result = await runScript('readRuntimeComponent', {
+      path: 'Canvas/inspector', componentType: 'InspectorComponent'
+    }) as {
+      propertyMeta: Record<string, Record<string, unknown>>;
+    };
+
+    expect(result.propertyMeta.amount).toMatchObject({
+      kind: 'number', editable: true, visible: true, displayName: '数量', group: '基本', min: 0, max: 10, step: 1
+    });
+    expect(result.propertyMeta.readOnlyValue).toMatchObject({
+      kind: 'number', editable: false, visible: true, readOnlyReason: 'property-read-only'
+    });
+    expect(result.propertyMeta.hiddenRuntimeState).toMatchObject({
+      editable: false, visible: false, readOnlyReason: 'hidden'
+    });
+  });
+
+  it('把复杂对象和循环值标记为 Inspector 隐藏，但保留兼容 properties 快照', async () => {
+    const component: Record<string, unknown> = {
+      __typename__: 'cc.Label',
+      useful: 1,
+      complex: { nested: { value: 1 } }
+    };
+    component.loop = component;
+    const node = fakeNode({ name: 'inspector', fileId: 'f2' });
+    node.components = [component as never];
+    node.getComponent = () => component;
+    installScene(fakeNode({ name: 'Canvas', fileId: 'f1', children: [node] }));
+
+    const result = await runScript('readRuntimeComponent', {
+      path: 'Canvas/inspector', componentType: 'cc.Label'
+    }) as {
+      properties: Record<string, unknown>;
+      propertyMeta: Record<string, Record<string, unknown>>;
+    };
+
+    expect(result.properties.loop).toMatchObject({ __type: 'circular-reference' });
+    expect(result.propertyMeta.loop).toMatchObject({ visible: false, kind: 'circular-reference' });
+    expect(result.propertyMeta.complex).toMatchObject({ visible: false, kind: 'object' });
+    expect(result.propertyMeta.useful).toMatchObject({ visible: true, editable: true });
+  });
 });
 
 describe('sampleRuntimeWindow（页面注入：时间窗口采样）', () => {

@@ -143,8 +143,18 @@ describe('运行态协议', () => {
       nodeUuid: 'u1',
       componentType: 'cc.Label',
       properties: { string: '确定退出？', fontSize: 28 },
+      propertyMeta: {
+        string: { kind: 'string', editable: true, visible: true, displayName: '文本', group: '文本' },
+        fontSize: { kind: 'number', editable: true, visible: true, min: 1, max: 200, step: 1 }
+      },
+      skipped: ['internalStart'],
       capturedAt: '2026-07-22T04:40:00.000Z'
-    })).toBeTruthy();
+    })).toMatchObject({
+      componentType: 'cc.Label',
+      properties: { fontSize: 28 },
+      propertyMeta: { fontSize: { editable: true, min: 1 } },
+      skipped: ['internalStart']
+    });
   });
 
   it('时间窗口采样协议约束目标、模式、时长与销毁证据帧', () => {

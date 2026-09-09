@@ -99,12 +99,48 @@ export const RuntimeNodeSnapshotSchema = z.object({
 });
 
 /** 运行时组件快照：单组件属性包。 */
+export const RuntimePropertyMetadataSchema = z.object({
+  /** 运行时值的稳定类别，例如 number、enum、vector、reference。 */
+  kind: z.string().min(1),
+  /** 当前运行进程是否允许通过公开属性写入。 */
+  editable: z.boolean(),
+  /** Cocos Inspector 的动态可见性结果。 */
+  visible: z.boolean().optional(),
+  /** 不能编辑时的稳定原因码，由前端映射为中文提示。 */
+  readOnlyReason: z.string().min(1).optional(),
+  /** Cocos 属性声明类型或构造器名称。 */
+  declaredType: z.string().min(1).optional(),
+  /** Cocos Inspector 显示名称。 */
+  displayName: z.string().min(1).optional(),
+  /** Cocos Inspector 提示文本。 */
+  tooltip: z.string().min(1).optional(),
+  /** Cocos Inspector 分组名称。 */
+  group: z.string().min(1).optional(),
+  /** Cocos Inspector 显示顺序。 */
+  displayOrder: z.number().optional(),
+  /** 数字属性的最小值。 */
+  min: z.number().optional(),
+  /** 数字属性的最大值。 */
+  max: z.number().optional(),
+  /** 数字属性的步进值。 */
+  step: z.number().optional(),
+  /** 枚举属性的值和显示名称。 */
+  enumOptions: z.array(z.object({
+    name: z.string(),
+    value: z.number()
+  })).optional()
+});
+
 export const RuntimeComponentSnapshotSchema = z.object({
   source: z.literal('preview-runtime'),
   previewSessionId: z.string().min(1),
   nodeUuid: z.string().min(1),
   componentType: z.string().min(1),
   properties: z.record(z.string(), z.unknown()),
+  /** 属性 Inspector 元数据；旧运行时未提供时允许缺省。 */
+  propertyMeta: z.record(z.string(), RuntimePropertyMetadataSchema).optional(),
+  /** 读取 getter/function 失败或被跳过的属性名。 */
+  skipped: z.array(z.string()).optional(),
   revision: z.number().int().nonnegative().optional(),
   capturedAt: z.string().min(1)
 });
@@ -338,6 +374,7 @@ export type Resolution = z.infer<typeof ResolutionSchema>;
 export type RuntimePlatform = z.infer<typeof RuntimePlatformSchema>;
 export type PreviewSession = z.infer<typeof PreviewSessionSchema>;
 export type RuntimeNodeSnapshot = z.infer<typeof RuntimeNodeSnapshotSchema>;
+export type RuntimePropertyMetadata = z.infer<typeof RuntimePropertyMetadataSchema>;
 export type RuntimeComponentSnapshot = z.infer<typeof RuntimeComponentSnapshotSchema>;
 export type RuntimePropertyWriteSnapshot = z.infer<typeof RuntimePropertyWriteSnapshotSchema>;
 export type RuntimeSampleWindowMode = z.infer<typeof RuntimeSampleWindowModeSchema>;

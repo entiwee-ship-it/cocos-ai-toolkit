@@ -266,6 +266,260 @@ function listRuntimeProperties(value: unknown): string[] {
   return [...properties];
 }
 
+/**
+ * 读取运行时组件类的公开属性元数据。
+ *
+ * @param component 当前运行时组件实例。
+ * @param runtimeModule 当前页面导入的 cc 模块。
+ * @returns Cocos 类属性数组、属性表和构造器；取不到时返回空结构。
+ */
+function readRuntimeInspectorClassInfo(
+  component: unknown,
+  runtimeModule?: Record<string, unknown>
+): { constructor: Record<string, unknown> | null; props: string[]; attrs: Record<string, unknown> | null } {
+  const constructor = (component as { constructor?: unknown } | null)?.constructor;
+  if (typeof constructor !== 'function') return { constructor: null, props: [], attrs: null };
+
+  const ctor = constructor as unknown as Record<string, unknown>;
+  let attrs = ctor.__attrs__;
+  if (!attrs) {
+    try {
+      const cclegacy = runtimeModule?.cclegacy as Record<string, unknown> | undefined;
+      const classApi = cclegacy?.Class as Record<string, unknown> | undefined;
+      const attrApi = classApi?.Attr as Record<string, unknown> | undefined;
+      const getClassAttrs = attrApi?.getClassAttrs;
+      if (typeof getClassAttrs === 'function') attrs = getClassAttrs(constructor);
+    } catch {
+      attrs = undefined;
+    }
+  }
+
+  const props = Array.isArray(ctor.__props__)
+    ? ctor.__props__.filter((item): item is string => typeof item === 'string')
+    : [];
+  return {
+    constructor: ctor,
+    props,
+    attrs: attrs && typeof attrs === 'object' && !Array.isArray(attrs)
+      ? attrs as Record<string, unknown>
+      : null
+  };
+}
+
+/**
+ * 读取并解析 Cocos 类属性上的 Inspector 元数据。
+ *
+ * @param classInfo 当前组件构造器的属性信息。
+ * @param property 当前属性名。
+ * @param attribute 要读取的元数据字段。
+ * @param component 当前组件实例，用于执行动态 visible/min/max 函数。
+ * @returns 解析后的元数据值；读取失败时返回 undefined。
+ */
+function readRuntimeInspectorAttribute(
+  classInfo: { attrs: Record<string, unknown> | null },
+  property: string,
+  attribute: string,
+  component: unknown
+): unknown {
+  const attrs = classInfo.attrs;
+  if (!attrs) return undefined;
+  const value = attrs[`${property}$_$${attribute}`];
+  if (typeof value !== 'function' || attribute === 'type') return value;
+  try {
+    return value.call(component);
+  } catch {
+    return undefined;
+  }
+}
+
+/** 读取可能是构造器或字符串的 Cocos 属性类型名称。 */
+function readRuntimeInspectorTypeName(value: unknown): string | undefined {
+  if (typeof value === 'string' && value) return value;
+  if (typeof value === 'function' && typeof (value as { name?: unknown }).name === 'string') {
+    return (value as { name: string }).name;
+  }
+  if (value && typeof value === 'object' && typeof (value as { name?: unknown }).name === 'string') {
+    return (value as { name: string }).name;
+  }
+  return undefined;
+}
+
+/** 把 Cocos Enum.getList 结果压缩成可直接供前端 select 使用的选项。 */
+function readRuntimeInspectorEnumOptions(value: unknown): Array<{ name: string; value: number }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options: Array<{ name: string; value: number }> = [];
+  for (const item of value) {
+    if (Array.isArray(item) && typeof item[0] === 'number' && typeof item[1] === 'string') {
+      options.push({ value: item[0], name: item[1] });
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const record = item as { name?: unknown; value?: unknown };
+      if (typeof record.name === 'string' && typeof record.value === 'number' && Number.isFinite(record.value)) {
+        options.push({ value: record.value, name: record.name });
+      }
+    }
+  }
+  return options.length > 0 ? options : undefined;
+}
+
+/** 运行时资源字段名称；即使当前为空也应保留为只读引用槽位。 */
+function isRuntimeInspectorReferenceName(property: string): boolean {
+  return [
+    'target', 'spriteFrame', 'spriteAtlas', 'font', 'labelAtlas',
+    'normalSprite', 'pressedSprite', 'hoverSprite', 'disabledSprite', 'hoverSpriteFrame',
+    'customMaterial', 'material', 'sharedMaterial', 'texture', 'clip', 'prefab'
+  ].includes(property);
+}
+
+/** 判断组件类型是否明显属于 Creator 内建组件，避免误隐藏其运行时 getter。 */
+function isRuntimeInspectorBuiltInComponent(componentType: string): boolean {
+  if (/^(cc\.|sp\.|dragonBones\.)/.test(componentType)) return true;
+  return [
+    'Node', 'UITransform', 'UIOpacity', 'Widget', 'Canvas', 'Sprite', 'Label', 'RichText',
+    'Button', 'Toggle', 'ToggleContainer', 'Layout', 'Mask', 'ScrollView', 'PageView',
+    'EditBox', 'Slider', 'ProgressBar', 'Camera', 'Graphics', 'MeshRenderer', 'ParticleSystem'
+  ].includes(componentType);
+}
+
+/** 判断属性表中是否存在某个属性的任意 Inspector 元数据。 */
+function hasRuntimeInspectorAttribute(classInfo: { attrs: Record<string, unknown> | null }, property: string): boolean {
+  if (!classInfo.attrs) return false;
+  const prefix = `${property}$_$`;
+  return Object.keys(classInfo.attrs).some((key) => key.startsWith(prefix));
+}
+
+/**
+ * 生成单个运行时属性的 Inspector 描述，统一处理可见性、类型和可写状态。
+ *
+ * @param component 当前运行时组件实例。
+ * @param componentType 当前组件类型名。
+ * @param property 属性名。
+ * @param value 属性原始值。
+ * @param serialized 已序列化的属性值。
+ * @param runtimeModule 当前页面导入的 cc 模块。
+ * @returns 前端可直接消费的属性元数据。
+ */
+function readRuntimeInspectorPropertyMeta(
+  component: unknown,
+  componentType: string,
+  property: string,
+  value: unknown,
+  serialized: unknown,
+  runtimeModule?: Record<string, unknown>
+): Record<string, unknown> {
+  const classInfo = readRuntimeInspectorClassInfo(component, runtimeModule);
+  const attrs = classInfo.attrs;
+  const descriptor = findRuntimePropertyDescriptor(component, property);
+  const descriptorWritable = Boolean(
+    descriptor && (typeof descriptor.set === 'function' || descriptor.writable === true)
+  );
+  const declaredTypeValue = readRuntimeInspectorAttribute(classInfo, property, 'type', component);
+  const declaredType = readRuntimeInspectorTypeName(declaredTypeValue);
+  const ctorValue = attrs?.[`${property}$_$ctor`];
+  const ctorName = readRuntimeInspectorTypeName(ctorValue);
+  const visibleValue = readRuntimeInspectorAttribute(classInfo, property, 'visible', component);
+  const readonlyValue = readRuntimeInspectorAttribute(classInfo, property, 'readonly', component) === true;
+  const hasSetter = readRuntimeInspectorAttribute(classInfo, property, 'hasSetter', component) === true;
+  const enumOptions = readRuntimeInspectorEnumOptions(
+    readRuntimeInspectorAttribute(classInfo, property, 'enumList', component)
+  );
+  const marker = serialized && typeof serialized === 'object' && !Array.isArray(serialized)
+    ? (serialized as { __type?: unknown }).__type
+    : undefined;
+  const reference = marker === 'node-reference'
+    || marker === 'component-reference'
+    || marker === 'asset-reference'
+    || isRuntimeInspectorReferenceName(property)
+    || ['Node', 'Component', 'Asset', 'SpriteFrame', 'Prefab'].some((name) => (declaredType || ctorName || '').includes(name));
+
+  let kind = 'unknown';
+  if (enumOptions || declaredType === 'Enum') kind = 'enum';
+  else if (marker === 'circular-reference' || marker === 'max-depth-exceeded' || marker === 'complex-object'
+    || marker === 'truncated' || marker === 'function' || marker === 'promise') kind = String(marker);
+  else if (reference) kind = 'reference';
+  else if (value === undefined) kind = 'undefined';
+  else if (value === null) kind = 'null';
+  else if (Array.isArray(value)) kind = 'array';
+  else if (typeof value === 'boolean') kind = 'boolean';
+  else if (typeof value === 'number') kind = Number.isFinite(value) ? 'number' : 'non-finite-number';
+  else if (typeof value === 'string') kind = 'string';
+  else if (value && typeof value === 'object') {
+    const object = value as Record<string, unknown>;
+    const numeric = (keys: string[]): boolean => keys.every((key) => typeof object[key] === 'number' && Number.isFinite(object[key] as number));
+    if (numeric(['r', 'g', 'b', 'a'])) kind = 'color';
+    else if (numeric(['width', 'height']) && (Object.prototype.hasOwnProperty.call(object, 'x') || Object.prototype.hasOwnProperty.call(object, 'y'))) kind = 'rect';
+    else if (numeric(['width', 'height'])) kind = 'size';
+    else if (numeric(['x', 'y', 'z', 'w'])) kind = 'vector';
+    else if (numeric(['x', 'y', 'z'])) kind = 'vector';
+    else if (numeric(['x', 'y'])) kind = 'vector';
+    else kind = 'object';
+  }
+
+  const hiddenNames = [
+    'constructor', 'node', 'name', 'uuid', 'enabledInHierarchy', 'isValid', 'hideFlags',
+    'renderData', 'materials', 'sharedMaterials', 'renderEntity', 'batchingHint', 'visibility',
+    'cameraPriority', 'alignFlags', 'hash', 'localMat', 'batcher', 'sharedMaterial', 'material',
+    'stencilStage', 'srcBlendFactor', 'useVertexOpacity', 'isStretchWidth', 'isStretchHeight'
+  ];
+  const isCustom = !isRuntimeInspectorBuiltInComponent(componentType);
+  const declared = !isCustom
+    || property === 'enabled'
+    || property === 'node'
+    || classInfo.props.includes(property)
+    || hasRuntimeInspectorAttribute(classInfo, property);
+  let visible = !hiddenNames.includes(property) && declared && visibleValue !== false;
+  if (componentType.replace(/^cc\./, '') === 'Sprite' && property === 'priority') visible = false;
+  if (componentType.replace(/^cc\./, '') === 'Sprite') {
+    const spriteType = (component as { type?: unknown } | null)?.type;
+    if (property === 'trim' && spriteType !== 0) visible = false;
+    if (['fillType', 'fillCenter', 'fillStart', 'fillRange'].includes(property) && spriteType !== 3) visible = false;
+  }
+  let readOnlyReason: string | undefined;
+  if (kind === 'undefined' || kind === 'non-finite-number' || kind === 'function' || kind === 'object'
+    || kind === 'circular-reference' || kind === 'max-depth-exceeded' || kind === 'complex-object'
+    || kind === 'promise') {
+    visible = false;
+  }
+  if (kind === 'null' && !reference) visible = false;
+  if (kind === 'truncated') visible = false;
+
+  const editableKind = ['boolean', 'number', 'string', 'enum', 'color', 'vector', 'size', 'rect'].includes(kind);
+  let editable = visible && editableKind && !readonlyValue && (descriptorWritable || hasSetter);
+  if (!visible) readOnlyReason = 'hidden';
+  else if (readonlyValue || (!descriptorWritable && !hasSetter)) readOnlyReason = 'property-read-only';
+  else if (kind === 'reference' || kind === 'null') readOnlyReason = 'runtime-reference';
+  else if (kind === 'array') readOnlyReason = 'array-not-editable';
+  else if (!editableKind) readOnlyReason = 'unsupported-value';
+  if (kind === 'non-finite-number') readOnlyReason = 'invalid-number';
+  if (!editable) editable = false;
+
+  const metadata: Record<string, unknown> = {
+    kind,
+    editable,
+    visible
+  };
+  if (readOnlyReason) metadata.readOnlyReason = readOnlyReason;
+  if (declaredType || ctorName) metadata.declaredType = declaredType || ctorName;
+  const displayName = readRuntimeInspectorAttribute(classInfo, property, 'displayName', component);
+  if (typeof displayName === 'string' && displayName) metadata.displayName = displayName;
+  const tooltip = readRuntimeInspectorAttribute(classInfo, property, 'tooltip', component);
+  if (typeof tooltip === 'string' && tooltip) metadata.tooltip = tooltip;
+  const group = readRuntimeInspectorAttribute(classInfo, property, 'group', component);
+  if (typeof group === 'string' && group) metadata.group = group;
+  else if (group && typeof group === 'object' && typeof (group as { name?: unknown }).name === 'string') {
+    metadata.group = (group as { name: string }).name;
+  }
+  const displayOrder = readRuntimeInspectorAttribute(classInfo, property, 'displayOrder', component);
+  if (typeof displayOrder === 'number' && Number.isFinite(displayOrder)) metadata.displayOrder = displayOrder;
+  for (const attribute of ['min', 'max', 'step']) {
+    const number = readRuntimeInspectorAttribute(classInfo, property, attribute, component);
+    if (typeof number === 'number' && Number.isFinite(number)) metadata[attribute] = number;
+  }
+  if (enumOptions) metadata.enumOptions = enumOptions;
+  return metadata;
+}
+
 /** 运行时树的轻量稳定哈希；用于 UI/AI 判断 revision 是否变化。 */
 function hashRuntimeText(value: string): number {
   let hash = 2_166_136_261;
@@ -501,6 +755,7 @@ async function locateRuntimeComponent(options: { path: string; componentType: st
     found: true,
     node,
     component,
+    runtimeModule: cc,
     actualComponentType,
     nodeUuid: typeof node.uuid === 'string' ? node.uuid : ''
   };
@@ -520,6 +775,7 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
   const skipped: string[] = [];
   const seen = new Set<unknown>([component]);
   const properties: Record<string, unknown> = {};
+  const propertyMeta: Record<string, Record<string, unknown>> = {};
   for (const key of listRuntimeProperties(component)) {
     if (key === 'constructor' || key.startsWith('__')) continue;
     let value: unknown;
@@ -533,13 +789,23 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
       skipped.push(key);
       continue;
     }
-    properties[key] = serializeRuntimeValue(value, 1, seen);
+    const serialized = serializeRuntimeValue(value, 1, seen);
+    properties[key] = serialized;
+    propertyMeta[key] = readRuntimeInspectorPropertyMeta(
+      component,
+      located.actualComponentType as string,
+      key,
+      value,
+      serialized,
+      located.runtimeModule as Record<string, unknown> | undefined
+    );
   }
   return {
     found: true,
     nodeUuid: located.nodeUuid,
     componentType: located.actualComponentType,
     properties,
+    propertyMeta,
     skipped
   };
 }
@@ -1042,6 +1308,14 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   readRuntimeComponentType,
   serializeRuntimeValue,
   listRuntimeProperties,
+  readRuntimeInspectorClassInfo,
+  readRuntimeInspectorAttribute,
+  readRuntimeInspectorTypeName,
+  readRuntimeInspectorEnumOptions,
+  isRuntimeInspectorReferenceName,
+  isRuntimeInspectorBuiltInComponent,
+  hasRuntimeInspectorAttribute,
+  readRuntimeInspectorPropertyMeta,
   hashRuntimeText,
   readRuntimeSceneState,
   readRuntimeHierarchy,

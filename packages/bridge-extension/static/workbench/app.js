@@ -15,6 +15,7 @@
     polling: false,
     toastTimer: 0,
     lastToast: '',
+    invalid: new Map(),
     settings: null,
     settingsTimer: 0,
     settingsBusy: false,
@@ -28,8 +29,8 @@
 
   var elements = Object.fromEntries([
     'connectionState', 'sceneName', 'resolution', 'startButton',
-    'treeSearch', 'treeView', 'treeMeta', 'selectionHeader', 'selectedName', 'selectedUuid', 'selectedPath',
-    'propertyView', 'applyButton', 'liveState', 'processName', 'previewStage', 'previewPlaceholder', 'embedMeta',
+    'treeSearch', 'treeView', 'treeMeta', 'selectionHeader', 'selectedName', 'selectedUuid', 'selectedPath', 'selectionMeta',
+    'propertyView', 'applyButton', 'revertButton', 'applyStatus', 'liveState', 'processName', 'previewStage', 'previewPlaceholder', 'embedMeta',
     'runtimeId', 'sceneEpoch', 'lastUpdated', 'workspace', 'toast', 'resolutionSelect', 'orientationSelect',
     'consoleMeta', 'consoleView', 'clearConsoleButton'
   ].map(function (id) { return [id, document.getElementById(id)]; }));
@@ -342,10 +343,27 @@
     node.children.forEach(function (child) { expandTreeToDepth(child, maxDepth, depth + 1); });
   }
 
-  async function selectNode(node) {
+  /**
+   * 读取并展示目标运行时节点的组件属性。
+   *
+   * @param node 运行时层级树中的目标节点。
+   * @param options 可选保留未应用修改和组件折叠状态。
+   * @param options.preserveChanges 重新读取时是否保留待应用值。
+   */
+  async function selectNode(node, options) {
+    options = options || {};
+    var preserveChanges = options.preserveChanges === true;
+    if (!preserveChanges && state.selectedPath && state.selectedPath !== node.path
+      && (state.pending.size || state.invalid.size)) {
+      showToast('请先应用或还原当前属性修改', true);
+      return;
+    }
     state.selectedNode = node;
     state.selectedPath = node.path || '';
-    state.pending.clear();
+    if (!preserveChanges) {
+      state.pending.clear();
+      state.invalid.clear();
+    }
     state.components = [];
     updateSelectionHeader();
     renderTree();
@@ -364,10 +382,12 @@
       }
     }));
     if (state.selectedPath !== node.path) return;
+    var previousExpanded = preserveChanges ? new Set(state.componentExpanded) : null;
     state.components = results;
     state.componentExpanded.clear();
     results.forEach(function (component, index) {
-      state.componentExpanded.add(componentKey(component, index));
+      var key = componentKey(component, index);
+      if (!previousExpanded || previousExpanded.has(key)) state.componentExpanded.add(key);
     });
     renderProperties();
   }
@@ -378,21 +398,117 @@
     elements.selectedName.textContent = node?.name || '未选择节点';
     elements.selectedUuid.textContent = node?.uuid || '—';
     elements.selectedPath.textContent = node?.path || '—';
+    if (!node) elements.selectionMeta.textContent = '选择节点后显示可用属性';
   }
 
   function renderProperties() {
     elements.propertyView.textContent = '';
     if (!state.components.length) {
       elements.propertyView.innerHTML = '<div class="empty-state">没有可读取的公开属性</div>';
+      elements.selectionMeta.textContent = '没有可读取的公开属性';
       return;
     }
+    var summary = summarizeComponents();
+    elements.selectionMeta.textContent = summary.components + ' 个组件 · ' + summary.editable
+      + ' 项可编辑 · ' + summary.readonly + ' 项只读';
     state.components.forEach(function (component, index) {
       elements.propertyView.appendChild(createComponentPanel(component, index));
     });
+    renderApplyState();
   }
 
   function componentKey(component, index) {
     return String(component.componentType || component.type || 'component') + ':' + index;
+  }
+
+  function normalizedComponentType(type) {
+    return String(type || '').replace(/^cc\./, '');
+  }
+
+  var COMPONENT_LABELS = {
+    UITransform: 'UI 变换', UIOpacity: 'UI 不透明度', Widget: '布局对齐', Canvas: '画布',
+    Sprite: '精灵', Label: '文本标签', RichText: '富文本', Button: '按钮', Toggle: '开关',
+    ToggleContainer: '开关容器', Layout: '布局', Mask: '遮罩', ScrollView: '滚动视图',
+    PageView: '分页视图', EditBox: '输入框', Slider: '滑块', ProgressBar: '进度条', Camera: '相机'
+  };
+
+  var COMPONENT_PROPERTY_ORDER = {
+    UITransform: ['contentSize', 'anchorPoint', 'priority'],
+    Widget: ['target', 'isAlignTop', 'isAlignBottom', 'isAlignLeft', 'isAlignRight',
+      'isAlignVerticalCenter', 'isAlignHorizontalCenter', 'isStretchWidth', 'isStretchHeight',
+      'top', 'bottom', 'left', 'right', 'horizontalCenter', 'verticalCenter', 'alignMode'],
+    Sprite: ['spriteFrame', 'type', 'fillType', 'fillCenter', 'fillStart', 'fillRange', 'trim', 'grayscale', 'sizeMode', 'color'],
+    Label: ['string', 'fontSize', 'lineHeight', 'horizontalAlign', 'verticalAlign', 'overflow', 'color'],
+    Button: ['interactable', 'transition', 'duration', 'zoomScale', 'clickEvents'],
+    Layout: ['type', 'resizeMode', 'spacingX', 'spacingY', 'cellSize', 'startAxis', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom']
+  };
+
+  var COMPONENT_PROPERTY_GROUPS = {
+    UITransform: { contentSize: '尺寸', anchorPoint: '锚点', priority: '层级' },
+    Widget: { target: '对齐', alignMode: '对齐', top: '边距', bottom: '边距', left: '边距', right: '边距',
+      horizontalCenter: '边距', verticalCenter: '边距' },
+    Sprite: { spriteFrame: '资源', type: '填充', fillType: '填充', fillCenter: '填充', fillStart: '填充',
+      fillRange: '填充', trim: '外观', grayscale: '外观', sizeMode: '尺寸', color: '外观' },
+    Label: { string: '文本', fontSize: '文本', lineHeight: '文本', horizontalAlign: '排版',
+      verticalAlign: '排版', overflow: '排版', color: '外观' },
+    Button: { interactable: '交互', transition: '交互', duration: '交互', zoomScale: '交互', clickEvents: '事件' },
+    Layout: { type: '布局', resizeMode: '布局', spacingX: '间距', spacingY: '间距', cellSize: '布局',
+      startAxis: '布局', paddingLeft: '边距', paddingRight: '边距', paddingTop: '边距', paddingBottom: '边距' }
+  };
+
+  var GROUP_ORDER = { 基本: 0, 尺寸: 10, 锚点: 20, 变换: 30, 布局: 40, 对齐: 50, 边距: 60, 资源: 70, 填充: 80, 外观: 90, 文本: 100, 排版: 110, 交互: 120, 事件: 130, 常规: 200 };
+  var REFERENCE_PROPERTY_NAMES = new Set([
+    'target', 'spriteFrame', 'spriteAtlas', 'font', 'labelAtlas', 'normalSprite',
+    'pressedSprite', 'hoverSprite', 'disabledSprite', 'hoverSpriteFrame', 'customMaterial',
+    'material', 'sharedMaterial', 'texture', 'clip', 'prefab'
+  ]);
+  var READONLY_REASON_LABELS = {
+    'property-read-only': '只读', 'runtime-reference': '运行时引用', 'array-not-editable': '数组只读',
+    'unsupported-value': '不支持编辑', 'invalid-number': '无效数值', hidden: '隐藏'
+  };
+
+  function componentDisplayName(type) {
+    var normalized = normalizedComponentType(type);
+    return COMPONENT_LABELS[normalized] || normalized || '未知组件';
+  }
+
+  function propertyMetaFor(component, name, value) {
+    var meta = component.propertyMeta && component.propertyMeta[name];
+    if (meta && typeof meta === 'object') return meta;
+    return inferPropertyMeta(name, value);
+  }
+
+  function inferPropertyMeta(name, value) {
+    var reference = REFERENCE_PROPERTY_NAMES.has(name) || isReference(value);
+    var kind = reference ? 'reference'
+      : value === null ? 'null'
+        : Array.isArray(value) ? 'array'
+          : typeof value;
+    if (isColor(value)) kind = 'color';
+    else if (isRect(value)) kind = 'rect';
+    else if (isSize(value)) kind = 'size';
+    else if (isVector(value)) kind = 'vector';
+    var editable = !reference && ['boolean', 'number', 'string', 'color', 'rect', 'size', 'vector'].includes(kind);
+    return {
+      kind: kind,
+      editable: editable,
+      visible: true,
+      ...(editable ? {} : { readOnlyReason: reference ? 'runtime-reference' : 'unsupported-value' })
+    };
+  }
+
+  function summarizeComponents() {
+    var summary = { components: 0, editable: 0, readonly: 0 };
+    state.components.forEach(function (component) {
+      if (component.error) return;
+      summary.components += 1;
+      var names = visiblePropertyNames(component);
+      names.forEach(function (name) {
+        var meta = propertyMetaFor(component, name, component.properties?.[name]);
+        if (meta.editable) summary.editable += 1; else summary.readonly += 1;
+      });
+    });
+    return summary;
   }
 
   function createComponentPanel(component, index) {
@@ -400,31 +516,49 @@
     var key = componentKey(component, index);
     var expanded = state.componentExpanded.has(key);
     var panel = document.createElement('section');
-    panel.className = 'component-panel' + (expanded ? '' : ' collapsed');
+    panel.className = 'component-panel' + (expanded ? '' : ' collapsed')
+      + (hasPendingForComponent(component, index) ? ' has-pending' : '');
     var title = document.createElement('div');
     title.className = 'component-title';
     title.tabIndex = 0;
     title.setAttribute('role', 'button');
     title.setAttribute('aria-expanded', String(expanded));
-    title.innerHTML = '<span aria-hidden="true">' + (expanded ? '⌄' : '›') + '</span>';
+    var arrow = document.createElement('span');
+    arrow.className = 'component-arrow';
+    arrow.setAttribute('aria-hidden', 'true');
+    arrow.textContent = expanded ? '⌄' : '›';
+    var icon = document.createElement('span');
+    icon.className = 'component-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = normalizedComponentType(type).slice(0, 1).toUpperCase() || 'C';
+    var heading = document.createElement('span');
+    heading.className = 'component-heading';
     var name = document.createElement('strong');
-    name.textContent = type;
+    name.textContent = componentDisplayName(type);
+    var typeName = document.createElement('small');
+    typeName.className = 'component-type';
+    typeName.textContent = type;
+    heading.append(name, typeName);
+    title.append(arrow, icon, heading);
     var count = document.createElement('span');
     count.className = 'component-count';
     var properties = component.properties || {};
-    var visibleNames = visiblePropertyNames(properties);
-    count.textContent = visibleNames.length + ' 项';
-    title.append(name);
+    var visibleNames = visiblePropertyNames(component);
+    var editableCount = visibleNames.filter(function (property) {
+      return propertyMetaFor(component, property, properties[property]).editable;
+    }).length;
+    count.textContent = editableCount + ' 可编辑 · ' + visibleNames.length + ' 项';
     if (typeof properties.enabled === 'boolean') {
       var enabled = document.createElement('input');
       enabled.type = 'checkbox';
       enabled.className = 'component-enabled';
       enabled.checked = properties.enabled;
+      enabled.disabled = propertyMetaFor(component, 'enabled', properties.enabled).editable === false;
       enabled.title = '启用组件';
       enabled.setAttribute('aria-label', '启用 ' + type);
       enabled.addEventListener('click', function (event) { event.stopPropagation(); });
       enabled.addEventListener('change', function () {
-        markPending(type, 'enabled', enabled.checked, panel);
+        updatePending(component, index, 'enabled', enabled.checked, properties.enabled, panel, null, propertyMetaFor(component, 'enabled', properties.enabled));
       });
       title.appendChild(enabled);
     }
@@ -435,8 +569,7 @@
       else state.componentExpanded.delete(key);
       panel.classList.toggle('collapsed', !nextExpanded);
       title.setAttribute('aria-expanded', String(nextExpanded));
-      var arrow = title.querySelector('span');
-      if (arrow) arrow.textContent = nextExpanded ? '⌄' : '›';
+      arrow.textContent = nextExpanded ? '⌄' : '›';
     }
     title.addEventListener('click', toggle);
     title.addEventListener('keydown', function (event) {
@@ -446,52 +579,155 @@
     var body = document.createElement('div');
     body.className = 'component-properties';
     if (component.error) {
-      body.innerHTML = '<div class="empty-state">' + escapeText(component.error) + '</div>';
+      var error = document.createElement('div');
+      error.className = 'empty-state';
+      error.textContent = component.error;
+      body.appendChild(error);
     } else if (!visibleNames.length) {
       body.appendChild(emptyPropertyRow());
     } else {
-      visibleNames.forEach(function (property) {
-        body.appendChild(createPropertyRow(type, property, properties[property]));
+      groupVisibleProperties(component, visibleNames).forEach(function (group) {
+        var groupNode = document.createElement('section');
+        groupNode.className = 'component-group';
+        var groupTitle = document.createElement('div');
+        groupTitle.className = 'component-group-title';
+        groupTitle.textContent = group.name;
+        groupNode.appendChild(groupTitle);
+        group.properties.forEach(function (property) {
+          groupNode.appendChild(createPropertyRow(component, index, property, properties[property], propertyMetaFor(component, property, properties[property])));
+        });
+        body.appendChild(groupNode);
       });
     }
     panel.appendChild(body);
     return panel;
   }
 
-  function visiblePropertyNames(properties) {
-    return Object.keys(properties).filter(function (name) {
-      if (!shouldShowProperty(name)) return false;
-      if (properties.contentSize && ['width', 'height'].includes(name)) return false;
-      if (properties.anchorPoint && ['anchorX', 'anchorY'].includes(name)) return false;
-      return true;
+  function visiblePropertyNames(component) {
+    var properties = component.properties || {};
+    var type = normalizedComponentType(component.componentType || component.type);
+    var names = Object.keys(properties).filter(function (name) {
+      return shouldShowProperty(name, properties[name], propertyMetaFor(component, name, properties[name]), type, properties);
+    });
+    var order = COMPONENT_PROPERTY_ORDER[type] || [];
+    return names.sort(function (left, right) {
+      var leftMeta = propertyMetaFor(component, left, properties[left]);
+      var rightMeta = propertyMetaFor(component, right, properties[right]);
+      var leftIndex = order.indexOf(left);
+      var rightIndex = order.indexOf(right);
+      var leftOrder = leftIndex >= 0 ? leftIndex : (typeof leftMeta.displayOrder === 'number' ? leftMeta.displayOrder : 10_000);
+      var rightOrder = rightIndex >= 0 ? rightIndex : (typeof rightMeta.displayOrder === 'number' ? rightMeta.displayOrder : 10_000);
+      return leftOrder - rightOrder || left.localeCompare(right);
     });
   }
 
-  function shouldShowProperty(name) {
+  function shouldShowProperty(name, value, meta, componentType, properties) {
     if (name.startsWith('_') || name.startsWith('internal') || name.startsWith('editor')) return false;
-    return ![
+    if ([
       'constructor', 'node', 'name', 'uuid', 'enabled', 'enabledInHierarchy', 'isValid', 'hideFlags',
       'renderData', 'materials', 'sharedMaterials', 'renderEntity', 'batchingHint', 'visibility',
-      'cameraPriority', 'alignFlags', 'hash', 'localMat', 'customMaterial'
-    ].includes(name);
+      'cameraPriority', 'alignFlags', 'hash', 'localMat', 'customMaterial', 'material', 'sharedMaterial',
+      'stencilStage', 'srcBlendFactor', 'useVertexOpacity', 'isStretchWidth', 'isStretchHeight'
+    ].includes(name)) return false;
+    if (componentType === 'Sprite' && name === 'priority') return false;
+    if (componentType === 'Sprite' && name === 'trim' && properties.type !== 0) return false;
+    if (componentType === 'Sprite' && ['fillType', 'fillCenter', 'fillStart', 'fillRange'].includes(name) && properties.type !== 3) return false;
+    if (properties.contentSize && ['width', 'height'].includes(name)) return false;
+    if (properties.anchorPoint && ['anchorX', 'anchorY'].includes(name)) return false;
+    if (meta && meta.visible === false) return false;
+    if (!REFERENCE_PROPERTY_NAMES.has(name) && containsRuntimeMarker(value)) return false;
+    if (meta && ['undefined', 'function', 'object', 'circular-reference', 'max-depth-exceeded', 'complex-object', 'promise', 'truncated'].includes(meta.kind)) {
+      return REFERENCE_PROPERTY_NAMES.has(name) && meta.kind === 'object';
+    }
+    if (value === null && !REFERENCE_PROPERTY_NAMES.has(name) && meta?.kind !== 'reference') return false;
+    if (componentType && !typeMatchesReference(name, meta, value) && meta?.kind === 'unknown') return false;
+    return true;
   }
 
-  function createPropertyRow(componentType, name, value) {
+  function typeMatchesReference(name, meta, value) {
+    return REFERENCE_PROPERTY_NAMES.has(name) || meta?.kind === 'reference' || isReference(value);
+  }
+
+  function containsRuntimeMarker(value, depth) {
+    depth = depth || 0;
+    if (depth > 3 || value === null || value === undefined) return false;
+    if (isRuntimeMarker(value)) return true;
+    if (Array.isArray(value)) return value.some(function (item) { return containsRuntimeMarker(item, depth + 1); });
+    if (isObject(value)) return Object.keys(value).some(function (key) { return containsRuntimeMarker(value[key], depth + 1); });
+    return false;
+  }
+
+  function groupVisibleProperties(component, names) {
+    var type = normalizedComponentType(component.componentType || component.type);
+    var mapping = COMPONENT_PROPERTY_GROUPS[type] || {};
+    var groups = Object.create(null);
+    names.forEach(function (name) {
+      var meta = propertyMetaFor(component, name, component.properties?.[name]);
+      var group = meta.group || mapping[name] || inferPropertyGroup(name);
+      if (!groups[group]) groups[group] = [];
+      groups[group].push(name);
+    });
+    return Object.keys(groups).sort(function (left, right) {
+      return (GROUP_ORDER[left] || 500) - (GROUP_ORDER[right] || 500) || left.localeCompare(right);
+    }).map(function (name) { return { name: name, properties: groups[name] }; });
+  }
+
+  function inferPropertyGroup(name) {
+    if (['contentSize', 'width', 'height', 'anchorPoint', 'anchorX', 'anchorY'].includes(name)) return '变换';
+    if (['string', 'fontSize', 'lineHeight', 'fontFamily'].includes(name)) return '文本';
+    if (['color', 'opacity', 'grayscale', 'trim', 'sizeMode'].includes(name)) return '外观';
+    if (name.endsWith('Events')) return '事件';
+    return '常规';
+  }
+
+  function hasPendingForComponent(component, index) {
+    var prefix = componentKey(component, index) + '::';
+    return Array.from(state.pending.keys()).some(function (key) { return key.startsWith(prefix); });
+  }
+
+  function createPropertyRow(component, index, name, value, meta) {
+    var key = pendingKey(component, index, name);
+    var pending = state.pending.get(key);
+    var currentValue = pending ? pending.value : value;
     var row = document.createElement('div');
-    row.className = 'property-row';
+    row.className = 'property-row' + (pending ? ' pending' : '') + (state.invalid.has(key) ? ' invalid' : '');
     row.dataset.property = name;
-    row.dataset.component = componentType;
-    var label = document.createElement('label');
+    row.dataset.component = component.componentType || component.type || '';
+    row.dataset.pendingKey = key;
+    var label = document.createElement('div');
     label.className = 'property-name';
-    label.textContent = propertyLabel(name);
-    label.title = name;
+    var labelText = document.createElement('span');
+    labelText.textContent = propertyLabel(meta.displayName || name);
+    var kind = document.createElement('small');
+    kind.className = 'property-kind' + (meta.editable ? ' editable' : ' readonly');
+    kind.textContent = meta.editable ? valueKindLabel(meta.kind) : (READONLY_REASON_LABELS[meta.readOnlyReason] || '只读');
+    label.append(labelText, kind);
+    label.title = [name, meta.tooltip || '', meta.declaredType || ''].filter(Boolean).join('\n');
     var control = document.createElement('div');
     control.className = 'property-control';
-    var editor = createEditor(componentType, name, value, function (nextValue) {
-      markPending(componentType, name, nextValue, row);
-    });
+    var editor = createEditor(component.componentType || component.type || '', name, currentValue, function (nextValue, errorMessage) {
+      updatePending(component, index, name, nextValue, value, row, errorMessage, meta);
+    }, meta);
     control.appendChild(editor.node);
-    row.append(label, control);
+    var error = document.createElement('div');
+    error.className = 'property-error';
+    error.textContent = pending?.error || state.invalid.get(key) || '';
+    control.appendChild(error);
+    var reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'property-reset';
+    reset.textContent = '↶';
+    reset.title = '还原此属性';
+    reset.setAttribute('aria-label', '还原 ' + propertyLabel(meta.displayName || name));
+    reset.disabled = !pending;
+    reset.addEventListener('click', function (event) {
+      event.stopPropagation();
+      state.pending.delete(key);
+      state.invalid.delete(key);
+      renderProperties();
+      renderApplyState();
+    });
+    row.append(label, control, reset);
     return row;
   }
 
@@ -512,7 +748,9 @@
     isAbsoluteHorizontalCenter: '水平中心使用像素', isAbsoluteVerticalCenter: '垂直中心使用像素',
     resizeMode: '尺寸调整', spacingX: '水平间距', spacingY: '垂直间距', cellSize: '单元尺寸',
     startAxis: '起始轴', paddingLeft: '左内边距', paddingRight: '右内边距',
-    paddingTop: '上内边距', paddingBottom: '下内边距'
+    paddingTop: '上内边距', paddingBottom: '下内边距', alignCanvasWithScreen: '画布跟随屏幕',
+    clearFlag: '清除标志', renderMode: '渲染模式', camera: '相机', enableWrapText: '自动换行',
+    useSystemFont: '系统字体', lineSpacing: '行间距', overflow: '溢出方式'
   };
 
   var ENUM_OPTIONS = {
@@ -529,31 +767,60 @@
   };
 
   function propertyLabel(name) {
-    return PROPERTY_LABELS[name] || name.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+    var text = String(name || '').replace(/^i18n:[^.]*/, '').replace(/^.*\./, '');
+    return PROPERTY_LABELS[text] || text.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
   }
 
-  function createEditor(componentType, name, value, onChange) {
-    if (value === null) return { node: readonlyValue('空') };
+  function createEditor(componentType, name, value, onChange, meta) {
+    if (!meta.editable) return { node: readonlyEditor(value, meta, name) };
+    if (value === null) return { node: readonlyValue('未设置') };
     if (typeof value === 'boolean') {
       var checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.checked = value;
       checkbox.setAttribute('aria-label', '布尔值');
-      checkbox.addEventListener('change', function () { onChange(checkbox.checked); });
+      checkbox.addEventListener('change', function () { onChange(checkbox.checked, null); });
       return { node: checkbox };
     }
     if (typeof value === 'number') {
-      var enumOptions = ENUM_OPTIONS[componentType.replace(/^cc\./, '') + '.' + name];
+      var enumKey = normalizedComponentType(componentType) + '.' + name;
+      var enumOptions = ENUM_OPTIONS[enumKey] || meta.enumOptions;
       if (enumOptions) return { node: enumEditor(value, enumOptions, onChange) };
       var number = document.createElement('input');
       number.type = 'number';
-      number.step = 'any';
+      number.step = typeof meta.step === 'number' ? String(meta.step) : 'any';
+      if (typeof meta.min === 'number') number.min = String(meta.min);
+      if (typeof meta.max === 'number') number.max = String(meta.max);
       number.value = String(value);
       number.setAttribute('aria-label', '数字');
-      number.addEventListener('input', function () {
-        var next = Number(number.value);
-        if (Number.isFinite(next)) onChange(next);
-      });
+      function emitNumber() {
+        var raw = number.value.trim();
+        if (!raw) {
+          number.classList.add('invalid');
+          onChange(null, '请输入数字');
+          return;
+        }
+        var next = Number(raw);
+        if (!Number.isFinite(next)) {
+          number.classList.add('invalid');
+          onChange(null, '请输入有效数字');
+          return;
+        }
+        if (typeof meta.min === 'number' && next < meta.min) {
+          number.classList.add('invalid');
+          onChange(null, '不能小于 ' + meta.min);
+          return;
+        }
+        if (typeof meta.max === 'number' && next > meta.max) {
+          number.classList.add('invalid');
+          onChange(null, '不能大于 ' + meta.max);
+          return;
+        }
+        number.classList.remove('invalid');
+        onChange(next, null);
+      }
+      number.addEventListener('input', emitNumber);
+      number.addEventListener('change', emitNumber);
       return { node: number };
     }
     if (typeof value === 'string') {
@@ -561,28 +828,30 @@
       if (text.tagName === 'INPUT') text.type = 'text';
       text.value = value;
       text.setAttribute('aria-label', '字符串');
-      text.addEventListener('input', function () { onChange(text.value); });
+      text.addEventListener('input', function () { onChange(text.value, null); });
       return { node: text };
     }
-    if (isReference(value)) return { node: referenceValue(value) };
+    if (isReference(value)) return { node: referenceValue(value, name) };
     if (isRuntimeMarker(value)) return { node: readonlyValue(markerText(value)) };
     if (isColor(value)) return { node: colorEditor(value, onChange) };
     if (isRect(value)) return { node: compoundEditor(value, ['x', 'y', 'width', 'height'], onChange) };
     if (isSize(value)) return { node: compoundEditor(value, ['width', 'height'], onChange) };
     if (isVector(value)) return { node: compoundEditor(value, vectorKeys(value), onChange) };
-    return { node: structuredValue(value) };
+    return { node: readonlyEditor(value, meta, name) };
   }
 
   function enumEditor(value, options, onChange) {
     var select = document.createElement('select');
     options.forEach(function (item) {
       var option = document.createElement('option');
-      option.value = String(item[0]);
-      option.textContent = item[1];
+      var optionValue = Array.isArray(item) ? item[0] : item.value;
+      var optionName = Array.isArray(item) ? item[1] : item.name;
+      option.value = String(optionValue);
+      option.textContent = optionName;
       select.appendChild(option);
     });
     select.value = String(value);
-    select.addEventListener('change', function () { onChange(Number(select.value)); });
+    select.addEventListener('change', function () { onChange(Number(select.value), null); });
     return select;
   }
 
@@ -594,10 +863,14 @@
     swatch.type = 'color';
     swatch.value = rgbHex(current);
     swatch.title = '选择颜色';
-    var fields = compoundEditor(current, ['r', 'g', 'b', 'a'], function (next) {
+    var fields = compoundEditor(current, ['r', 'g', 'b', 'a'], function (next, error) {
+      if (error) {
+        onChange(null, error);
+        return;
+      }
       current = next;
       swatch.value = rgbHex(current);
-      onChange(Object.assign({}, current));
+      onChange(Object.assign({}, current), null);
     });
     swatch.addEventListener('input', function () {
       current.r = parseInt(swatch.value.slice(1, 3), 16);
@@ -606,7 +879,8 @@
       fields.querySelectorAll('input').forEach(function (input, index) {
         input.value = String(current[['r', 'g', 'b', 'a'][index]]);
       });
-      onChange(Object.assign({}, current));
+      if (typeof fields.setValue === 'function') fields.setValue(current);
+      onChange(Object.assign({}, current), null);
     });
     wrapper.append(swatch, fields);
     return wrapper;
@@ -618,21 +892,43 @@
     }).join('');
   }
 
-  function structuredValue(value) {
-    var details = document.createElement('details');
-    details.className = 'structured-value';
-    var summary = document.createElement('summary');
-    summary.textContent = Array.isArray(value) ? '数组 · ' + value.length + ' 项' : '对象';
-    var content = document.createElement('pre');
-    content.textContent = JSON.stringify(value, null, 2);
-    details.append(summary, content);
-    return details;
+  function valueKindLabel(kind) {
+    return {
+      boolean: '布尔', number: '数值', string: '文本', enum: '枚举', color: '颜色', vector: '向量',
+      size: '尺寸', rect: '矩形', reference: '引用', array: '数组', null: '空值'
+    }[kind] || '属性';
+  }
+
+  function readonlyEditor(value, meta, name) {
+    if (meta.kind === 'reference' || REFERENCE_PROPERTY_NAMES.has(name)) return referenceValue(value, name);
+    if (Array.isArray(value)) {
+      var arrayNode = readonlyValue('数组 · ' + value.length + ' 项');
+      arrayNode.title = '运行时数组只读';
+      return arrayNode;
+    }
+    if (value === null || value === undefined) return readonlyValue('未设置');
+    if (isRuntimeMarker(value)) return readonlyValue(markerText(value));
+    if (typeof value === 'object') return readonlyValue('对象（运行时只读）');
+    return readonlyValue(String(value));
   }
 
   function compoundEditor(value, keys, onChange) {
     var wrapper = document.createElement('div');
     wrapper.className = 'compound-control';
+    wrapper.style.gridTemplateColumns = 'repeat(' + Math.min(keys.length, 4) + ', minmax(0, 1fr))';
     var current = Object.assign({}, value);
+    var invalidKeys = new Set();
+    var inputs = Object.create(null);
+    wrapper.setValue = function (nextValue) {
+      current = Object.assign({}, nextValue);
+      invalidKeys.clear();
+      keys.forEach(function (key) {
+        if (inputs[key]) {
+          inputs[key].value = String(current[key] ?? 0);
+          inputs[key].classList.remove('invalid');
+        }
+      });
+    };
     keys.forEach(function (key) {
       var field = document.createElement('label');
       field.className = 'compound-field';
@@ -643,11 +939,30 @@
       input.step = 'any';
       input.value = String(value[key] ?? 0);
       input.setAttribute('aria-label', key);
+      inputs[key] = input;
       input.addEventListener('input', function () {
-        var next = Number(input.value);
-        if (!Number.isFinite(next)) return;
+        var raw = input.value.trim();
+        if (!raw) {
+          invalidKeys.add(key);
+          input.classList.add('invalid');
+          onChange(null, '请输入 ' + key);
+          return;
+        }
+        var next = Number(raw);
+        if (!Number.isFinite(next)) {
+          invalidKeys.add(key);
+          input.classList.add('invalid');
+          onChange(null, '请输入有效数字');
+          return;
+        }
+        invalidKeys.delete(key);
+        input.classList.remove('invalid');
         current[key] = next;
-        onChange(Object.assign({}, current));
+        if (invalidKeys.size) {
+          onChange(null, '请输入有效数字');
+          return;
+        }
+        onChange(Object.assign({}, current), null);
       });
       field.append(caption, input);
       wrapper.appendChild(field);
@@ -661,20 +976,20 @@
   }
 
   function isColor(value) {
-    return isObject(value) && ['r', 'g', 'b', 'a'].every(function (key) { return typeof value[key] === 'number'; });
+    return isObject(value) && ['r', 'g', 'b', 'a'].every(function (key) { return typeof value[key] === 'number' && Number.isFinite(value[key]); });
   }
 
   function isRect(value) {
-    return isObject(value) && ['x', 'y', 'width', 'height'].every(function (key) { return typeof value[key] === 'number'; });
+    return isObject(value) && ['x', 'y', 'width', 'height'].every(function (key) { return typeof value[key] === 'number' && Number.isFinite(value[key]); });
   }
 
   function isSize(value) {
-    return isObject(value) && ['width', 'height'].every(function (key) { return typeof value[key] === 'number'; })
+    return isObject(value) && ['width', 'height'].every(function (key) { return typeof value[key] === 'number' && Number.isFinite(value[key]); })
       && !Object.prototype.hasOwnProperty.call(value, 'x');
   }
 
   function isVector(value) {
-    return isObject(value) && ['x', 'y'].every(function (key) { return typeof value[key] === 'number'; })
+    return isObject(value) && ['x', 'y'].every(function (key) { return typeof value[key] === 'number' && Number.isFinite(value[key]); })
       && Object.keys(value).every(function (key) { return ['x', 'y', 'z', 'w'].includes(key); });
   }
 
@@ -683,7 +998,7 @@
   }
 
   function isRuntimeMarker(value) {
-    return isObject(value) && ['circular-reference', 'max-depth-exceeded', 'complex-object', 'truncated', 'function'].includes(value.__type);
+    return isObject(value) && ['circular-reference', 'max-depth-exceeded', 'complex-object', 'truncated', 'function', 'promise', 'undefined'].includes(value.__type);
   }
 
   function markerText(value) {
@@ -692,18 +1007,25 @@
     return value.__type || '运行时对象';
   }
 
-  function referenceValue(value) {
+  function referenceValue(value, propertyName) {
     var node = document.createElement('div');
     node.className = 'property-reference';
     var title = document.createElement('strong');
+    if (!value || typeof value !== 'object') {
+      title.textContent = '未设置';
+      var empty = document.createElement('span');
+      empty.textContent = propertyName ? propertyLabel(propertyName) : '运行时引用';
+      node.append(title, empty);
+      return node;
+    }
     var label = {
       'node-reference': '节点',
       'component-reference': '组件',
       'asset-reference': '资源'
-    }[value.__type] || '引用';
+    }[value.__type] || (propertyName ? propertyLabel(propertyName) : '引用');
     title.textContent = label + (value.name ? ' · ' + value.name : '');
     var uuid = document.createElement('span');
-    uuid.textContent = value.uuid || value.objectUuid || '未解析';
+    uuid.textContent = value.uuid || value.objectUuid || (value.loaded === true ? '已加载' : '未设置');
     node.append(title, uuid);
     return node;
   }
@@ -722,45 +1044,128 @@
     return row;
   }
 
-  function markPending(componentType, name, value, row) {
-    var key = componentType + '::' + name;
-    state.pending.set(key, { componentType: componentType, property: name, value: value, row: row });
-    row.classList.add('pending');
+  function pendingKey(component, index, name) {
+    return componentKey(component, index) + '::' + name;
+  }
+
+  function valuesEqual(left, right) {
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+      return left === right;
+    }
+  }
+
+  function conciseError(error) {
+    var message = error && error.message ? error.message : String(error);
+    if (message.includes('RUNTIME_PROPERTY_WRITE_FAILED')) return '运行时拒绝写入';
+    if (message.includes('PROPERTY_WRITE_INPUT_INVALID')) return '写入参数无效';
+    return message.length > 120 ? message.slice(0, 117) + '…' : message;
+  }
+
+  function updatePending(component, index, name, value, original, row, errorMessage, meta) {
+    var key = pendingKey(component, index, name);
+    var error = row.querySelector('.property-error');
+    if (errorMessage) {
+      state.invalid.set(key, errorMessage);
+      row.classList.add('invalid');
+      if (error) error.textContent = errorMessage;
+      renderApplyState();
+      return;
+    }
+    state.invalid.delete(key);
+    if (valuesEqual(value, original)) {
+      state.pending.delete(key);
+    } else {
+      state.pending.set(key, {
+        componentType: component.componentType || component.type || '',
+        property: name,
+        value: value,
+        original: original,
+        row: row,
+        meta: meta
+      });
+    }
+    row.classList.toggle('pending', state.pending.has(key));
+    row.classList.remove('invalid');
+    var panel = row.classList.contains('component-panel') ? row : row.closest('.component-panel');
+    if (panel) panel.classList.toggle('has-pending', hasPendingForComponent(component, index));
+    if (error) error.textContent = '';
+    var reset = row.querySelector('.property-reset');
+    if (reset) reset.disabled = !state.pending.has(key);
     renderApplyState();
   }
 
   function renderApplyState() {
-    elements.applyButton.disabled = state.pending.size === 0;
-    elements.applyButton.textContent = state.pending.size > 1
-      ? '应用 ' + state.pending.size + ' 项并回读' : '应用并回读';
+    var pendingCount = state.pending.size;
+    var invalidCount = state.invalid.size;
+    elements.applyButton.disabled = pendingCount === 0 || invalidCount > 0;
+    elements.applyButton.textContent = invalidCount > 0 ? '修正无效值'
+      : pendingCount > 1 ? '应用 ' + pendingCount + ' 项并回读' : '应用并回读';
+    elements.revertButton.disabled = pendingCount === 0 && invalidCount === 0;
+    elements.applyStatus.textContent = invalidCount > 0
+      ? invalidCount + ' 项输入无效，应用前请修正'
+      : pendingCount > 0 ? pendingCount + ' 项修改尚未应用' : '与运行时一致';
   }
 
   async function applyPending() {
-    if (!state.pending.size || !state.selectedPath) return;
+    if (!state.pending.size || state.invalid.size || !state.selectedPath) return;
+    var selectedPath = state.selectedPath;
+    var selectedNode = state.selectedNode;
     elements.applyButton.disabled = true;
-    try {
-      var entries = Array.from(state.pending.entries());
-      for (var entry of entries) {
-        var change = entry[1];
-        await api('/api/property', {
+    var applied = 0;
+    var normalized = 0;
+    var failed = [];
+    var entries = Array.from(state.pending.entries());
+    for (var entry of entries) {
+      if (state.selectedPath !== selectedPath) break;
+      var key = entry[0];
+      var change = entry[1];
+      try {
+        var result = await api('/api/property', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            path: state.selectedPath,
+            path: selectedPath,
             componentType: change.componentType,
             property: change.property,
             value: change.value
           })
         });
-        state.pending.delete(entry[0]);
+        if (!result || result.property !== change.property
+          || !Object.prototype.hasOwnProperty.call(result, 'readback')) {
+          throw new Error('应用后回读值不一致');
+        }
+        if (!valuesEqual(result.readback, change.value)) normalized += 1;
+        state.pending.delete(key);
+        state.invalid.delete(key);
+        applied += 1;
+      } catch (error) {
+        change.error = conciseError(error);
+        state.pending.set(key, change);
+        failed.push(change.property + '：' + change.error);
       }
-      await selectNode(state.selectedNode);
-      showToast('运行时属性已写入并回读');
-    } catch (error) {
-      showToast(error.message || String(error), true);
-    } finally {
-      renderApplyState();
     }
+    if (state.selectedPath === selectedPath && selectedNode) {
+      await selectNode(selectedNode, { preserveChanges: true });
+    }
+    renderApplyState();
+    if (failed.length) {
+      showToast('已应用 ' + applied + ' 项，仍有 ' + failed.length + ' 项失败', true);
+    } else if (normalized > 0) {
+      showToast('已应用并回读，' + normalized + ' 项由引擎自动归一化');
+    } else {
+      showToast('运行时属性已写入并回读');
+    }
+  }
+
+  function revertPending() {
+    if (!state.pending.size && !state.invalid.size) return;
+    state.pending.clear();
+    state.invalid.clear();
+    renderProperties();
+    renderApplyState();
+    showToast('未应用的属性修改已还原');
   }
 
   function reconcileSelection() {
@@ -787,6 +1192,7 @@
     state.selectedNode = null;
     state.components = [];
     state.pending.clear();
+    state.invalid.clear();
     updateSelectionHeader();
     elements.propertyView.innerHTML = '<div class="empty-state">从左侧选择一个运行时节点</div>';
     renderApplyState();
@@ -916,12 +1322,6 @@
     return Number.isNaN(date.valueOf()) ? String(value) : date.toLocaleTimeString();
   }
 
-  function escapeText(value) {
-    var element = document.createElement('span');
-    element.textContent = String(value);
-    return element.innerHTML;
-  }
-
   function isObject(value) {
     return value && typeof value === 'object' && !Array.isArray(value);
   }
@@ -958,6 +1358,7 @@
 
   elements.startButton.addEventListener('click', function () { void toggleSession(); });
   elements.applyButton.addEventListener('click', function () { void applyPending(); });
+  elements.revertButton.addEventListener('click', revertPending);
   elements.treeSearch.addEventListener('input', renderTree);
   elements.resolutionSelect.addEventListener('change', scheduleSettingsApply);
   elements.orientationSelect.addEventListener('change', scheduleSettingsApply);

@@ -219,10 +219,13 @@ export class RuntimeController {
             nodeUuid: typeof raw.nodeUuid === 'string' && raw.nodeUuid ? raw.nodeUuid : 'unknown',
             componentType: input.componentType,
             properties: raw.properties ?? {},
+            ...(raw.propertyMeta && typeof raw.propertyMeta === 'object' && !Array.isArray(raw.propertyMeta)
+              ? { propertyMeta: raw.propertyMeta }
+              : {}),
+            ...(Array.isArray(raw.skipped) ? { skipped: raw.skipped } : {}),
             ...(typeof raw.revision === 'number' ? { revision: raw.revision } : {}),
             capturedAt: new Date().toISOString()
-          }),
-          ...(Array.isArray(raw.skipped) ? { skipped: raw.skipped } : {})
+          })
         };
       }
       case 'server.runtimeSetProperty': {

@@ -95,12 +95,15 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).toContain("group.className = 'tree-children'");
     expect(workbenchApp).toContain("row.setAttribute('aria-level', String(depth + 1))");
     expect(workbenchApp).toContain('expandTreeToDepth(hierarchy.root, 3)');
-    expect(workbenchApp).toContain('visiblePropertyNames(properties)');
+    expect(workbenchApp).toContain('visiblePropertyNames(component)');
+    expect(workbenchApp).toContain('component.propertyMeta && component.propertyMeta[name]');
     expect(workbenchApp).toContain('var PROPERTY_LABELS = {');
     expect(workbenchApp).toContain('var ENUM_OPTIONS = {');
     expect(workbenchApp).toContain('function colorEditor(value, onChange)');
-    expect(workbenchApp).not.toContain("className = 'component-type'");
-    expect(workbenchApp).not.toContain("className = 'property-kind'");
+    expect(workbenchApp).toContain("className = 'component-type'");
+    expect(workbenchApp).toContain("className = 'property-kind' + (meta.editable ? ' editable' : ' readonly')");
+    expect(workbenchApp).toContain("state.invalid.set(key, errorMessage)");
+    expect(workbenchApp).toContain("elements.revertButton.addEventListener('click', revertPending)");
     expect(workbenchApp).toContain("nativeWindow.state === 'idle'");
     expect(workbenchApp).toContain('splitter.previousElementSibling.getBoundingClientRect().width');
     expect(workbenchApp).not.toContain("parseFloat(styles.getPropertyValue(property)) / 100 * window.innerWidth");
