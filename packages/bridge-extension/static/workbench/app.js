@@ -47,6 +47,8 @@
       var previousSessionId = state.host?.session?.sessionId || '';
       state.host = await api('/api/state');
       var nextSessionId = state.host?.session?.sessionId || '';
+      if (state.host?.userStopped === true) state.userStopped = true;
+      else if (nextSessionId) state.userStopped = false;
       if (previousSessionId !== nextSessionId) {
         resetConsole(nextSessionId);
         void refreshSettings();
@@ -60,8 +62,8 @@
 
   async function toggleSession() {
     var running = Boolean(state.host?.session?.sessionId)
-      || state.host?.runtime?.connected === true
-      || state.host?.status === 'ready';
+      || state.host?.status === 'ready'
+      || (state.host?.runtime?.connected === true && state.host?.userStopped !== true);
     if (running) {
       state.userStopped = true;
       await stopSession();
@@ -148,6 +150,9 @@
     var runtimeConnected = runtime.connected === true;
     var connected = runtimeConnected && host.status === 'ready';
     var embedded = nativeWindow.state === 'ready';
+    var running = Boolean(session.sessionId)
+      || host.status === 'ready'
+      || (runtimeConnected && host.userStopped !== true);
     var busy = host.status === 'starting' || host.status === 'stopping' || state.settingsBusy;
     elements.connectionState.className = 'connection ' + (connected ? 'connected' : 'disconnected');
     elements.connectionState.innerHTML = '<span class="live-dot"></span>' + (
@@ -176,8 +181,8 @@
     elements.startButton.textContent = host.status === 'starting'
       ? '正在启动…'
       : host.status === 'stopping' ? '正在停止…'
-        : runtimeConnected || host.status === 'ready' ? '停止模拟器' : '启动模拟器';
-    elements.startButton.className = runtimeConnected || host.status === 'ready' ? 'danger' : 'primary';
+        : running ? '停止模拟器' : '启动模拟器';
+    elements.startButton.className = running ? 'danger' : 'primary';
     elements.resolutionSelect.disabled = !state.settings || busy;
     elements.orientationSelect.disabled = !state.settings || busy;
     elements.consoleMeta.textContent = connected ? (state.consoleHasEntries ? '实时' : '暂无日志') : '等待运行';
@@ -964,7 +969,8 @@
   installSplitters();
   void refreshSettings();
   void refreshState().then(function () {
-    if (!state.userStopped && !state.autoStarting && state.host?.runtime?.connected === true && state.host.status !== 'ready') {
+    if (!state.userStopped && state.host?.userStopped !== true && !state.autoStarting
+      && state.host?.runtime?.connected === true && state.host.status !== 'ready') {
       state.autoStarting = true;
       void startSession().finally(function () { state.autoStarting = false; });
     }

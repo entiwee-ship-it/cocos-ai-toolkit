@@ -59,6 +59,7 @@ export class WorkbenchHost {
   private nativeHost: WorkbenchNativeHost | null = null;
   private starting: Promise<Record<string, any>> | null = null;
   private state: WorkbenchState = 'idle';
+  private userStopped = false;
   private lastError: string | null = null;
   private lastUpdateAt: string | null = null;
   private port = 0;
@@ -108,7 +109,8 @@ export class WorkbenchHost {
    *
    * @returns 无返回值；调用完成后状态回到 idle。
    */
-  async stopSession(): Promise<void> {
+  async stopSession(userInitiated = false): Promise<void> {
+    if (userInitiated) this.userStopped = true;
     this.state = 'stopping';
     const session = this.session;
     const sessionId = typeof(session?.sessionId) === 'string' ? session.sessionId : '';
@@ -162,11 +164,12 @@ export class WorkbenchHost {
       return;
     }
     if (request.method === 'POST' && url.pathname === '/api/stop') {
-      await this.stopSession();
+      await this.stopSession(true);
       sendJson(response, 200, await this.readState());
       return;
     }
     if (request.method === 'POST' && url.pathname === '/api/start') {
+      this.userStopped = false;
       await this.startSession();
       sendJson(response, 200, await this.readState());
       return;
@@ -346,6 +349,7 @@ export class WorkbenchHost {
         simulatorWindowHandle: null,
         error: null
       },
+      userStopped: this.userStopped,
       error: this.lastError
     };
   }

@@ -108,6 +108,7 @@ describe('WorkbenchHost', () => {
       const state = await fetch(`${url}api/start`, { method: 'POST' }).then((response) => response.json());
       expect(state).toMatchObject({
         status: 'ready',
+        userStopped: false,
         session: { sessionId: 'session-1', runtimeInstanceId: 'runtime-1' },
         hierarchy: { sceneEpoch: 1, revision: 7, nodeCount: 2 }
       });
@@ -174,6 +175,12 @@ describe('WorkbenchHost', () => {
         parentProcessId: process.pid,
         childProcessId: 0
       }));
+      await expect(fetch(`${url}api/stop`, { method: 'POST' }).then((response) => response.json())).resolves.toMatchObject({
+        status: 'idle',
+        userStopped: true,
+        session: null,
+        runtime: { connected: false }
+      });
     } finally {
       await host.stop();
     }

@@ -406,7 +406,7 @@ async function ensureWorkbenchHost(): Promise<{ url: string }> {
 }
 
 async function closeWorkbench(): Promise<{ detached: boolean }> {
-  await workbenchHost?.stopSession();
+  await workbenchHost?.stopSession(true);
   return { detached: true };
 }
 

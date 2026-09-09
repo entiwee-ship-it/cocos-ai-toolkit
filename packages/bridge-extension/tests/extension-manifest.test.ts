@@ -91,6 +91,7 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).toContain("api('/api/stop'");
     expect(workbenchApp).toContain("api('/api/simulator-settings'");
     expect(workbenchApp).toContain("api('/api/console?sinceSeq='");
+    expect(workbenchApp).toContain('host.userStopped !== true');
     expect(workbenchApp).toContain("group.className = 'tree-children'");
     expect(workbenchApp).toContain("row.setAttribute('aria-level', String(depth + 1))");
     expect(workbenchApp).toContain('expandTreeToDepth(hierarchy.root, 3)');
@@ -117,6 +118,7 @@ describe('bridge extension manifest', () => {
     const workbenchHost = readFileSync(new URL('../src/workbench-host.ts', import.meta.url), 'utf8');
     expect(workbenchHost).toContain("Get-CimInstance Win32_Process -Filter \\\"Name = 'SimulatorApp-Win32.exe'\\\"");
     expect(workbenchHost).toContain('terminateCreatorSimulatorProcesses(process.pid, processId)');
+    expect(workbenchHost).toContain('userStopped: this.userStopped');
   });
 
   it('为 Creator 本地扩展管理器提供双语摘要和详情元数据', () => {
