@@ -23,11 +23,13 @@ internal static class SimulatorEmbedHost
     private const long WsExWindowEdge = 0x00000100L;
     private const long WsExClientEdge = 0x00000200L;
     private const long WsExAppWindow = 0x00040000L;
+    private const long WsExToolWindow = 0x00000080L;
     private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
     private const uint SwpFrameChanged = 0x0020;
     private const uint SwpShowWindow = 0x0040;
     private const uint SwpAsyncWindowPos = 0x4000;
+    private const int SwShow = 5;
     private const uint Th32csSnapProcess = 0x00000002;
 
     private static IntPtr parentWindow;
@@ -103,6 +105,9 @@ internal static class SimulatorEmbedHost
     [DllImport("user32.dll")]
     private static extern IntPtr GetParent(IntPtr window);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool ShowWindow(IntPtr window, int command);
+
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr GetWindowLongPtr64(IntPtr window, int index);
 
@@ -165,7 +170,7 @@ internal static class SimulatorEmbedHost
             int parentProcessId = ParseInt(args[0]);
             int requestedSimulatorProcessId = ParseNonNegativeInt(args[1]);
             string[] parentTitles = Encoding.UTF8.GetString(Convert.FromBase64String(args[2])).Split('\n');
-            parentWindow = WaitForWindow(0, parentTitles, 10000);
+            parentWindow = WaitForWindow(parentProcessId, parentTitles, 10000);
             simulatorWindow = WaitForSimulatorWindow(requestedSimulatorProcessId, parentProcessId, 10000);
             latestBounds = ParseBounds(args, 3);
             Attach();
@@ -214,15 +219,17 @@ internal static class SimulatorEmbedHost
         attached = true;
         try
         {
-            // SDL 渲染窗口保持顶层语义，由 Workbench owner 统一层级与生命周期。
+            // SDL 使用独立顶层渲染表面；保持无边框 Popup，由 Workbench owner 和跟踪线程同步位置。
             long style = originalStyle.ToInt64();
             style &= ~(WsChild | WsCaption | WsThickFrame | WsSysMenu | WsMinimizeBox | WsMaximizeBox | WsClipChildren);
             style |= WsPopup | WsVisible | WsClipSiblings;
             long exStyle = originalExStyle.ToInt64();
             exStyle &= ~(WsExDlgModalFrame | WsExWindowEdge | WsExClientEdge | WsExAppWindow);
+            exStyle |= WsExToolWindow;
             SetWindowLongPtrChecked(simulatorWindow, GwlStyle, new IntPtr(style));
             SetWindowLongPtrChecked(simulatorWindow, GwlExStyle, new IntPtr(exStyle));
             SetWindowLongPtrChecked(simulatorWindow, GwlHwndParent, parentWindow);
+            ShowWindow(simulatorWindow, SwShow);
         }
         catch
         {
@@ -244,7 +251,7 @@ internal static class SimulatorEmbedHost
                     if (bounds != null) UpdateBounds(bounds, false);
                 }
                 catch { }
-                Thread.Sleep(8);
+                Thread.Sleep(1);
             }
         });
         boundsThread.IsBackground = true;
@@ -276,15 +283,16 @@ internal static class SimulatorEmbedHost
         Point origin = new Point { X = x, Y = y };
         if (!ClientToScreen(parentWindow, ref origin)) ThrowLastError("CLIENT_TO_SCREEN_FAILED");
         Rect current;
-        if (
-            !frameChanged
-            && GetWindowRect(simulatorWindow, out current)
-            && current.Left == origin.X
-            && current.Top == origin.Y
-            && current.Right - current.Left == width
-            && current.Bottom - current.Top == height
-        ) return;
-        uint flags = SwpNoActivate | SwpShowWindow | SwpAsyncWindowPos;
+        if (!frameChanged && GetWindowRect(simulatorWindow, out current))
+        {
+            if (
+                current.Left == origin.X
+                && current.Top == origin.Y
+                && current.Right - current.Left == width
+                && current.Bottom - current.Top == height
+            ) return;
+        }
+        uint flags = SwpNoActivate | SwpShowWindow;
         if (frameChanged) flags |= SwpFrameChanged;
         if (!SetWindowPos(
             simulatorWindow,
@@ -302,9 +310,9 @@ internal static class SimulatorEmbedHost
         if (!attached) return;
         attached = false;
         if (!IsWindow(simulatorWindow)) return;
-        SetWindowLongPtrChecked(simulatorWindow, GwlHwndParent, originalParent);
         SetWindowLongPtrChecked(simulatorWindow, GwlStyle, originalStyle);
         SetWindowLongPtrChecked(simulatorWindow, GwlExStyle, originalExStyle);
+        SetWindowLongPtrChecked(simulatorWindow, GwlHwndParent, originalParent);
         int width = Math.Max(1, originalRect.Right - originalRect.Left);
         int height = Math.Max(1, originalRect.Bottom - originalRect.Top);
         SetWindowPos(
@@ -316,6 +324,7 @@ internal static class SimulatorEmbedHost
             height,
             SwpNoZOrder | SwpFrameChanged | SwpShowWindow | SwpAsyncWindowPos
         );
+        ShowWindow(simulatorWindow, SwShow);
     }
 
     private static IntPtr WaitForWindow(int processId, string[] titleCandidates, int timeoutMs)
@@ -333,11 +342,22 @@ internal static class SimulatorEmbedHost
     private static IntPtr FindWindow(int processId, string[] titleCandidates)
     {
         IntPtr found = IntPtr.Zero;
+        IntPtr fallback = IntPtr.Zero;
+        long fallbackArea = -1;
         EnumWindows(delegate(IntPtr window, IntPtr state)
         {
             uint owner;
             GetWindowThreadProcessId(window, out owner);
             if ((processId > 0 && owner != processId) || !IsWindowVisible(window)) return true;
+            Rect rect;
+            long area = GetWindowRect(window, out rect)
+                ? Math.Max(0, (long)(rect.Right - rect.Left) * (rect.Bottom - rect.Top))
+                : 0;
+            if (area > fallbackArea)
+            {
+                fallback = window;
+                fallbackArea = area;
+            }
             string title = ReadWindowTitle(window);
             for (int index = 0; index < titleCandidates.Length; index += 1)
             {
@@ -350,7 +370,7 @@ internal static class SimulatorEmbedHost
             }
             return true;
         }, IntPtr.Zero);
-        return found;
+        return found != IntPtr.Zero ? found : fallback;
     }
 
     private static IntPtr WaitForSimulatorWindow(int requestedProcessId, int parentProcessId, int timeoutMs)

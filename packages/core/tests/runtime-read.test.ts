@@ -335,6 +335,30 @@ describe('readRuntimeComponent（页面注入：组件属性读取）', () => {
     expect(result.skipped).toContain('onClick');
     expect(result.properties.self).toMatchObject({ __type: 'circular-reference' });
   });
+
+  it('保留 Cocos 值类型的 getter 属性，避免 Color 等值在 Inspector 中变成空对象', async () => {
+    const color = Object.create({
+      get r() { return 255; },
+      get g() { return 128; },
+      get b() { return 0; },
+      get a() { return 255; }
+    }) as Record<string, unknown>;
+    color.constructor = { name: 'Color' };
+    const node = fakeNode({ name: 'sprite', fileId: 'f2' });
+    const component = {
+      __typename__: 'Sprite',
+      color
+    } as Record<string, unknown>;
+    node.components = [component as never];
+    node.getComponent = () => component;
+    installScene(fakeNode({ name: 'Canvas', fileId: 'f1', children: [node] }));
+
+    const result = await runScript('readRuntimeComponent', {
+      path: 'Canvas/sprite',
+      componentType: 'Sprite'
+    }) as { properties: Record<string, unknown> };
+    expect(result.properties.color).toEqual({ r: 255, g: 128, b: 0, a: 255 });
+  });
 });
 
 describe('sampleRuntimeWindow（页面注入：时间窗口采样）', () => {

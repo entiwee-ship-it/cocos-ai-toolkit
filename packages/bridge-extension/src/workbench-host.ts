@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import {
   NativeSimulatorHost,
   type NativeSimulatorHostStatus,
@@ -9,6 +11,7 @@ import {
 } from './native-simulator-host';
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 interface WorkbenchClient {
   connect(): Promise<void>;
@@ -44,6 +47,8 @@ type NativeHostFactory = (options: {
   parentTitles: string[];
 }) => WorkbenchNativeHost;
 
+type WorkbenchState = 'idle' | 'starting' | 'stopping' | 'ready' | 'error';
+
 /** 人用 Workbench：真实运行树、属性和嵌入窗口都绑定同一 Simulator 会话。 */
 export class WorkbenchHost {
   private server: Server | null = null;
@@ -53,7 +58,7 @@ export class WorkbenchHost {
   private stopHierarchy: (() => Promise<void>) | null = null;
   private nativeHost: WorkbenchNativeHost | null = null;
   private starting: Promise<Record<string, any>> | null = null;
-  private state: 'idle' | 'starting' | 'ready' | 'error' = 'idle';
+  private state: WorkbenchState = 'idle';
   private lastError: string | null = null;
   private lastUpdateAt: string | null = null;
   private port = 0;
@@ -90,17 +95,55 @@ export class WorkbenchHost {
   }
 
   async stop(): Promise<void> {
-    await this.detachNativeWindow();
-    await this.stopHierarchy?.().catch(() => undefined);
-    this.stopHierarchy = null;
-    const sessionId = typeof this.session?.sessionId === 'string' ? this.session.sessionId : '';
-    if (sessionId) await this.client?.request('server.previewStop', { sessionId }).catch(() => undefined);
-    this.session = null;
+    await this.stopSession();
     await this.client?.close().catch(() => undefined);
     this.client = null;
     const server = this.server;
     this.server = null;
     if (server) await new Promise<void>((resolveStop) => server.close(() => resolveStop()));
+  }
+
+  /**
+   * 停止当前 Workbench 运行会话，但保留本地 HTTP 服务供下一次启动复用。
+   *
+   * @returns 无返回值；调用完成后状态回到 idle。
+   */
+  async stopSession(): Promise<void> {
+    this.state = 'stopping';
+    const session = this.session;
+    const sessionId = typeof(session?.sessionId) === 'string' ? session.sessionId : '';
+    const processId = Number(session?.appPid);
+    const ownedSession = Boolean(sessionId) || (Number.isInteger(processId) && processId > 0);
+    await this.detachNativeWindow();
+    await this.stopHierarchy?.().catch(() => undefined);
+    this.stopHierarchy = null;
+    if (sessionId) {
+      await this.client?.request('server.previewStop', { sessionId }).catch(() => undefined);
+    }
+    await this.client?.request('probe.simulatorDebuggerClose', {
+      selector: this.selector,
+      params: {}
+    }).catch(() => undefined);
+    const simulatorProcessFound = await terminateCreatorSimulatorProcesses(process.pid, processId);
+    if (ownedSession || simulatorProcessFound) await this.waitForRuntimeDisconnect();
+    this.session = null;
+    this.hierarchy = null;
+    this.state = 'idle';
+    this.lastError = null;
+  }
+
+  /** 等待 Preview Server 清除旧 Simulator 心跳，避免停止或切换分辨率后立即误连旧实例。 */
+  private async waitForRuntimeDisconnect(): Promise<void> {
+    const deadline = Date.now() + 4_000;
+    while (Date.now() < deadline) {
+      const runtime = await this.client?.request('probe.simulatorRuntimeStatus', {
+        selector: this.selector,
+        params: {}
+      }).catch(() => ({ connected: false }));
+      if (runtime?.connected !== true) return;
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 100));
+    }
+    // 进程已经被明确结束时，残留心跳属于服务端延迟；不能阻塞 Workbench 的停止状态。
   }
 
   private url(): string {
@@ -118,13 +161,13 @@ export class WorkbenchHost {
       sendJson(response, 200, await this.readState());
       return;
     }
-    if (request.method === 'POST' && url.pathname === '/api/start') {
-      await this.startSession(false);
+    if (request.method === 'POST' && url.pathname === '/api/stop') {
+      await this.stopSession();
       sendJson(response, 200, await this.readState());
       return;
     }
-    if (request.method === 'POST' && url.pathname === '/api/reconnect') {
-      await this.startSession(true);
+    if (request.method === 'POST' && url.pathname === '/api/start') {
+      await this.startSession();
       sendJson(response, 200, await this.readState());
       return;
     }
@@ -148,6 +191,39 @@ export class WorkbenchHost {
         path,
         componentType
       }));
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/console') {
+      const sinceSeq = Number(url.searchParams.get('sinceSeq') ?? 0);
+      if (!Number.isInteger(sinceSeq) || sinceSeq < 0) {
+        sendJson(response, 400, { error: 'CONSOLE_CURSOR_INVALID' });
+        return;
+      }
+      sendJson(response, 200, await this.requireClient().request('server.runtimeConsole', {
+        sessionId: this.requireSessionId(),
+        sinceSeq
+      }));
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/simulator-settings') {
+      sendJson(response, 200, await this.requireClient().request('probe.simulatorSettings', {
+        selector: this.selector,
+        params: {}
+      }));
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/simulator-settings') {
+      const body = await readJsonBody(request);
+      const settings = await this.requireClient().request('probe.simulatorSettingsUpdate', {
+        selector: this.selector,
+        params: body
+      });
+      const wasRunning = this.state === 'ready' || Boolean(this.session?.sessionId);
+      if (wasRunning) {
+        await this.stopSession();
+        await this.startSession();
+      }
+      sendJson(response, 200, { settings, state: await this.readState() });
       return;
     }
     if (request.method === 'POST' && url.pathname === '/api/property') {
@@ -196,17 +272,15 @@ export class WorkbenchHost {
     await this.serveStatic(url.pathname, response);
   }
 
-  private async startSession(reconnect: boolean): Promise<Record<string, any>> {
+  private async startSession(): Promise<Record<string, any>> {
     if (this.starting) return this.starting;
-    if (!reconnect && this.state === 'ready' && this.session?.state === 'ready') return this.session;
+    if (this.state === 'ready' && this.session?.state === 'ready') return this.session;
     const starting = (async () => {
+      if (this.state === 'error' || this.session || this.nativeHost) {
+        await this.stopSession();
+      }
       this.state = 'starting';
       this.lastError = null;
-      await this.detachNativeWindow();
-      await this.stopHierarchy?.().catch(() => undefined);
-      this.stopHierarchy = null;
-      const previousId = typeof this.session?.sessionId === 'string' ? this.session.sessionId : '';
-      if (previousId) await this.requireClient().request('server.previewStop', { sessionId: previousId }).catch(() => undefined);
       const session = await this.requireClient().request('server.previewLaunch', {
         selector: this.selector,
         params: { platform: 'creator-simulator' }
@@ -230,6 +304,10 @@ export class WorkbenchHost {
           }
         }
       );
+      await this.requireClient().request('probe.simulatorDebuggerClose', {
+        selector: this.selector,
+        params: {}
+      }).catch(() => undefined);
       this.state = 'ready';
       return session;
     })().catch((error) => {
@@ -333,6 +411,38 @@ export class WorkbenchHost {
     if (typeof value !== 'string' || !value) throw new Error('WORKBENCH_SESSION_NOT_READY');
     return value;
   }
+}
+
+/** 强制结束当前 Creator 启动的全部 Simulator，覆盖 Workbench 尚未建立 session 的路径。 */
+async function terminateCreatorSimulatorProcesses(parentProcessId: number, knownProcessId: number): Promise<boolean> {
+  const processIds = new Set<number>();
+  if (Number.isInteger(knownProcessId) && knownProcessId > 0 && knownProcessId !== process.pid) {
+    processIds.add(knownProcessId);
+  }
+  if (process.platform === 'win32') {
+    const command = `$items = Get-CimInstance Win32_Process -Filter \"Name = 'SimulatorApp-Win32.exe'\" | `
+      + `Where-Object { $_.ParentProcessId -eq ${parentProcessId} } | `
+      + 'Select-Object -ExpandProperty ProcessId; $items';
+    const result = await execFileAsync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      command
+    ], { windowsHide: true, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: '' }));
+    for (const value of String(result.stdout).split(/\s+/)) {
+      const processId = Number(value);
+      if (Number.isInteger(processId) && processId > 0 && processId !== process.pid) processIds.add(processId);
+    }
+  }
+  for (const processId of processIds) {
+    try { process.kill(processId); } catch { /* 进程已退出时继续清理其它资源。 */ }
+    if (process.platform === 'win32') {
+      await execFileAsync('taskkill.exe', ['/PID', String(processId), '/T', '/F'], {
+        windowsHide: true
+      }).catch(() => undefined);
+    }
+  }
+  return processIds.size > 0;
 }
 
 async function createClient(): Promise<WorkbenchClient> {

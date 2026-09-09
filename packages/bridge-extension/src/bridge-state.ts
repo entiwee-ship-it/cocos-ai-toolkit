@@ -12,6 +12,7 @@ export const BRIDGE_CAPABILITIES = [
   'probe.nodeSelect',
   'probe.extensionManagerOpen',
   'probe.managerPanelOpen',
+  'probe.workbenchOpen',
   'probe.component',
   'probe.prefab',
   'probe.directWrite',
@@ -23,6 +24,9 @@ export const BRIDGE_CAPABILITIES = [
   'probe.previewStatus',
   'probe.previewReload',
   'probe.simulatorOpen',
+  'probe.simulatorSettings',
+  'probe.simulatorSettingsUpdate',
+  'probe.simulatorDebuggerClose',
   'probe.simulatorRuntimeStatus',
   'probe.simulatorRuntimeEvaluate'
 ] as const;

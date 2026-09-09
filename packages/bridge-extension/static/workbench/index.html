@@ -17,8 +17,6 @@
       </div>
       <div class="toolbar-actions">
         <button id="startButton" class="primary" type="button">启动模拟器</button>
-        <button id="reconnectButton" type="button">重新连接</button>
-        <button id="refreshButton" type="button">刷新</button>
       </div>
     </header>
 
@@ -46,7 +44,6 @@
           <code id="selectedUuid">—</code>
           <code id="selectedPath">—</code>
         </div>
-        <nav id="componentTabs" class="component-tabs" aria-label="节点组件"></nav>
         <div id="propertyView" class="property-view">
           <div class="empty-state">从左侧选择一个运行时节点</div>
         </div>
@@ -63,19 +60,42 @@
           <h1 id="previewTitle">原生模拟器</h1>
           <span id="liveState" class="live-state"><span class="live-dot"></span>等待连接</span>
         </header>
-        <div class="preview-process"><span id="processName">SimulatorApp-Win32.exe · PID —</span></div>
+        <div class="preview-process">
+          <span id="processName">SimulatorApp-Win32.exe · PID —</span>
+          <div class="simulator-settings" aria-label="模拟器显示设置">
+            <label>设备
+              <select id="resolutionSelect" disabled aria-label="选择模拟器设备分辨率"></select>
+            </label>
+            <label>方向
+              <select id="orientationSelect" disabled aria-label="选择模拟器方向">
+                <option value="landscape">横屏</option>
+                <option value="portrait">竖屏</option>
+                <option value="reverse-landscape">反向横屏</option>
+                <option value="reverse-portrait">反向竖屏</option>
+              </select>
+            </label>
+          </div>
+        </div>
         <div id="previewStage" class="preview-stage">
           <div id="nativeViewport" class="native-viewport" aria-label="Creator 原生模拟器交互区域">
             <div id="previewPlaceholder" class="preview-placeholder">
               <span class="preview-icon" aria-hidden="true">▶</span>
               <strong>等待嵌入原生 Simulator</strong>
-              <span>启动或重新连接模拟器后可直接操作</span>
+              <span>启动后可直接操作游戏画面</span>
             </div>
           </div>
         </div>
+        <section class="console-panel" aria-labelledby="consoleTitle">
+          <header class="console-heading">
+            <h2 id="consoleTitle">调试控制台</h2>
+            <span id="consoleMeta">等待运行</span>
+            <button id="clearConsoleButton" type="button" title="清空当前日志">清空</button>
+          </header>
+          <pre id="consoleView" class="console-view">启动模拟器后显示调试输出</pre>
+        </section>
         <footer class="preview-footer">
           <span id="embedMeta">等待嵌入</span>
-          <button id="reembedButton" type="button">重新嵌入</button>
+          <span>原生窗口随工作台自动同步</span>
         </footer>
       </section>
     </main>

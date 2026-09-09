@@ -38,6 +38,30 @@ const BRIDGE_RELEASE_DATE = '2026-09-09';
 
 type JsonObject = Record<string, unknown>;
 
+type SimulatorOrientation = 'portrait' | 'landscape' | 'reverse-portrait' | 'reverse-landscape';
+
+interface SimulatorDevice {
+  name: string;
+  width: number;
+  height: number;
+  ratio: number;
+}
+
+interface SimulatorSettings {
+  devices: SimulatorDevice[];
+  device: string;
+  resolutionIndex: number;
+  orientation: SimulatorOrientation;
+  debugger: boolean;
+}
+
+const SIMULATOR_ORIENTATIONS: readonly SimulatorOrientation[] = [
+  'portrait',
+  'landscape',
+  'reverse-portrait',
+  'reverse-landscape'
+];
+
 let ipcServer: CreatorIpcServer | null = null;
 let workbenchHost: WorkbenchHost | null = null;
 let extensionStartedAt = new Date().toISOString();
@@ -67,6 +91,7 @@ const handlers: Readonly<Record<string, (payload: unknown) => Promise<unknown>>>
     return result;
   },
   'probe.managerPanelOpen': () => openToolManager(),
+  'probe.workbenchOpen': () => openWorkbench(),
   'probe.openAsset': async (payload) => {
     const uuid = readObject(payload).uuid;
     if (typeof uuid !== 'string' || !uuid) throw new ProbeError('UUID_REQUIRED');
@@ -81,7 +106,10 @@ const handlers: Readonly<Record<string, (payload: unknown) => Promise<unknown>>>
   'probe.previewOpen': () => openPreviewServer(editorPreviewMessageSource, nodeHttpPreviewProbe),
   'probe.previewStatus': () => readPreviewStatus(editorPreviewMessageSource),
   'probe.previewReload': () => reloadPreviewPages(editorPreviewMessageSource),
-  'probe.simulatorOpen': () => openSimulatorPreview(editorSimulatorPreviewSource),
+  'probe.simulatorOpen': () => openSimulatorPreviewWithoutDebugger(),
+  'probe.simulatorSettings': () => readSimulatorSettings(),
+  'probe.simulatorSettingsUpdate': (payload) => updateSimulatorSettings(payload),
+  'probe.simulatorDebuggerClose': () => closeSimulatorDebugger(),
   'probe.simulatorRuntimeStatus': () => readSimulatorRuntimeStatus(editorPreviewMessageSource),
   'probe.simulatorRuntimeEvaluate': (payload) => {
     const input = readObject(payload);
@@ -242,6 +270,124 @@ async function openWorkbench(): Promise<{ panel: string; opened: boolean; url: s
   return { panel, opened: await Editor.Panel.has(panel), url };
 }
 
+/**
+ * 启动 Creator Simulator，并在 Workbench 场景中隐藏独立 Debugger 面板。
+ *
+ * @returns Simulator 启动结果与预览地址。
+ */
+async function openSimulatorPreviewWithoutDebugger(): Promise<unknown> {
+  const key = 'preview.simulator_debugger';
+  const previous = await Editor.Profile.getConfig('preview', key, 'local');
+  try {
+    // 先按 Creator 原生可见模式创建渲染表面，避免关闭配置后只得到隐藏 dummy 窗口。
+    await Editor.Profile.setConfig('preview', key, true, 'local');
+    const result = await openSimulatorPreview(editorSimulatorPreviewSource);
+    await closeSimulatorDebugger();
+    return result;
+  } finally {
+    if (typeof previous === 'boolean') {
+      await Editor.Profile.setConfig('preview', key, previous, 'local').catch(() => undefined);
+    } else {
+      await Editor.Profile.removeConfig('preview', key, 'local').catch(() => undefined);
+    }
+    await closeSimulatorDebugger();
+  }
+}
+
+/**
+ * 读取 Creator Preview 的设备、方向和 Debugger 配置，供运行 Workbench 展示。
+ *
+ * @returns 当前可选设备和生效配置。
+ */
+async function readSimulatorSettings(): Promise<SimulatorSettings> {
+  const rawDevices = await Editor.Message.request('device', 'query');
+  const devices = Array.isArray(rawDevices)
+    ? rawDevices.map(readSimulatorDevice).filter((device): device is SimulatorDevice => device !== null)
+    : [];
+  if (devices.length === 0) throw new ProbeError('SIMULATOR_DEVICES_UNAVAILABLE');
+
+  const [rawDevice, rawResolutionIndex, rawOrientation, rawDebugger] = await Promise.all([
+    Editor.Profile.getConfig('preview', 'preview.device', 'local'),
+    Editor.Profile.getConfig('preview', 'preview.simulator_resolution', 'local'),
+    Editor.Profile.getConfig('preview', 'preview.simulator_orientation', 'local'),
+    Editor.Profile.getConfig('preview', 'preview.simulator_debugger', 'local')
+  ]);
+  const deviceName = typeof rawDevice === 'string' ? rawDevice : '';
+  const namedIndex = devices.findIndex((device) => device.name === deviceName);
+  const configuredIndex = typeof rawResolutionIndex === 'number' && Number.isInteger(rawResolutionIndex)
+    ? rawResolutionIndex
+    : -1;
+  const resolutionIndex = configuredIndex >= 0 && configuredIndex < devices.length
+    ? configuredIndex
+    : namedIndex >= 0 ? namedIndex : 0;
+  const orientation = isSimulatorOrientation(rawOrientation) ? rawOrientation : 'landscape';
+  return {
+    devices,
+    device: devices[resolutionIndex].name,
+    resolutionIndex,
+    orientation,
+    debugger: rawDebugger === true
+  };
+}
+
+/**
+ * 保存 Workbench 选择的 Simulator 设备和方向。
+ *
+ * @param payload 包含 resolutionIndex 与 orientation 的设置请求。
+ * @returns 保存后的完整 Simulator 配置。
+ */
+async function updateSimulatorSettings(payload: unknown): Promise<SimulatorSettings> {
+  const current = await readSimulatorSettings();
+  const input = readObject(payload);
+  const resolutionIndex = input.resolutionIndex === undefined
+    ? current.resolutionIndex
+    : Number(input.resolutionIndex);
+  if (!Number.isInteger(resolutionIndex) || resolutionIndex < 0 || resolutionIndex >= current.devices.length) {
+    throw new ProbeError('SIMULATOR_RESOLUTION_INVALID', {
+      resolutionIndex,
+      deviceCount: current.devices.length
+    });
+  }
+  const orientation = input.orientation === undefined ? current.orientation : input.orientation;
+  if (!isSimulatorOrientation(orientation)) {
+    throw new ProbeError('SIMULATOR_ORIENTATION_INVALID', { orientation });
+  }
+  await Editor.Profile.setConfig('preview', 'preview.device', current.devices[resolutionIndex].name, 'local');
+  await Editor.Profile.setConfig('preview', 'preview.simulator_resolution', resolutionIndex, 'local');
+  await Editor.Profile.setConfig('preview', 'preview.simulator_orientation', orientation, 'local');
+  return readSimulatorSettings();
+}
+
+/**
+ * 关闭 Creator Preview 创建的独立 Debugger 面板。
+ *
+ * @returns 面板关闭结果。
+ */
+async function closeSimulatorDebugger(): Promise<{ closed: boolean }> {
+  const closed = await Editor.Panel.close('preview.debugger').catch(() => false);
+  return { closed: closed === true };
+}
+
+function readSimulatorDevice(value: unknown): SimulatorDevice | null {
+  const item = readObject(value);
+  const name = typeof item.name === 'string' ? item.name.trim() : '';
+  const width = typeof item.width === 'number' ? item.width : Number(item.width);
+  const height = typeof item.height === 'number' ? item.height : Number(item.height);
+  const ratio = typeof item.ratio === 'number' ? item.ratio : Number(item.ratio);
+  if (!name || !Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) return null;
+  return {
+    name,
+    width: Math.round(width),
+    height: Math.round(height),
+    ratio: Number.isFinite(ratio) && ratio > 0 ? ratio : 1
+  };
+}
+
+function isSimulatorOrientation(value: unknown): value is SimulatorOrientation {
+  return typeof value === 'string'
+    && SIMULATOR_ORIENTATIONS.includes(value as SimulatorOrientation);
+}
+
 async function ensureWorkbenchHost(): Promise<{ url: string }> {
   if (!workbenchHost) {
     const descriptor = buildDescriptor();
@@ -260,7 +406,7 @@ async function ensureWorkbenchHost(): Promise<{ url: string }> {
 }
 
 async function closeWorkbench(): Promise<{ detached: boolean }> {
-  await workbenchHost?.detachNativeWindow();
+  await workbenchHost?.stopSession();
   return { detached: true };
 }
 

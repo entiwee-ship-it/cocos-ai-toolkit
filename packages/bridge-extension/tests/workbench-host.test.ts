@@ -27,8 +27,10 @@ describe('WorkbenchHost', () => {
         nativeState = { ...nativeState, state: 'idle' as const };
       })
     };
+    let runtimeConnected = false;
     const request = vi.fn(async (method: string, payload: unknown) => {
       if (method === 'server.previewLaunch') {
+        runtimeConnected = true;
         return {
           sessionId: 'session-1',
           runtimeInstanceId: 'runtime-1',
@@ -37,7 +39,7 @@ describe('WorkbenchHost', () => {
         };
       }
       if (method === 'probe.simulatorRuntimeStatus') {
-        return { connected: true, runtimeId: 'runtime-1' };
+        return { connected: runtimeConnected, runtimeId: runtimeConnected ? 'runtime-1' : null };
       }
       if (method === 'server.runtimeComponent') {
         return { componentType: 'Boost', properties: { speed: 2 } };
@@ -45,7 +47,10 @@ describe('WorkbenchHost', () => {
       if (method === 'server.runtimeSetProperty') {
         return { written: true, readback: (payload as { value?: unknown }).value };
       }
-      if (method === 'server.previewStop') return { closed: true };
+      if (method === 'server.previewStop') {
+        runtimeConnected = false;
+        return { closed: true };
+      }
       throw new Error(`UNEXPECTED_METHOD:${method}`);
     });
     const client = {
@@ -110,6 +115,8 @@ describe('WorkbenchHost', () => {
         selector: { projectId: 'project-1', editorInstanceId: 'editor-1' },
         params: { platform: 'creator-simulator' }
       });
+      const reconnect = await fetch(`${url}api/reconnect`, { method: 'POST' });
+      expect(reconnect.status).toBe(404);
 
       await expect(fetch(`${url}api/hierarchy`).then((response) => response.json())).resolves.toMatchObject({
         root: { name: 'main', children: [{ name: 'root' }] }

@@ -213,7 +213,26 @@ function serializeRuntimeValue(value: unknown, depth: number, seen: Set<unknown>
     }
     seen.add(value);
     const output: Record<string, unknown> = {};
-    const keys = Object.keys(record).filter((key) => key !== 'constructor' && !key.startsWith('__') && !key.startsWith('_'));
+    const constructorName = typeof (record.constructor as { name?: unknown } | undefined)?.name === 'string'
+      ? (record.constructor as { name: string }).name
+      : '';
+    const valueTypeKeys = constructorName === 'Color'
+      ? ['r', 'g', 'b', 'a']
+      : constructorName === 'Vec2'
+        ? ['x', 'y']
+        : constructorName === 'Vec3'
+          ? ['x', 'y', 'z']
+          : constructorName === 'Vec4' || constructorName === 'Quat'
+            ? ['x', 'y', 'z', 'w']
+            : constructorName === 'Size'
+              ? ['width', 'height']
+              : constructorName === 'Rect'
+                ? ['x', 'y', 'width', 'height']
+                : [];
+    const keys = [...new Set([
+      ...Object.keys(record),
+      ...valueTypeKeys
+    ])].filter((key) => key !== 'constructor' && !key.startsWith('__') && !key.startsWith('_'));
     if (keys.length > 30) {
       seen.delete(value);
       return { __type: 'complex-object', keys: keys.length };
