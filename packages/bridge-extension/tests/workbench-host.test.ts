@@ -128,14 +128,22 @@ describe('WorkbenchHost', () => {
       const invalidWrite = await fetch(`${url}api/property`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: '', componentType: 'Boost', property: 'speed', value: 3 })
+        body: JSON.stringify({ sessionId: 'session-1', path: '', componentType: 'Boost', property: 'speed', value: 3 })
       });
       expect(invalidWrite.status).toBe(400);
+
+      const staleWrite = await fetch(`${url}api/property`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'session-old', path: '/main~0/root~0', componentType: 'Boost', property: 'speed', value: 3 })
+      });
+      expect(staleWrite.status).toBe(409);
+      await expect(staleWrite.json()).resolves.toEqual({ error: 'WORKBENCH_SESSION_CHANGED' });
 
       await expect(fetch(`${url}api/property`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: '/main~0/root~0', componentType: 'Boost', property: 'speed', value: 3 })
+        body: JSON.stringify({ sessionId: 'session-1', path: '/main~0/root~0', componentType: 'Boost', property: 'speed', value: 3 })
       }).then((response) => response.json())).resolves.toEqual({ written: true, readback: 3 });
 
       const invalidNativeWindow = await fetch(`${url}api/native-window`, {

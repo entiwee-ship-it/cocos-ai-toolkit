@@ -10,6 +10,7 @@
     expanded: new Set(),
     componentExpanded: new Set(),
     pending: new Map(),
+    draftSessionId: '',
     nativeTimer: 0,
     nativeBusy: false,
     polling: false,
@@ -53,6 +54,11 @@
       if (previousSessionId !== nextSessionId) {
         resetConsole(nextSessionId);
         void refreshSettings();
+        if (previousSessionId && hasPendingChanges()) {
+          showToast('运行连接已变化，未应用修改已保留', true);
+        } else if (previousSessionId && !hasPendingChanges()) {
+          clearSelection({ discardChanges: true });
+        }
       }
       renderState();
       if (state.host.status === 'ready') await refreshHierarchy();
@@ -123,8 +129,11 @@
           state.expanded.clear();
           expandTreeToDepth(hierarchy.root, 3);
         }
-        reconcileSelection();
+        var selectionStillExists = reconcileSelection();
         renderTree();
+        if (selectionStillExists && state.selectedNode && !hasPendingChanges()) {
+          void selectNode(state.selectedNode, { preserveChanges: true });
+        }
       }
       renderState();
     } catch (error) {
@@ -190,6 +199,7 @@
     if (host.error && host.error !== state.lastToast) showToast(host.error, true);
     if (nativeWindow.error && nativeWindow.error !== state.lastToast) showToast(nativeWindow.error, true);
     if (connected && session.sessionId && nativeWindow.state === 'idle') scheduleNativeEmbed(false);
+    renderApplyState();
   }
 
   function renderSettings() {
@@ -352,9 +362,9 @@
    */
   async function selectNode(node, options) {
     options = options || {};
-    var preserveChanges = options.preserveChanges === true;
-    if (!preserveChanges && state.selectedPath && state.selectedPath !== node.path
-      && (state.pending.size || state.invalid.size)) {
+    var preserveChanges = options.preserveChanges === true
+      || (state.selectedPath === node.path && hasPendingChanges());
+    if (!preserveChanges && state.selectedPath && state.selectedPath !== node.path && hasPendingChanges()) {
       showToast('请先应用或还原当前属性修改', true);
       return;
     }
@@ -395,10 +405,13 @@
   function updateSelectionHeader() {
     var node = state.selectedNode;
     elements.selectionHeader.classList.toggle('empty', !node);
-    elements.selectedName.textContent = node?.name || '未选择节点';
+    elements.selectedName.textContent = node?.name
+      || (state.selectedPath && hasPendingChanges() ? '节点已离开运行树' : '未选择节点');
     elements.selectedUuid.textContent = node?.uuid || '—';
-    elements.selectedPath.textContent = node?.path || '—';
-    if (!node) elements.selectionMeta.textContent = '选择节点后显示可用属性';
+    elements.selectedPath.textContent = node?.path || state.selectedPath || '—';
+    if (!node) elements.selectionMeta.textContent = hasPendingChanges()
+      ? '未应用修改已保留，可还原但不能应用'
+      : '选择节点后显示可用属性';
   }
 
   function renderProperties() {
@@ -533,12 +546,15 @@
     icon.textContent = normalizedComponentType(type).slice(0, 1).toUpperCase() || 'C';
     var heading = document.createElement('span');
     heading.className = 'component-heading';
+    var displayName = componentDisplayName(type);
     var name = document.createElement('strong');
-    name.textContent = componentDisplayName(type);
+    name.textContent = displayName;
     var typeName = document.createElement('small');
     typeName.className = 'component-type';
     typeName.textContent = type;
-    heading.append(name, typeName);
+    if (displayName === normalizedComponentType(type)) heading.append(name);
+    else heading.append(name, typeName);
+    title.title = type;
     title.append(arrow, icon, heading);
     var count = document.createElement('span');
     count.className = 'component-count';
@@ -622,6 +638,7 @@
   }
 
   function shouldShowProperty(name, value, meta, componentType, properties) {
+    if (meta && meta.declared === false) return false;
     if (name.startsWith('_') || name.startsWith('internal') || name.startsWith('editor')) return false;
     if ([
       'constructor', 'node', 'name', 'uuid', 'enabled', 'enabledInHierarchy', 'isValid', 'hideFlags',
@@ -719,11 +736,12 @@
     reset.textContent = '↶';
     reset.title = '还原此属性';
     reset.setAttribute('aria-label', '还原 ' + propertyLabel(meta.displayName || name));
-    reset.disabled = !pending;
+    reset.disabled = !pending && !state.invalid.has(key);
     reset.addEventListener('click', function (event) {
       event.stopPropagation();
       state.pending.delete(key);
       state.invalid.delete(key);
+      if (!hasPendingChanges()) state.draftSessionId = '';
       renderProperties();
       renderApplyState();
     });
@@ -767,7 +785,7 @@
   };
 
   function propertyLabel(name) {
-    var text = String(name || '').replace(/^i18n:[^.]*/, '').replace(/^.*\./, '');
+    var text = String(name || '').replace(/^i18n:[^.]*/, '').replace(/^.*\./, '').replace(/ForInspector$/, '');
     return PROPERTY_LABELS[text] || text.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
   }
 
@@ -794,28 +812,13 @@
       number.value = String(value);
       number.setAttribute('aria-label', '数字');
       function emitNumber() {
-        var raw = number.value.trim();
-        if (!raw) {
+        var validation = validateNumberInput(number.value, meta, '数字');
+        if (validation) {
           number.classList.add('invalid');
-          onChange(null, '请输入数字');
+          onChange(null, validation);
           return;
         }
-        var next = Number(raw);
-        if (!Number.isFinite(next)) {
-          number.classList.add('invalid');
-          onChange(null, '请输入有效数字');
-          return;
-        }
-        if (typeof meta.min === 'number' && next < meta.min) {
-          number.classList.add('invalid');
-          onChange(null, '不能小于 ' + meta.min);
-          return;
-        }
-        if (typeof meta.max === 'number' && next > meta.max) {
-          number.classList.add('invalid');
-          onChange(null, '不能大于 ' + meta.max);
-          return;
-        }
+        var next = Number(number.value.trim());
         number.classList.remove('invalid');
         onChange(next, null);
       }
@@ -833,10 +836,10 @@
     }
     if (isReference(value)) return { node: referenceValue(value, name) };
     if (isRuntimeMarker(value)) return { node: readonlyValue(markerText(value)) };
-    if (isColor(value)) return { node: colorEditor(value, onChange) };
-    if (isRect(value)) return { node: compoundEditor(value, ['x', 'y', 'width', 'height'], onChange) };
-    if (isSize(value)) return { node: compoundEditor(value, ['width', 'height'], onChange) };
-    if (isVector(value)) return { node: compoundEditor(value, vectorKeys(value), onChange) };
+    if (isColor(value)) return { node: colorEditor(value, onChange, meta) };
+    if (isRect(value)) return { node: compoundEditor(value, ['x', 'y', 'width', 'height'], onChange, meta) };
+    if (isSize(value)) return { node: compoundEditor(value, ['width', 'height'], onChange, meta) };
+    if (isVector(value)) return { node: compoundEditor(value, vectorKeys(value), onChange, meta) };
     return { node: readonlyEditor(value, meta, name) };
   }
 
@@ -855,7 +858,7 @@
     return select;
   }
 
-  function colorEditor(value, onChange) {
+  function colorEditor(value, onChange, meta) {
     var wrapper = document.createElement('div');
     wrapper.className = 'color-control';
     var current = Object.assign({}, value);
@@ -871,7 +874,7 @@
       current = next;
       swatch.value = rgbHex(current);
       onChange(Object.assign({}, current), null);
-    });
+    }, meta, { min: 0, max: 255, step: 1 });
     swatch.addEventListener('input', function () {
       current.r = parseInt(swatch.value.slice(1, 3), 16);
       current.g = parseInt(swatch.value.slice(3, 5), 16);
@@ -912,7 +915,7 @@
     return readonlyValue(String(value));
   }
 
-  function compoundEditor(value, keys, onChange) {
+  function compoundEditor(value, keys, onChange, meta, defaults) {
     var wrapper = document.createElement('div');
     wrapper.className = 'compound-control';
     wrapper.style.gridTemplateColumns = 'repeat(' + Math.min(keys.length, 4) + ', minmax(0, 1fr))';
@@ -936,25 +939,19 @@
       caption.textContent = key;
       var input = document.createElement('input');
       input.type = 'number';
-      input.step = 'any';
+      applyNumberConstraints(input, meta, defaults);
       input.value = String(value[key] ?? 0);
       input.setAttribute('aria-label', key);
       inputs[key] = input;
       input.addEventListener('input', function () {
-        var raw = input.value.trim();
-        if (!raw) {
+        var validation = validateNumberInput(input.value, meta, key, defaults);
+        if (validation) {
           invalidKeys.add(key);
           input.classList.add('invalid');
-          onChange(null, '请输入 ' + key);
+          onChange(null, validation);
           return;
         }
-        var next = Number(raw);
-        if (!Number.isFinite(next)) {
-          invalidKeys.add(key);
-          input.classList.add('invalid');
-          onChange(null, '请输入有效数字');
-          return;
-        }
+        var next = Number(input.value.trim());
         invalidKeys.delete(key);
         input.classList.remove('invalid');
         current[key] = next;
@@ -973,6 +970,29 @@
   function vectorKeys(value) {
     if (Object.prototype.hasOwnProperty.call(value, 'w')) return ['x', 'y', 'z', 'w'];
     return Object.prototype.hasOwnProperty.call(value, 'z') ? ['x', 'y', 'z'] : ['x', 'y'];
+  }
+
+  function applyNumberConstraints(input, meta, defaults) {
+    var constraints = Object.assign({}, defaults || {}, meta || {});
+    input.step = typeof constraints.step === 'number' ? String(constraints.step) : 'any';
+    if (typeof constraints.min === 'number') input.min = String(constraints.min);
+    if (typeof constraints.max === 'number') input.max = String(constraints.max);
+  }
+
+  function validateNumberInput(rawValue, meta, label, defaults) {
+    var raw = String(rawValue || '').trim();
+    if (!raw) return '请输入 ' + label;
+    var next = Number(raw);
+    if (!Number.isFinite(next)) return '请输入有效数字';
+    var constraints = Object.assign({}, defaults || {}, meta || {});
+    if (typeof constraints.min === 'number' && next < constraints.min) return '不能小于 ' + constraints.min;
+    if (typeof constraints.max === 'number' && next > constraints.max) return '不能大于 ' + constraints.max;
+    if (typeof constraints.step === 'number' && constraints.step > 0) {
+      var base = typeof constraints.min === 'number' ? constraints.min : 0;
+      var distance = (next - base) / constraints.step;
+      if (Math.abs(distance - Math.round(distance)) > 1e-7) return '必须按 ' + constraints.step + ' 递增';
+    }
+    return '';
   }
 
   function isColor(value) {
@@ -1060,6 +1080,7 @@
     var message = error && error.message ? error.message : String(error);
     if (message.includes('RUNTIME_PROPERTY_WRITE_FAILED')) return '运行时拒绝写入';
     if (message.includes('PROPERTY_WRITE_INPUT_INVALID')) return '写入参数无效';
+    if (message.includes('WORKBENCH_SESSION_CHANGED')) return '运行会话已变化';
     return message.length > 120 ? message.slice(0, 117) + '…' : message;
   }
 
@@ -1067,12 +1088,16 @@
     var key = pendingKey(component, index, name);
     var error = row.querySelector('.property-error');
     if (errorMessage) {
+      if (!state.draftSessionId) state.draftSessionId = currentSessionId();
       state.invalid.set(key, errorMessage);
       row.classList.add('invalid');
       if (error) error.textContent = errorMessage;
+      var invalidReset = row.querySelector('.property-reset');
+      if (invalidReset) invalidReset.disabled = false;
       renderApplyState();
       return;
     }
+    var draftSessionId = state.draftSessionId || currentSessionId();
     state.invalid.delete(key);
     if (valuesEqual(value, original)) {
       state.pending.delete(key);
@@ -1083,9 +1108,11 @@
         value: value,
         original: original,
         row: row,
-        meta: meta
+        meta: meta,
+        sessionId: draftSessionId
       });
     }
+    if (!hasPendingChanges()) state.draftSessionId = '';
     row.classList.toggle('pending', state.pending.has(key));
     row.classList.remove('invalid');
     var panel = row.classList.contains('component-panel') ? row : row.closest('.component-panel');
@@ -1099,26 +1126,41 @@
   function renderApplyState() {
     var pendingCount = state.pending.size;
     var invalidCount = state.invalid.size;
-    elements.applyButton.disabled = pendingCount === 0 || invalidCount > 0;
+    var connected = state.host?.status === 'ready' && state.host?.runtime?.connected === true;
+    var stale = hasStalePendingChanges();
+    var targetAvailable = Boolean(state.selectedNode);
+    elements.applyButton.disabled = pendingCount === 0 || invalidCount > 0 || !connected || stale || !targetAvailable;
     elements.applyButton.textContent = invalidCount > 0 ? '修正无效值'
       : pendingCount > 1 ? '应用 ' + pendingCount + ' 项并回读' : '应用并回读';
     elements.revertButton.disabled = pendingCount === 0 && invalidCount === 0;
     elements.applyStatus.textContent = invalidCount > 0
       ? invalidCount + ' 项输入无效，应用前请修正'
+      : pendingCount > 0 && !connected ? '连接已断开，未应用修改已保留'
+        : stale ? '运行会话已变化，未应用修改已保留'
+          : pendingCount > 0 && !targetAvailable ? '目标节点已离开运行树，未应用修改已保留'
       : pendingCount > 0 ? pendingCount + ' 项修改尚未应用' : '与运行时一致';
   }
 
   async function applyPending() {
     if (!state.pending.size || state.invalid.size || !state.selectedPath) return;
+    if (state.host?.status !== 'ready' || state.host?.runtime?.connected !== true) {
+      showToast('运行连接已断开，重新连接后才能应用修改', true);
+      return;
+    }
+    if (!state.selectedNode || hasStalePendingChanges()) {
+      showToast('运行会话或目标节点已变化，请还原旧修改后重试', true);
+      return;
+    }
     var selectedPath = state.selectedPath;
     var selectedNode = state.selectedNode;
+    var selectedSessionId = currentSessionId();
     elements.applyButton.disabled = true;
     var applied = 0;
     var normalized = 0;
     var failed = [];
     var entries = Array.from(state.pending.entries());
     for (var entry of entries) {
-      if (state.selectedPath !== selectedPath) break;
+      if (state.selectedPath !== selectedPath || currentSessionId() !== selectedSessionId) break;
       var key = entry[0];
       var change = entry[1];
       try {
@@ -1126,6 +1168,7 @@
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
+            sessionId: selectedSessionId,
             path: selectedPath,
             componentType: change.componentType,
             property: change.property,
@@ -1163,18 +1206,28 @@
     if (!state.pending.size && !state.invalid.size) return;
     state.pending.clear();
     state.invalid.clear();
+    state.draftSessionId = '';
     renderProperties();
     renderApplyState();
     showToast('未应用的属性修改已还原');
   }
 
   function reconcileSelection() {
-    if (!state.selectedPath) return;
+    if (!state.selectedPath) return false;
     var node = findNodeByPath(state.hierarchy?.root, state.selectedPath);
     if (node) {
       state.selectedNode = node;
       updateSelectionHeader();
-    } else clearSelection();
+      return true;
+    }
+    if (hasPendingChanges()) {
+      state.selectedNode = null;
+      updateSelectionHeader();
+      showToast('当前节点已离开运行树，未应用修改仍保留', true);
+      return false;
+    }
+    clearSelection({ discardChanges: true });
+    return false;
   }
 
   function findNodeByPath(node, path) {
@@ -1187,15 +1240,35 @@
     return null;
   }
 
-  function clearSelection() {
+  function clearSelection(options) {
+    options = options || {};
+    if (!options.discardChanges && hasPendingChanges()) return false;
     state.selectedPath = '';
     state.selectedNode = null;
     state.components = [];
     state.pending.clear();
     state.invalid.clear();
+    state.draftSessionId = '';
     updateSelectionHeader();
     elements.propertyView.innerHTML = '<div class="empty-state">从左侧选择一个运行时节点</div>';
     renderApplyState();
+    return true;
+  }
+
+  function hasPendingChanges() {
+    return state.pending.size > 0 || state.invalid.size > 0;
+  }
+
+  function currentSessionId() {
+    return state.host?.session?.sessionId || '';
+  }
+
+  function hasStalePendingChanges() {
+    var sessionId = currentSessionId();
+    return Boolean(state.draftSessionId && state.draftSessionId !== sessionId)
+      || Array.from(state.pending.values()).some(function (change) {
+      return Boolean(change.sessionId) && change.sessionId !== sessionId;
+    });
   }
 
   function scheduleNativeEmbed(showErrors) {

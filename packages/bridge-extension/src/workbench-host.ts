@@ -232,7 +232,9 @@ export class WorkbenchHost {
     if (request.method === 'POST' && url.pathname === '/api/property') {
       const body = await readJsonBody(request);
       if (
-        typeof body.path !== 'string'
+        typeof body.sessionId !== 'string'
+        || !body.sessionId
+        || typeof body.path !== 'string'
         || !body.path
         || typeof body.componentType !== 'string'
         || !body.componentType
@@ -242,8 +244,13 @@ export class WorkbenchHost {
         sendJson(response, 400, { error: 'PROPERTY_WRITE_INPUT_INVALID' });
         return;
       }
+      const sessionId = this.session?.sessionId;
+      if (typeof sessionId !== 'string' || !sessionId || body.sessionId !== sessionId) {
+        sendJson(response, 409, { error: 'WORKBENCH_SESSION_CHANGED' });
+        return;
+      }
       sendJson(response, 200, await this.requireClient().request('server.runtimeSetProperty', {
-        sessionId: this.requireSessionId(),
+        sessionId,
         path: body.path,
         componentType: body.componentType,
         property: body.property,

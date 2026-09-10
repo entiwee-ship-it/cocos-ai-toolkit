@@ -402,7 +402,115 @@ describe('readRuntimeComponent（页面注入：组件属性读取）', () => {
       kind: 'number', editable: false, visible: true, readOnlyReason: 'property-read-only'
     });
     expect(result.propertyMeta.hiddenRuntimeState).toMatchObject({
-      editable: false, visible: false, readOnlyReason: 'hidden'
+      editable: false, visible: false, declared: false, readOnlyReason: 'hidden'
+    });
+  });
+
+  it('自定义组件存在 props/attrs 时只保留声明属性，避免把 getter 当 Inspector 字段', async () => {
+    class BuiltInLike {
+      string = 'hello';
+      runtimeCache = 7;
+    }
+    const constructor = BuiltInLike as unknown as Record<string, unknown>;
+    constructor.__props__ = ['string'];
+    constructor.__attrs__ = { 'string$_$type': 'String' };
+    const component = new BuiltInLike() as unknown as Record<string, unknown>;
+    component.__typename__ = 'InspectorLike';
+    const node = fakeNode({ name: 'label', fileId: 'f2' });
+    node.components = [component as never];
+    node.getComponent = () => component;
+    installScene(fakeNode({ name: 'Canvas', fileId: 'f1', children: [node] }));
+
+    const result = await runScript('readRuntimeComponent', {
+      path: 'Canvas/label', componentType: 'InspectorLike'
+    }) as { propertyMeta: Record<string, Record<string, unknown>> };
+
+    expect(result.propertyMeta.string).toMatchObject({ declared: true, visible: true });
+    expect(result.propertyMeta.runtimeCache).toMatchObject({
+      declared: false, visible: false, readOnlyReason: 'hidden'
+    });
+  });
+
+  it('Cocos type 退化为 Object 时使用具体 ctor 识别资源引用', async () => {
+    class SpriteFrame {
+      width = 64;
+      height = 32;
+      loaded = true;
+    }
+    class AssetComponent {
+      frame = new SpriteFrame();
+    }
+    const constructor = AssetComponent as unknown as Record<string, unknown>;
+    constructor.__props__ = ['frame'];
+    constructor.__attrs__ = {
+      'frame$_$type': Object,
+      'frame$_$ctor': SpriteFrame
+    };
+    const component = new AssetComponent() as unknown as Record<string, unknown>;
+    component.__typename__ = 'AssetComponent';
+    const node = fakeNode({ name: 'asset', fileId: 'f2' });
+    node.components = [component as never];
+    node.getComponent = () => component;
+    installScene(fakeNode({ name: 'Canvas', fileId: 'f1', children: [node] }));
+
+    const result = await runScript('readRuntimeComponent', {
+      path: 'Canvas/asset', componentType: 'AssetComponent'
+    }) as { propertyMeta: Record<string, Record<string, unknown>> };
+
+    expect(result.propertyMeta.frame).toMatchObject({
+      kind: 'reference', editable: false, visible: true, declared: true,
+      declaredType: 'SpriteFrame', readOnlyReason: 'runtime-reference'
+    });
+  });
+
+  it('EventHandler 数组即使运行时 attrs 标记隐藏也保持只读可见', async () => {
+    class ButtonLike {
+      clickEvents = [{ handler: 'onClick' }];
+    }
+    const constructor = ButtonLike as unknown as Record<string, unknown>;
+    constructor.__props__ = ['clickEvents'];
+    constructor.__attrs__ = {
+      'clickEvents$_$type': 'EventHandler',
+      'clickEvents$_$visible': false
+    };
+    const component = new ButtonLike() as unknown as Record<string, unknown>;
+    component.__typename__ = 'Button';
+    const node = fakeNode({ name: 'button', fileId: 'f2' });
+    node.components = [component as never];
+    node.getComponent = () => component;
+    installScene(fakeNode({ name: 'Canvas', fileId: 'f1', children: [node] }));
+
+    const result = await runScript('readRuntimeComponent', {
+      path: 'Canvas/button', componentType: 'Button'
+    }) as { propertyMeta: Record<string, Record<string, unknown>> };
+
+    expect(result.propertyMeta.clickEvents).toMatchObject({
+      kind: 'array', editable: false, visible: true, declared: true,
+      declaredType: 'EventHandler', readOnlyReason: 'array-not-editable'
+    });
+  });
+
+  it('内建组件缺少 attrs 时隐藏原始字段并保留 ForInspector 代理', async () => {
+    class MeshRendererLike {
+      get shadowCastingMode() { return 1; }
+      set shadowCastingMode(_value: number) {}
+      get shadowCastingModeForInspector() { return true; }
+      set shadowCastingModeForInspector(_value: boolean) {}
+    }
+    const component = new MeshRendererLike() as unknown as Record<string, unknown>;
+    component.__typename__ = 'MeshRenderer';
+    const node = fakeNode({ name: 'mesh', fileId: 'f2' });
+    node.components = [component as never];
+    node.getComponent = () => component;
+    installScene(fakeNode({ name: 'Canvas', fileId: 'f1', children: [node] }));
+
+    const result = await runScript('readRuntimeComponent', {
+      path: 'Canvas/mesh', componentType: 'MeshRenderer'
+    }) as { propertyMeta: Record<string, Record<string, unknown>> };
+
+    expect(result.propertyMeta.shadowCastingMode).toMatchObject({ visible: false, readOnlyReason: 'hidden' });
+    expect(result.propertyMeta.shadowCastingModeForInspector).toMatchObject({
+      visible: true, editable: true, kind: 'boolean'
     });
   });
 

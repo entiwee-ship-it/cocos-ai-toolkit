@@ -389,6 +389,12 @@ function hasRuntimeInspectorAttribute(classInfo: { attrs: Record<string, unknown
   return Object.keys(classInfo.attrs).some((key) => key.startsWith(prefix));
 }
 
+/** 内建组件缺少 attrs 时，仍优先展示 Creator 专门提供的 Inspector 代理属性。 */
+function hasRuntimeInspectorProxy(component: unknown, property: string): boolean {
+  return !property.endsWith('ForInspector')
+    && Boolean(findRuntimePropertyDescriptor(component, `${property}ForInspector`));
+}
+
 /**
  * 生成单个运行时属性的 Inspector 描述，统一处理可见性、类型和可写状态。
  *
@@ -418,6 +424,9 @@ function readRuntimeInspectorPropertyMeta(
   const declaredType = readRuntimeInspectorTypeName(declaredTypeValue);
   const ctorValue = attrs?.[`${property}$_$ctor`];
   const ctorName = readRuntimeInspectorTypeName(ctorValue);
+  const inspectorType = declaredType && declaredType !== 'Object'
+    ? declaredType
+    : ctorName || declaredType;
   const visibleValue = readRuntimeInspectorAttribute(classInfo, property, 'visible', component);
   const readonlyValue = readRuntimeInspectorAttribute(classInfo, property, 'readonly', component) === true;
   const hasSetter = readRuntimeInspectorAttribute(classInfo, property, 'hasSetter', component) === true;
@@ -431,7 +440,7 @@ function readRuntimeInspectorPropertyMeta(
     || marker === 'component-reference'
     || marker === 'asset-reference'
     || isRuntimeInspectorReferenceName(property)
-    || ['Node', 'Component', 'Asset', 'SpriteFrame', 'Prefab'].some((name) => (declaredType || ctorName || '').includes(name));
+    || ['Node', 'Component', 'Asset', 'SpriteFrame', 'Prefab'].some((name) => (inspectorType || '').includes(name));
 
   let kind = 'unknown';
   if (enumOptions || declaredType === 'Enum') kind = 'enum';
@@ -462,13 +471,19 @@ function readRuntimeInspectorPropertyMeta(
     'cameraPriority', 'alignFlags', 'hash', 'localMat', 'batcher', 'sharedMaterial', 'material',
     'stencilStage', 'srcBlendFactor', 'useVertexOpacity', 'isStretchWidth', 'isStretchHeight'
   ];
+  const readonlyEventHandlerArray = kind === 'array'
+    && /(?:Component)?EventHandler/.test(inspectorType || '');
   const isCustom = !isRuntimeInspectorBuiltInComponent(componentType);
+  const propertyDeclared = classInfo.props.includes(property)
+    || hasRuntimeInspectorAttribute(classInfo, property);
   const declared = !isCustom
     || property === 'enabled'
     || property === 'node'
-    || classInfo.props.includes(property)
-    || hasRuntimeInspectorAttribute(classInfo, property);
-  let visible = !hiddenNames.includes(property) && declared && visibleValue !== false;
+    || propertyDeclared;
+  let visible = !hiddenNames.includes(property)
+    && !hasRuntimeInspectorProxy(component, property)
+    && declared
+    && (visibleValue !== false || readonlyEventHandlerArray);
   if (componentType.replace(/^cc\./, '') === 'Sprite' && property === 'priority') visible = false;
   if (componentType.replace(/^cc\./, '') === 'Sprite') {
     const spriteType = (component as { type?: unknown } | null)?.type;
@@ -497,10 +512,11 @@ function readRuntimeInspectorPropertyMeta(
   const metadata: Record<string, unknown> = {
     kind,
     editable,
-    visible
+    visible,
+    declared
   };
   if (readOnlyReason) metadata.readOnlyReason = readOnlyReason;
-  if (declaredType || ctorName) metadata.declaredType = declaredType || ctorName;
+  if (inspectorType) metadata.declaredType = inspectorType;
   const displayName = readRuntimeInspectorAttribute(classInfo, property, 'displayName', component);
   if (typeof displayName === 'string' && displayName) metadata.displayName = displayName;
   const tooltip = readRuntimeInspectorAttribute(classInfo, property, 'tooltip', component);
@@ -1315,6 +1331,7 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   isRuntimeInspectorReferenceName,
   isRuntimeInspectorBuiltInComponent,
   hasRuntimeInspectorAttribute,
+  hasRuntimeInspectorProxy,
   readRuntimeInspectorPropertyMeta,
   hashRuntimeText,
   readRuntimeSceneState,

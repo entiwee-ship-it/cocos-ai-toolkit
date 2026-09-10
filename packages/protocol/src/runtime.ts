@@ -106,6 +106,8 @@ export const RuntimePropertyMetadataSchema = z.object({
   editable: z.boolean(),
   /** Cocos Inspector 的动态可见性结果。 */
   visible: z.boolean().optional(),
+  /** 属性是否来自 Cocos 类的 __props__/__attrs__ 声明。 */
+  declared: z.boolean().optional(),
   /** 不能编辑时的稳定原因码，由前端映射为中文提示。 */
   readOnlyReason: z.string().min(1).optional(),
   /** Cocos 属性声明类型或构造器名称。 */

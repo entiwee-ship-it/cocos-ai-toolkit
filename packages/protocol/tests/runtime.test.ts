@@ -144,7 +144,7 @@ describe('运行态协议', () => {
       componentType: 'cc.Label',
       properties: { string: '确定退出？', fontSize: 28 },
       propertyMeta: {
-        string: { kind: 'string', editable: true, visible: true, displayName: '文本', group: '文本' },
+        string: { kind: 'string', editable: true, visible: true, declared: true, displayName: '文本', group: '文本' },
         fontSize: { kind: 'number', editable: true, visible: true, min: 1, max: 200, step: 1 }
       },
       skipped: ['internalStart'],
