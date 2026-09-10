@@ -42,6 +42,7 @@ const ONLINE_EDITOR = {
     'probe.nodeSelect',
     'probe.extensionManagerOpen',
     'probe.managerPanelOpen',
+    'probe.workbenchOpen',
     'probe.component'
   ]
 };
@@ -297,6 +298,7 @@ function createRespond(overrides: Record<string, unknown> = {}) {
   if (method === 'probe.nodeSelect') return { nodeUuid: 'panel-uuid', selected: true, selection: ['panel-uuid'] };
   if (method === 'probe.extensionManagerOpen') return { opened: true, panel: 'extension.manager' };
   if (method === 'probe.managerPanelOpen') return { opened: true, panel: 'cocos-ai-bridge' };
+  if (method === 'probe.workbenchOpen') return { opened: true, panel: 'cocos-ai-bridge.workbench', url: 'http://127.0.0.1:62500/' };
     if (method === 'probe.component') {
       return { data: { schema: COMPONENT_SCHEMA, raw: null }, raw: null, source: 'message-api' };
     }
@@ -349,6 +351,7 @@ describe('直写档工具注册', () => {
       'cocos_editor_state',
       'cocos_extension_manager_open',
       'cocos_tool_manager_open',
+      'cocos_workbench_open',
       'cocos_asset_search',
       'cocos_asset_inspect',
       'cocos_hierarchy',
@@ -466,6 +469,27 @@ describe('直写档只读工具', () => {
     });
     expect(creatorClient.requests.at(-1)).toMatchObject({
       method: 'probe.managerPanelOpen',
+      payload: { params: {} }
+    });
+  });
+
+  it('cocos_workbench_open 直接打开 Cocos AI 运行工作台', async () => {
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
+
+    const result = await client.callTool({
+      name: 'cocos_workbench_open',
+      arguments: { projectId: 'proj1' }
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      editor: { projectId: 'proj1' },
+      opened: true,
+      panel: 'cocos-ai-bridge.workbench',
+      url: 'http://127.0.0.1:62500/'
+    });
+    expect(creatorClient.requests.at(-1)).toMatchObject({
+      method: 'probe.workbenchOpen',
       payload: { params: {} }
     });
   });

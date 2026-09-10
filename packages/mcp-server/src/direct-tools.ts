@@ -83,6 +83,7 @@ export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
   'cocos_editor_state',
   'cocos_extension_manager_open',
   'cocos_tool_manager_open',
+  'cocos_workbench_open',
   'cocos_asset_search',
   'cocos_asset_inspect',
   'cocos_hierarchy',
@@ -197,6 +198,21 @@ export class CocosDirectToolService {
       {}
     ));
     if (result.opened !== true) throw new Error('TOOL_MANAGER_OPEN_FAILED');
+    return { editor, ...result };
+  }
+
+  /** 打开 Cocos AI 运行工作台。 */
+  async openWorkbench(input: ProjectSelector) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    if (!editor.capabilities.includes('probe.workbenchOpen')) {
+      throw new Error('EDITOR_CAPABILITY_MISSING:probe.workbenchOpen');
+    }
+    const result = asRecord(await this.readonlyService.requestBridge(
+      editor,
+      'probe.workbenchOpen',
+      {}
+    ));
+    if (result.opened !== true) throw new Error('WORKBENCH_OPEN_FAILED');
     return { editor, ...result };
   }
 
@@ -1633,6 +1649,13 @@ export function registerCocosDirectReadonlyTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(service.openToolManager(input)));
+
+  server.registerTool('cocos_workbench_open', {
+    description: '直接在目标 Cocos Creator 中打开 Cocos AI 运行工作台。',
+    inputSchema: ProjectSelectorInput,
+    outputSchema: ToolOutputSchema,
+    annotations: WRITE_ANNOTATIONS
+  }, async (input) => toToolResult(service.openWorkbench(input)));
 
   server.registerTool('cocos_asset_search', {
     description: '在 Creator AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），按 cursor 分页。',

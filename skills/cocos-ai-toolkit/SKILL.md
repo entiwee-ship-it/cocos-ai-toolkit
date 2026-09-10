@@ -24,7 +24,7 @@ If MCP, Creator, Creator IPC, Bridge, target identity, or a required operation c
 ## 编辑主流程（按序组合）
 
 1. `cocos_editor_list` 发现在线项目（按 projectPath 选择；同项目多实例时传 editorInstanceId）。Creator 未打开时仍会返回空 editors 和 backend IPC 状态；Bridge 发布 Named Pipe 端点后同一任务立即发现。
-2. 需要查看扩展版本、发布日期、项目和直连状态时，调用 `cocos_tool_manager_open`，无需使用电脑操控 Creator 菜单。
+2. 需要查看扩展版本、发布日期、项目和直连状态时，调用 `cocos_tool_manager_open`；需要进入运行工作台时调用 `cocos_workbench_open`，无需使用电脑操控 Creator 菜单。
 3. `cocos_editor_state` 确认当前文档 UUID、dirty 和 Scene/AssetDB ready。
 4. `cocos_asset_search` 按名称/路径找 Prefab、Scene 或脚本 UUID（Bridge 内分页并复用短缓存）；`cocos_asset_inspect` 按 UUID 直接看类型、URL、依赖和 users，不要先取全量索引。
 5. `cocos_prefab_open` / `cocos_scene_open` 仅在当前文档 clean 时打开目标文档。若返回 `DOCUMENT_SAVE_REQUIRED`，先调用 `cocos_document_save`，确认 dirty 已清除后再重试；工具不得先切换文档或触发原生保存框。
@@ -58,6 +58,8 @@ Prefab/Scene 中的节点只要组件公开 Inspector 事件数组，就必须�
 | Intent | Tool |
 | --- | --- |
 | 打开扩展管理器 | `cocos_extension_manager_open`（直接打开目标 Creator 的内置扩展管理器；不修改项目或扩展启用状态） |
+| 打开工具管理 | `cocos_tool_manager_open` |
+| 打开运行工作台 | `cocos_workbench_open` |
 | 创建节点 | `cocos_node_create`（parentUuid 或 parentPath，二选一） |
 | 重命名节点 | `cocos_node_rename`（nodeUuid 或 path 二选一） |
 | 修改节点局部变换 | `cocos_node_set_transform`（nodeUuid 或 path 二选一；position/rotation/scale 至少一项） |

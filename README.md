@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本为 `0.9.5`，提供 43 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本为 `0.9.5`，提供 44 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -88,9 +88,9 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（全部公开 43 个）
+## MCP 工具面（全部公开 44 个）
 
-### 编辑态只读 11 个（默认开放）
+### 编辑态只读与编辑器操作 12 个（默认开放）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -98,6 +98,7 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 | `cocos_editor_state` | 读取当前文档 UUID、dirty、Scene/AssetDB ready、选择和 Preview 状态 |
 | `cocos_extension_manager_open` | 直接打开目标 Creator 的内置扩展管理器，不修改项目或扩展启用状态 |
 | `cocos_tool_manager_open` | 直接打开目标 Creator 中的 Cocos AI 工具管理面板 |
+| `cocos_workbench_open` | 直接打开目标 Creator 中的 Cocos AI 运行工作台 |
 | `cocos_asset_search` | Bridge 内大小写无关包含搜索，短缓存复用全量索引；Bridge 只返回当前结果页，MCP cursor 仅编码分页位置和 revision |
 | `cocos_asset_inspect` | 按 UUID 直接读取资产详情、Meta、依赖和反向使用者 |
 | `cocos_hierarchy` | 读取当前文档节点树；默认返回紧凑结构并省略递归 `raw`，深层 `rootPath` 原生读取目标子树并保留 `truncated`；`query/fields/summary` 可进一步投影，明确 `compact=false` 才请求完整 raw |

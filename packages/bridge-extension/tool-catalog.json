@@ -3,6 +3,7 @@
   { "name": "cocos_editor_state", "group": "编辑器", "mutating": false, "summary": "读取项目、当前文档、选择和就绪状态" },
   { "name": "cocos_extension_manager_open", "group": "编辑器", "mutating": false, "summary": "打开 Creator 扩展管理器" },
   { "name": "cocos_tool_manager_open", "group": "编辑器", "mutating": false, "summary": "打开 Cocos AI 工具管理窗口" },
+  { "name": "cocos_workbench_open", "group": "编辑器", "mutating": false, "summary": "打开 Cocos AI 运行工作台" },
   { "name": "cocos_asset_search", "group": "资源", "mutating": false, "summary": "按名称或路径搜索 AssetDB 资源" },
   { "name": "cocos_asset_inspect", "group": "资源", "mutating": false, "summary": "读取资源详情、依赖和反向引用" },
   { "name": "cocos_hierarchy", "group": "节点与组件", "mutating": false, "summary": "读取当前文档节点层级" },
