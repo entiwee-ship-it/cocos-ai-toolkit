@@ -12,6 +12,28 @@ afterEach(async () => {
 });
 
 describe('RuntimeController', () => {
+  it('原生 Inspector 先解析注册身份，再采集精确字段，并在只读字段写入前停止', async () => {
+    const driver = fakeDriver();
+    driver.evaluate
+      .mockResolvedValueOnce({ found: true, inspectorClassName: 'cc.Component' })
+      .mockResolvedValueOnce({ found: true, nodeUuid: 'node-1', properties: { enabled: true }, writable: { enabled: true }, showEnabled: true });
+    const requestCreator = vi.fn()
+      .mockResolvedValueOnce({ propertyNames: ['enabled'] })
+      .mockResolvedValueOnce({ componentType: 'cc.Component', properties: { enabled: true }, propertyMeta: { enabled: { kind: 'boolean', editable: false, visible: false } }, inspectorSource: 'creator', showEnabled: true });
+    const controller = new RuntimeController({ captureRoot: await tempRoot(), requestCreator, driver: driver as unknown as RuntimeDriver });
+    const result = await controller.request('server.runtimeComponent', { sessionId: 'session-1', path: '/main/manager', componentType: 'TimerManager', inspector: true });
+    expect(requestCreator.mock.calls[0][2]).toEqual({ runtimeInspector: { componentType: 'cc.Component' } });
+    expect(requestCreator.mock.calls[1][2].runtimeInspector.values).toEqual({ enabled: true });
+    expect(result).toMatchObject({ componentType: 'TimerManager', inspectorSource: 'creator', showEnabled: true });
+    driver.evaluate.mockClear();
+    driver.evaluate
+      .mockResolvedValueOnce({ found: true, inspectorClassName: 'cc.Component' })
+      .mockResolvedValueOnce({ found: true, nodeUuid: 'node-1', properties: { enabled: true }, writable: { enabled: true } });
+    requestCreator.mockResolvedValueOnce({ propertyNames: ['enabled'] }).mockResolvedValueOnce(result);
+    await expect(controller.request('server.runtimeSetProperty', { sessionId: 'session-1', path: '/main/manager', componentType: 'TimerManager', inspector: true, property: 'enabled', value: false })).rejects.toThrow('只读');
+    expect(driver.evaluate).toHaveBeenCalledTimes(2);
+  });
+
   it('Preview URL 通过 Creator 短连接获取，会话由当前进程内 driver 管理', async () => {
     const captureRoot = await tempRoot();
     const requestCreator = vi.fn(async () => ({ url: 'http://127.0.0.1:7456' }));

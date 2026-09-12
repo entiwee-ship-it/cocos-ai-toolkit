@@ -192,7 +192,8 @@ export class WorkbenchHost {
       sendJson(response, 200, await this.requireClient().request('server.runtimeComponent', {
         sessionId: this.requireSessionId(),
         path,
-        componentType
+        componentType,
+        inspector: true
       }));
       return;
     }
@@ -254,7 +255,8 @@ export class WorkbenchHost {
         path: body.path,
         componentType: body.componentType,
         property: body.property,
-        value: body.value
+        value: body.value,
+        inspector: true
       }));
       return;
     }

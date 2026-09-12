@@ -97,7 +97,7 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).toContain('expandTreeToDepth(hierarchy.root, 3)');
     expect(workbenchApp).toContain('visiblePropertyNames(component)');
     expect(workbenchApp).toContain('component.propertyMeta && component.propertyMeta[name]');
-    expect(workbenchApp).toContain('meta.declared === false');
+    expect(workbenchApp).toContain('meta.visible === true');
     expect(workbenchApp).toContain('hasPendingChanges()');
     expect(workbenchApp).toContain('连接已断开，未应用修改已保留');
     expect(workbenchApp).toContain('sessionId: selectedSessionId');
@@ -106,14 +106,13 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).toContain('state.draftSessionId !== sessionId');
     expect(workbenchApp).toContain('state.selectedNode && !hasPendingChanges()');
     expect(workbenchApp).toContain('validateNumberInput');
-    expect(workbenchApp).toContain("replace(/ForInspector$/, '')");
     expect(workbenchApp).toContain('!pending && !state.invalid.has(key)');
     expect(workbenchApp).toContain("row.querySelector('.property-reset')");
-    expect(workbenchApp).toContain('var PROPERTY_LABELS = {');
-    expect(workbenchApp).toContain('var ENUM_OPTIONS = {');
+    expect(workbenchApp).toContain("[{ type: 'cc.Node' }]");
+    expect(workbenchApp).toContain('var enumOptions = meta.enumOptions');
+    expect(workbenchApp).toContain('function readonlyDump(dump)');
     expect(workbenchApp).toContain('function colorEditor(value, onChange, meta)');
-    expect(workbenchApp).toContain("className = 'component-type'");
-    expect(workbenchApp).toContain("className = 'property-kind' + (meta.editable ? ' editable' : ' readonly')");
+    expect(workbenchApp).toContain("reset.hidden = !meta.editable");
     expect(workbenchApp).toContain("state.invalid.set(key, errorMessage)");
     expect(workbenchApp).toContain("elements.revertButton.addEventListener('click', revertPending)");
     expect(workbenchApp).toContain("nativeWindow.state === 'idle'");

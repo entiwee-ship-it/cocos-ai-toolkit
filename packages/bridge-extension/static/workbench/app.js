@@ -7,6 +7,7 @@
     selectedPath: '',
     selectedNode: null,
     components: [],
+    groupTabs: new Map(),
     expanded: new Set(),
     componentExpanded: new Set(),
     pending: new Map(),
@@ -378,14 +379,11 @@
     updateSelectionHeader();
     renderTree();
     renderApplyState();
-    if (!(node.components || []).length) {
-      elements.propertyView.innerHTML = '<div class="empty-state">此运行时节点没有组件</div>';
-      return;
-    }
     elements.propertyView.innerHTML = '<div class="empty-state">正在读取组件属性</div>';
-    var results = await Promise.all((node.components || []).map(async function (component) {
+    var selectedPath = node.path;
+    var results = await Promise.all([{ type: 'cc.Node' }].concat(node.components || []).map(async function (component) {
       try {
-        return await api('/api/component?path=' + encodeURIComponent(state.selectedPath)
+        return await api('/api/component?path=' + encodeURIComponent(selectedPath)
           + '&componentType=' + encodeURIComponent(component.type));
       } catch (error) {
         return { componentType: component.type, properties: {}, error: error.message || String(error) };
@@ -438,83 +436,21 @@
     return String(type || '').replace(/^cc\./, '');
   }
 
-  var COMPONENT_LABELS = {
-    UITransform: 'UI 变换', UIOpacity: 'UI 不透明度', Widget: '布局对齐', Canvas: '画布',
-    Sprite: '精灵', Label: '文本标签', RichText: '富文本', Button: '按钮', Toggle: '开关',
-    ToggleContainer: '开关容器', Layout: '布局', Mask: '遮罩', ScrollView: '滚动视图',
-    PageView: '分页视图', EditBox: '输入框', Slider: '滑块', ProgressBar: '进度条', Camera: '相机'
-  };
-
-  var COMPONENT_PROPERTY_ORDER = {
-    UITransform: ['contentSize', 'anchorPoint', 'priority'],
-    Widget: ['target', 'isAlignTop', 'isAlignBottom', 'isAlignLeft', 'isAlignRight',
-      'isAlignVerticalCenter', 'isAlignHorizontalCenter', 'isStretchWidth', 'isStretchHeight',
-      'top', 'bottom', 'left', 'right', 'horizontalCenter', 'verticalCenter', 'alignMode'],
-    Sprite: ['spriteFrame', 'type', 'fillType', 'fillCenter', 'fillStart', 'fillRange', 'trim', 'grayscale', 'sizeMode', 'color'],
-    Label: ['string', 'fontSize', 'lineHeight', 'horizontalAlign', 'verticalAlign', 'overflow', 'color'],
-    Button: ['interactable', 'transition', 'duration', 'zoomScale', 'clickEvents'],
-    Layout: ['type', 'resizeMode', 'spacingX', 'spacingY', 'cellSize', 'startAxis', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom']
-  };
-
-  var COMPONENT_PROPERTY_GROUPS = {
-    UITransform: { contentSize: '尺寸', anchorPoint: '锚点', priority: '层级' },
-    Widget: { target: '对齐', alignMode: '对齐', top: '边距', bottom: '边距', left: '边距', right: '边距',
-      horizontalCenter: '边距', verticalCenter: '边距' },
-    Sprite: { spriteFrame: '资源', type: '填充', fillType: '填充', fillCenter: '填充', fillStart: '填充',
-      fillRange: '填充', trim: '外观', grayscale: '外观', sizeMode: '尺寸', color: '外观' },
-    Label: { string: '文本', fontSize: '文本', lineHeight: '文本', horizontalAlign: '排版',
-      verticalAlign: '排版', overflow: '排版', color: '外观' },
-    Button: { interactable: '交互', transition: '交互', duration: '交互', zoomScale: '交互', clickEvents: '事件' },
-    Layout: { type: '布局', resizeMode: '布局', spacingX: '间距', spacingY: '间距', cellSize: '布局',
-      startAxis: '布局', paddingLeft: '边距', paddingRight: '边距', paddingTop: '边距', paddingBottom: '边距' }
-  };
-
-  var GROUP_ORDER = { 基本: 0, 尺寸: 10, 锚点: 20, 变换: 30, 布局: 40, 对齐: 50, 边距: 60, 资源: 70, 填充: 80, 外观: 90, 文本: 100, 排版: 110, 交互: 120, 事件: 130, 常规: 200 };
-  var REFERENCE_PROPERTY_NAMES = new Set([
-    'target', 'spriteFrame', 'spriteAtlas', 'font', 'labelAtlas', 'normalSprite',
-    'pressedSprite', 'hoverSprite', 'disabledSprite', 'hoverSpriteFrame', 'customMaterial',
-    'material', 'sharedMaterial', 'texture', 'clip', 'prefab'
-  ]);
-  var READONLY_REASON_LABELS = {
-    'property-read-only': '只读', 'runtime-reference': '运行时引用', 'array-not-editable': '数组只读',
-    'unsupported-value': '不支持编辑', 'invalid-number': '无效数值', hidden: '隐藏'
-  };
-
   function componentDisplayName(type) {
-    var normalized = normalizedComponentType(type);
-    return COMPONENT_LABELS[normalized] || normalized || '未知组件';
+    return normalizedComponentType(type) || '未知组件';
   }
 
   function propertyMetaFor(component, name, value) {
     var meta = component.propertyMeta && component.propertyMeta[name];
     if (meta && typeof meta === 'object') return meta;
-    return inferPropertyMeta(name, value);
-  }
-
-  function inferPropertyMeta(name, value) {
-    var reference = REFERENCE_PROPERTY_NAMES.has(name) || isReference(value);
-    var kind = reference ? 'reference'
-      : value === null ? 'null'
-        : Array.isArray(value) ? 'array'
-          : typeof value;
-    if (isColor(value)) kind = 'color';
-    else if (isRect(value)) kind = 'rect';
-    else if (isSize(value)) kind = 'size';
-    else if (isVector(value)) kind = 'vector';
-    var editable = !reference && ['boolean', 'number', 'string', 'color', 'rect', 'size', 'vector'].includes(kind);
-    return {
-      kind: kind,
-      editable: editable,
-      visible: true,
-      ...(editable ? {} : { readOnlyReason: reference ? 'runtime-reference' : 'unsupported-value' })
-    };
+    return { kind: 'unknown', editable: false, visible: false };
   }
 
   function summarizeComponents() {
     var summary = { components: 0, editable: 0, readonly: 0 };
     state.components.forEach(function (component) {
       if (component.error) return;
-      summary.components += 1;
+      if (component.componentType !== 'cc.Node') summary.components += 1;
       var names = visiblePropertyNames(component);
       names.forEach(function (name) {
         var meta = propertyMetaFor(component, name, component.properties?.[name]);
@@ -549,11 +485,7 @@
     var displayName = componentDisplayName(type);
     var name = document.createElement('strong');
     name.textContent = displayName;
-    var typeName = document.createElement('small');
-    typeName.className = 'component-type';
-    typeName.textContent = type;
-    if (displayName === normalizedComponentType(type)) heading.append(name);
-    else heading.append(name, typeName);
+    heading.appendChild(name);
     title.title = type;
     title.append(arrow, icon, heading);
     var count = document.createElement('span');
@@ -564,7 +496,7 @@
       return propertyMetaFor(component, property, properties[property]).editable;
     }).length;
     count.textContent = editableCount + ' 可编辑 · ' + visibleNames.length + ' 项';
-    if (typeof properties.enabled === 'boolean') {
+    if (component.showEnabled && typeof properties.enabled === 'boolean') {
       var enabled = document.createElement('input');
       enabled.type = 'checkbox';
       enabled.className = 'component-enabled';
@@ -601,19 +533,10 @@
       body.appendChild(error);
     } else if (!visibleNames.length) {
       body.appendChild(emptyPropertyRow());
+    } else if (type === 'cc.Widget') {
+      appendWidgetProperties(body, component, index);
     } else {
-      groupVisibleProperties(component, visibleNames).forEach(function (group) {
-        var groupNode = document.createElement('section');
-        groupNode.className = 'component-group';
-        var groupTitle = document.createElement('div');
-        groupTitle.className = 'component-group-title';
-        groupTitle.textContent = group.name;
-        groupNode.appendChild(groupTitle);
-        group.properties.forEach(function (property) {
-          groupNode.appendChild(createPropertyRow(component, index, property, properties[property], propertyMetaFor(component, property, properties[property])));
-        });
-        body.appendChild(groupNode);
-      });
+      appendPropertyGroups(body, component, index, visibleNames);
     }
     panel.appendChild(body);
     return panel;
@@ -621,80 +544,210 @@
 
   function visiblePropertyNames(component) {
     var properties = component.properties || {};
-    var type = normalizedComponentType(component.componentType || component.type);
     var names = Object.keys(properties).filter(function (name) {
-      return shouldShowProperty(name, properties[name], propertyMetaFor(component, name, properties[name]), type, properties);
+      var meta = propertyMetaFor(component, name, properties[name]);
+      return meta.visible === true;
     });
-    var order = COMPONENT_PROPERTY_ORDER[type] || [];
+    if (component.componentType === 'cc.Widget') {
+      var widgetNames = widgetPropertyNames(component, state.components.indexOf(component));
+      names = names.filter(function (name) { return widgetNames.includes(name); });
+    }
     return names.sort(function (left, right) {
       var leftMeta = propertyMetaFor(component, left, properties[left]);
       var rightMeta = propertyMetaFor(component, right, properties[right]);
-      var leftIndex = order.indexOf(left);
-      var rightIndex = order.indexOf(right);
-      var leftOrder = leftIndex >= 0 ? leftIndex : (typeof leftMeta.displayOrder === 'number' ? leftMeta.displayOrder : 10_000);
-      var rightOrder = rightIndex >= 0 ? rightIndex : (typeof rightMeta.displayOrder === 'number' ? rightMeta.displayOrder : 10_000);
-      return leftOrder - rightOrder || left.localeCompare(right);
+      return (leftMeta.displayOrder ?? 0) - (rightMeta.displayOrder ?? 0);
     });
   }
 
-  function shouldShowProperty(name, value, meta, componentType, properties) {
-    if (meta && meta.declared === false) return false;
-    if (name.startsWith('_') || name.startsWith('internal') || name.startsWith('editor')) return false;
-    if ([
-      'constructor', 'node', 'name', 'uuid', 'enabled', 'enabledInHierarchy', 'isValid', 'hideFlags',
-      'renderData', 'materials', 'sharedMaterials', 'renderEntity', 'batchingHint', 'visibility',
-      'cameraPriority', 'alignFlags', 'hash', 'localMat', 'customMaterial', 'material', 'sharedMaterial',
-      'stencilStage', 'srcBlendFactor', 'useVertexOpacity', 'isStretchWidth', 'isStretchHeight'
-    ].includes(name)) return false;
-    if (componentType === 'Sprite' && name === 'priority') return false;
-    if (componentType === 'Sprite' && name === 'trim' && properties.type !== 0) return false;
-    if (componentType === 'Sprite' && ['fillType', 'fillCenter', 'fillStart', 'fillRange'].includes(name) && properties.type !== 3) return false;
-    if (properties.contentSize && ['width', 'height'].includes(name)) return false;
-    if (properties.anchorPoint && ['anchorX', 'anchorY'].includes(name)) return false;
-    if (meta && meta.visible === false) return false;
-    if (!REFERENCE_PROPERTY_NAMES.has(name) && containsRuntimeMarker(value)) return false;
-    if (meta && ['undefined', 'function', 'object', 'circular-reference', 'max-depth-exceeded', 'complex-object', 'promise', 'truncated'].includes(meta.kind)) {
-      return REFERENCE_PROPERTY_NAMES.has(name) && meta.kind === 'object';
-    }
-    if (value === null && !REFERENCE_PROPERTY_NAMES.has(name) && meta?.kind !== 'reference') return false;
-    if (componentType && !typeMatchesReference(name, meta, value) && meta?.kind === 'unknown') return false;
-    return true;
-  }
-
-  function typeMatchesReference(name, meta, value) {
-    return REFERENCE_PROPERTY_NAMES.has(name) || meta?.kind === 'reference' || isReference(value);
-  }
-
-  function containsRuntimeMarker(value, depth) {
-    depth = depth || 0;
-    if (depth > 3 || value === null || value === undefined) return false;
-    if (isRuntimeMarker(value)) return true;
-    if (Array.isArray(value)) return value.some(function (item) { return containsRuntimeMarker(item, depth + 1); });
-    if (isObject(value)) return Object.keys(value).some(function (key) { return containsRuntimeMarker(value[key], depth + 1); });
-    return false;
-  }
-
-  function groupVisibleProperties(component, names) {
-    var type = normalizedComponentType(component.componentType || component.type);
-    var mapping = COMPONENT_PROPERTY_GROUPS[type] || {};
-    var groups = Object.create(null);
+  /** 按原生 group 信息组织折叠分组或分页；未分组的属性直接显示。 */
+  function appendPropertyGroups(body, component, index, names) {
+    var groups = new Map();
+    var units = [];
     names.forEach(function (name) {
-      var meta = propertyMetaFor(component, name, component.properties?.[name]);
-      var group = meta.group || mapping[name] || inferPropertyGroup(name);
-      if (!groups[group]) groups[group] = [];
-      groups[group].push(name);
+      var meta = propertyMetaFor(component, name);
+      if (component.componentType === 'cc.Label' && ['isItalic', 'isUnderline'].includes(name)) return;
+      var row = component.componentType === 'cc.Label' && name === 'isBold'
+        ? createFontStyleRow(component, index)
+        : createPropertyRow(component, index, name, component.properties[name], meta);
+      if (!meta.group) { units.push({ order: meta.displayOrder, node: row }); return; }
+      var info = meta.groupInfo || {};
+      var id = (info.id || 'default') + ':' + (info.style === 'tab' ? 'tabs' : meta.group);
+      var group = groups.get(id);
+      if (!group) {
+        var node = document.createElement(info.style === 'tab' ? 'div' : 'details');
+        node.className = 'component-group';
+        group = { node: node, tabs: new Map(), key: componentKey(component, index) + ':' + id };
+        groups.set(id, group);
+        units.push({ order: info.displayOrder ?? meta.displayOrder, node: node });
+        if (info.style === 'tab') {
+          group.header = document.createElement('div');
+          group.header.className = 'property-tabs';
+          group.header.setAttribute('role', 'tablist');
+          node.appendChild(group.header);
+        } else {
+          node.open = true;
+          var title = document.createElement('summary');
+          title.className = 'component-group-title';
+          title.textContent = meta.group;
+          node.appendChild(title);
+        }
+      }
+      if (info.style !== 'tab') { group.node.appendChild(row); return; }
+      if (!group.tabs.has(meta.group)) {
+        var content = document.createElement('div');
+        content.setAttribute('role', 'tabpanel');
+        var tab = document.createElement('button');
+        tab.type = 'button';
+        tab.setAttribute('role', 'tab');
+        tab.textContent = meta.group;
+        group.tabs.set(meta.group, { tab: tab, content: content });
+        group.header.appendChild(tab);
+        group.node.appendChild(content);
+        tab.addEventListener('click', function () { state.groupTabs.set(group.key, meta.group); activateGroup(group); });
+      }
+      group.tabs.get(meta.group).content.appendChild(row);
     });
-    return Object.keys(groups).sort(function (left, right) {
-      return (GROUP_ORDER[left] || 500) - (GROUP_ORDER[right] || 500) || left.localeCompare(right);
-    }).map(function (name) { return { name: name, properties: groups[name] }; });
+    units.sort(function (a, b) { return (a.order ?? 0) - (b.order ?? 0); }).forEach(function (unit) { body.appendChild(unit.node); });
+    groups.forEach(function (group) { if (group.header) activateGroup(group); });
   }
 
-  function inferPropertyGroup(name) {
-    if (['contentSize', 'width', 'height', 'anchorPoint', 'anchorX', 'anchorY'].includes(name)) return '变换';
-    if (['string', 'fontSize', 'lineHeight', 'fontFamily'].includes(name)) return '文本';
-    if (['color', 'opacity', 'grayscale', 'trim', 'sizeMode'].includes(name)) return '外观';
-    if (name.endsWith('Events')) return '事件';
-    return '常规';
+  function activateGroup(group) {
+    var active = state.groupTabs.get(group.key);
+    if (!group.tabs.has(active)) active = group.tabs.keys().next().value;
+    group.tabs.forEach(function (item, name) {
+      item.content.hidden = name !== active;
+      item.tab.setAttribute('aria-selected', String(name === active));
+    });
+  }
+
+  function effectiveValue(component, index, name) {
+    var draft = state.pending.get(pendingKey(component, index, name));
+    return draft ? draft.value : component.properties[name];
+  }
+
+  /** 对应 Creator widget.js 的六个对齐绑定和 editor* 边距，原始比例值不重复显示。 */
+  function widgetPropertyNames(component, index) {
+    var names = ['target', 'alignMode'];
+    ['Left', 'HorizontalCenter', 'Right', 'Top', 'VerticalCenter', 'Bottom'].forEach(function (side) {
+      names.push('isAlign' + side);
+      if (effectiveValue(component, index, 'isAlign' + side)) names.push('editor' + side, 'isAbsolute' + side);
+    });
+    return names;
+  }
+
+  /** 原生 Widget 面板将对齐旗标组合成互斥方向，并以 px/% 编辑 editor* 值。 */
+  function appendWidgetProperties(body, component, index) {
+    var properties = component.properties;
+    function append(name, meta) {
+      if (!component.propertyMeta[name]) return null;
+      var row = createPropertyRow(component, index, name, properties[name], meta || component.propertyMeta[name]);
+      body.appendChild(row);
+      return row;
+    }
+    append('target');
+    var diagram = document.createElement('div');
+    diagram.className = 'widget-diagram';
+    diagram.setAttribute('aria-label', 'Widget 对齐示意');
+    var target = document.createElement('span');
+    target.className = 'widget-target';
+    ['Left', 'Right', 'Top', 'Bottom'].forEach(function (side) { target.dataset[side.toLowerCase()] = String(Boolean(effectiveValue(component, index, 'isAlign' + side))); });
+    diagram.appendChild(target);
+    body.appendChild(diagram);
+    [
+      { label: '水平对齐', sides: ['Left', 'HorizontalCenter', 'Right'], labels: ['不对齐', '左对齐', '居中', '右对齐', '拉伸'] },
+      { label: '垂直对齐', sides: ['Top', 'VerticalCenter', 'Bottom'], labels: ['不对齐', '顶部', '居中', '底部', '拉伸'] }
+    ].forEach(function (axis) {
+      var row = document.createElement('div');
+      row.className = 'property-row';
+      var label = document.createElement('label');
+      label.className = 'property-name';
+      label.textContent = axis.label;
+      var control = document.createElement('div');
+      control.className = 'property-control';
+      var first = effectiveValue(component, index, 'isAlign' + axis.sides[0]);
+      var center = effectiveValue(component, index, 'isAlign' + axis.sides[1]);
+      var last = effectiveValue(component, index, 'isAlign' + axis.sides[2]);
+      var mode = first && last ? 4 : first ? 1 : last ? 3 : center ? 2 : 0;
+      var select = enumEditor(mode, axis.labels.map(function (name, value) { return { name: name, value: value }; }), function (value) {
+        var flags = [value === 1 || value === 4, value === 2, value === 3 || value === 4];
+        axis.sides.forEach(function (side, position) {
+          var name = 'isAlign' + side;
+          updatePending(component, index, name, flags[position], properties[name], row, null, component.propertyMeta[name]);
+        });
+        renderProperties();
+      });
+      select.setAttribute('aria-label', axis.label);
+      select.disabled = axis.sides.some(function (side) { return !component.propertyMeta['isAlign' + side]?.editable; });
+      control.appendChild(select);
+      row.append(label, control);
+      body.appendChild(row);
+    });
+    ['Left', 'HorizontalCenter', 'Right', 'Top', 'VerticalCenter', 'Bottom'].forEach(function (side) {
+      if (!effectiveValue(component, index, 'isAlign' + side)) return;
+      var name = 'editor' + side;
+      var unitName = 'isAbsolute' + side;
+      var meta = Object.assign({}, component.propertyMeta[name], { displayName: side.replace(/Center$/, ' Center') });
+      var row = append(name, meta);
+      if (!row) return;
+      var unit = document.createElement('button');
+      unit.type = 'button';
+      unit.className = 'widget-unit';
+      unit.textContent = effectiveValue(component, index, unitName) ? 'px' : '%';
+      unit.setAttribute('aria-label', side + ' 单位');
+      unit.disabled = !component.propertyMeta[unitName]?.editable;
+      unit.addEventListener('click', function () {
+        var wasAbsolute = effectiveValue(component, index, unitName);
+        var nextValue = effectiveValue(component, index, name) * (wasAbsolute ? 100 : 0.01);
+        // 单位先于数值写入，保持原生 editor* getter/setter 的百分比换算。
+        state.pending.delete(pendingKey(component, index, name));
+        updatePending(component, index, unitName, !wasAbsolute, properties[unitName], row, null, component.propertyMeta[unitName]);
+        updatePending(component, index, name, nextValue, properties[name], row, null, meta);
+        renderProperties();
+      });
+      var control = row.querySelector('.property-control');
+      control.classList.add('widget-margin');
+      control.appendChild(unit);
+    });
+    append('alignMode');
+  }
+
+  /** 原生 Label 将粗体、斜体和下划线合并为同一行，草稿仍按实际属性独立保存。 */
+  function createFontStyleRow(component, index) {
+    var names = ['isBold', 'isItalic', 'isUnderline'];
+    var row = document.createElement('div');
+    var pending = names.some(function (name) { return state.pending.has(pendingKey(component, index, name)); });
+    row.className = 'property-row' + (pending ? ' pending' : '');
+    var label = document.createElement('span');
+    label.className = 'property-name';
+    label.textContent = '字体样式';
+    var controls = document.createElement('div');
+    controls.className = 'font-style-control';
+    names.forEach(function (name, position) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = ['B', 'I', 'U'][position];
+      button.setAttribute('aria-label', component.propertyMeta[name]?.displayName || name);
+      button.setAttribute('aria-pressed', String(Boolean(effectiveValue(component, index, name))));
+      button.disabled = !component.propertyMeta[name]?.editable;
+      button.addEventListener('click', function () {
+        updatePending(component, index, name, !effectiveValue(component, index, name), component.properties[name], row, null, component.propertyMeta[name]);
+        renderProperties();
+      });
+      controls.appendChild(button);
+    });
+    var reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'property-reset';
+    reset.textContent = '↶';
+    reset.setAttribute('aria-label', '还原字体样式');
+    reset.disabled = !pending;
+    reset.addEventListener('click', function () {
+      names.forEach(function (name) { state.pending.delete(pendingKey(component, index, name)); });
+      if (!hasPendingChanges()) state.draftSessionId = '';
+      renderProperties();
+    });
+    row.append(label, controls, reset);
+    return row;
   }
 
   function hasPendingForComponent(component, index) {
@@ -714,11 +767,8 @@
     var label = document.createElement('div');
     label.className = 'property-name';
     var labelText = document.createElement('span');
-    labelText.textContent = propertyLabel(meta.displayName || name);
-    var kind = document.createElement('small');
-    kind.className = 'property-kind' + (meta.editable ? ' editable' : ' readonly');
-    kind.textContent = meta.editable ? valueKindLabel(meta.kind) : (READONLY_REASON_LABELS[meta.readOnlyReason] || '只读');
-    label.append(labelText, kind);
+    labelText.textContent = meta.displayName || propertyLabel(name);
+    label.appendChild(labelText);
     label.title = [name, meta.tooltip || '', meta.declaredType || ''].filter(Boolean).join('\n');
     var control = document.createElement('div');
     control.className = 'property-control';
@@ -737,6 +787,7 @@
     reset.title = '还原此属性';
     reset.setAttribute('aria-label', '还原 ' + propertyLabel(meta.displayName || name));
     reset.disabled = !pending && !state.invalid.has(key);
+    reset.hidden = !meta.editable;
     reset.addEventListener('click', function (event) {
       event.stopPropagation();
       state.pending.delete(key);
@@ -749,47 +800,18 @@
     return row;
   }
 
-  var PROPERTY_LABELS = {
-    contentSize: '内容尺寸', anchorPoint: '锚点', priority: '优先级', target: '目标节点',
-    position: '位置', rotation: '旋转', scale: '缩放', color: '颜色', opacity: '不透明度',
-    spriteFrame: '精灵帧', type: '类型', fillType: '填充类型', fillCenter: '填充中心',
-    fillStart: '填充起点', fillRange: '填充范围', sizeMode: '尺寸模式', trim: '裁剪透明边缘',
-    grayscale: '灰度', string: '文本', fontSize: '字体大小', lineHeight: '行高', fontFamily: '字体',
-    horizontalAlign: '水平对齐', verticalAlign: '垂直对齐', overflow: '溢出方式',
-    interactable: '可交互', transition: '过渡方式', duration: '过渡时长', zoomScale: '缩放比例',
-    clickEvents: '点击事件', isAlignTop: '顶部对齐', isAlignBottom: '底部对齐',
-    isAlignLeft: '左侧对齐', isAlignRight: '右侧对齐', isAlignVerticalCenter: '垂直居中',
-    isAlignHorizontalCenter: '水平居中', isStretchWidth: '拉伸宽度', isStretchHeight: '拉伸高度',
-    top: '顶部', bottom: '底部', left: '左侧', right: '右侧', horizontalCenter: '水平中心',
-    verticalCenter: '垂直中心', alignMode: '对齐模式', isAbsoluteTop: '顶部使用像素',
-    isAbsoluteBottom: '底部使用像素', isAbsoluteLeft: '左侧使用像素', isAbsoluteRight: '右侧使用像素',
-    isAbsoluteHorizontalCenter: '水平中心使用像素', isAbsoluteVerticalCenter: '垂直中心使用像素',
-    resizeMode: '尺寸调整', spacingX: '水平间距', spacingY: '垂直间距', cellSize: '单元尺寸',
-    startAxis: '起始轴', paddingLeft: '左内边距', paddingRight: '右内边距',
-    paddingTop: '上内边距', paddingBottom: '下内边距', alignCanvasWithScreen: '画布跟随屏幕',
-    clearFlag: '清除标志', renderMode: '渲染模式', camera: '相机', enableWrapText: '自动换行',
-    useSystemFont: '系统字体', lineSpacing: '行间距', overflow: '溢出方式'
-  };
-
-  var ENUM_OPTIONS = {
-    'Widget.alignMode': [[0, '仅一次'], [1, '窗口变化时'], [2, '始终']],
-    'Sprite.type': [[0, '普通'], [1, '九宫格'], [2, '平铺'], [3, '填充']],
-    'Sprite.fillType': [[0, '水平'], [1, '垂直'], [2, '扇形']],
-    'Sprite.sizeMode': [[0, '自定义'], [1, '裁剪尺寸'], [2, '原始尺寸']],
-    'Label.horizontalAlign': [[0, '左对齐'], [1, '居中'], [2, '右对齐']],
-    'Label.verticalAlign': [[0, '顶部'], [1, '居中'], [2, '底部']],
-    'Label.overflow': [[0, '不限制'], [1, '裁剪'], [2, '自动缩小'], [3, '自动增高']],
-    'Button.transition': [[0, '无'], [1, '颜色'], [2, '精灵帧'], [3, '缩放']],
-    'Layout.type': [[0, '无'], [1, '水平'], [2, '垂直'], [3, '网格']],
-    'Layout.resizeMode': [[0, '不调整'], [1, '调整容器'], [2, '调整子节点']]
-  };
-
   function propertyLabel(name) {
-    var text = String(name || '').replace(/^i18n:[^.]*/, '').replace(/^.*\./, '').replace(/ForInspector$/, '');
-    return PROPERTY_LABELS[text] || text.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+    return String(name || '').replace(/_/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/(^|\s)\S/g, function (value) { return value.toUpperCase(); }).trim();
   }
 
   function createEditor(componentType, name, value, onChange, meta) {
+    if (!meta.editable && ['boolean', 'number', 'string', 'enum', 'bitmask', 'color', 'vector', 'size', 'rect'].includes(meta.kind)) {
+      var readonly = createEditor(componentType, name, value, function () {}, Object.assign({}, meta, { editable: true }));
+      [readonly.node].concat(Array.from(readonly.node.querySelectorAll('input, select, textarea, button'))).forEach(function (control) {
+        if (control.matches('input, select, textarea, button')) control.disabled = true;
+      });
+      return readonly;
+    }
     if (!meta.editable) return { node: readonlyEditor(value, meta, name) };
     if (value === null) return { node: readonlyValue('未设置') };
     if (typeof value === 'boolean') {
@@ -801,8 +823,8 @@
       return { node: checkbox };
     }
     if (typeof value === 'number') {
-      var enumKey = normalizedComponentType(componentType) + '.' + name;
-      var enumOptions = ENUM_OPTIONS[enumKey] || meta.enumOptions;
+      if (meta.kind === 'bitmask' && meta.enumOptions) return { node: bitmaskEditor(value, meta.enumOptions, onChange) };
+      var enumOptions = meta.enumOptions;
       if (enumOptions) return { node: enumEditor(value, enumOptions, onChange) };
       var number = document.createElement('input');
       number.type = 'number';
@@ -858,6 +880,37 @@
     return select;
   }
 
+  /** 对应原生 BitMask 多选；使用无符号 32 位结果保留最高位与 ALL。 */
+  function bitmaskEditor(value, options, onChange) {
+    var node = document.createElement('details');
+    node.className = 'property-details bitmask-control';
+    var summary = document.createElement('summary');
+    var current = value >>> 0;
+    var checks = [];
+    node.appendChild(summary);
+    function refresh() {
+      summary.textContent = options.filter(function (item) { var mask = item.value >>> 0; return mask && mask !== 4294967295 && ((current & mask) >>> 0) === mask; }).map(function (item) { return item.name; }).join(' | ') || String(current);
+      checks.forEach(function (item) { item.input.checked = item.mask === 0 ? current === 0 : ((current & item.mask) >>> 0) === item.mask; });
+    }
+    options.forEach(function (item) {
+      var label = document.createElement('label');
+      var input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('aria-label', item.name);
+      var mask = item.value >>> 0;
+      checks.push({ input: input, mask: mask });
+      input.addEventListener('change', function () {
+        current = mask === 0 ? 0 : input.checked ? ((current | mask) >>> 0) : ((current & ~mask) >>> 0);
+        refresh();
+        onChange(current, null);
+      });
+      label.append(input, document.createTextNode(item.name));
+      node.appendChild(label);
+    });
+    refresh();
+    return node;
+  }
+
   function colorEditor(value, onChange, meta) {
     var wrapper = document.createElement('div');
     wrapper.className = 'color-control';
@@ -895,15 +948,9 @@
     }).join('');
   }
 
-  function valueKindLabel(kind) {
-    return {
-      boolean: '布尔', number: '数值', string: '文本', enum: '枚举', color: '颜色', vector: '向量',
-      size: '尺寸', rect: '矩形', reference: '引用', array: '数组', null: '空值'
-    }[kind] || '属性';
-  }
-
   function readonlyEditor(value, meta, name) {
-    if (meta.kind === 'reference' || REFERENCE_PROPERTY_NAMES.has(name)) return referenceValue(value, name);
+    if (meta.details) return readonlyDump(meta.details);
+    if (meta.kind === 'reference') return referenceValue(value, meta.declaredType || name);
     if (Array.isArray(value)) {
       var arrayNode = readonlyValue('数组 · ' + value.length + ' 项');
       arrayNode.title = '运行时数组只读';
@@ -913,6 +960,30 @@
     if (isRuntimeMarker(value)) return readonlyValue(markerText(value));
     if (typeof value === 'object') return readonlyValue('对象（运行时只读）');
     return readonlyValue(String(value));
+  }
+
+  /** 原生 Dump 的数组、事件和对象可展开检查；每个成员仍保持只读。 */
+  function readonlyDump(dump) {
+    if (dump.kind === 'reference') return referenceValue(dump.value, dump.type);
+    var value = dump.value;
+    if (!value || typeof value !== 'object') return readonlyValue(value === null || value === undefined ? '未设置' : String(value));
+    var wrapper = document.createElement('details');
+    wrapper.className = 'property-details';
+    var summary = document.createElement('summary');
+    summary.textContent = dump.isArray ? '数组 · ' + (dump.total ?? value.length) + ' 项（只读）' : (dump.type || '对象') + '（只读）';
+    wrapper.appendChild(summary);
+    Object.entries(value).forEach(function (entry) {
+      var child = entry[1];
+      var row = document.createElement('div');
+      row.className = 'property-detail-row';
+      var label = document.createElement('span');
+      label.textContent = dump.isArray ? '[' + entry[0] + ']' : child?.displayName || propertyLabel(entry[0]);
+      row.appendChild(label);
+      row.appendChild(child && typeof child === 'object' && 'type' in child ? readonlyDump(child) : readonlyValue(String(child ?? '未设置')));
+      wrapper.appendChild(row);
+    });
+    if (dump.total > value.length) wrapper.appendChild(readonlyValue('仅展开前 ' + value.length + ' 项'));
+    return wrapper;
   }
 
   function compoundEditor(value, keys, onChange, meta, defaults) {
@@ -1034,7 +1105,7 @@
     if (!value || typeof value !== 'object') {
       title.textContent = '未设置';
       var empty = document.createElement('span');
-      empty.textContent = propertyName ? propertyLabel(propertyName) : '运行时引用';
+      empty.textContent = propertyName || '运行时引用';
       node.append(title, empty);
       return node;
     }
@@ -1042,8 +1113,8 @@
       'node-reference': '节点',
       'component-reference': '组件',
       'asset-reference': '资源'
-    }[value.__type] || (propertyName ? propertyLabel(propertyName) : '引用');
-    title.textContent = label + (value.name ? ' · ' + value.name : '');
+    }[value.__type] || propertyName || '引用';
+    title.textContent = value.name || label;
     var uuid = document.createElement('span');
     uuid.textContent = value.uuid || value.objectUuid || (value.loaded === true ? '已加载' : '未设置');
     node.append(title, uuid);

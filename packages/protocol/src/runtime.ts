@@ -118,6 +118,10 @@ export const RuntimePropertyMetadataSchema = z.object({
   tooltip: z.string().min(1).optional(),
   /** Cocos Inspector 分组名称。 */
   group: z.string().min(1).optional(),
+  /** 原生分组的 id、style、name、displayOrder。 */
+  groupInfo: z.record(z.string(), z.unknown()).optional(),
+  /** 只读复合属性的原生结构，供展开查看引用和数组成员。 */
+  details: z.unknown().optional(),
   /** Cocos Inspector 显示顺序。 */
   displayOrder: z.number().optional(),
   /** 数字属性的最小值。 */
@@ -141,6 +145,10 @@ export const RuntimeComponentSnapshotSchema = z.object({
   properties: z.record(z.string(), z.unknown()),
   /** 属性 Inspector 元数据；旧运行时未提供时允许缺省。 */
   propertyMeta: z.record(z.string(), RuntimePropertyMetadataSchema).optional(),
+  /** 字段结构由同一 Creator 实例的原生 Dump 产生。 */
+  inspectorSource: z.literal('creator').optional(),
+  /** 原生组件标题是否显示启用开关。 */
+  showEnabled: z.boolean().optional(),
   /** 读取 getter/function 失败或被跳过的属性名。 */
   skipped: z.array(z.string()).optional(),
   revision: z.number().int().nonnegative().optional(),

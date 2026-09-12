@@ -59,7 +59,8 @@ const RuntimeHierarchySchema = SessionSchema.extend({
 });
 const RuntimeComponentSchema = SessionSchema.extend({
   path: z.string().min(1),
-  componentType: z.string().min(1)
+  componentType: z.string().min(1),
+  inspector: z.boolean().optional()
 });
 const RuntimeInvokeSchema = RuntimeComponentSchema.extend({
   method: z.string().min(1),
@@ -202,16 +203,32 @@ export class RuntimeController {
       }
       case 'server.runtimeComponent': {
         const input = RuntimeComponentSchema.parse(payload);
+        const session = this.driver.get(input.sessionId);
+        const selector = { projectId: session.projectId, ...(session.editorInstanceId ? { editorInstanceId: session.editorInstanceId } : {}) };
+        const identity = input.inspector ? await this.driver.evaluate<Record<string, unknown>>(input.sessionId,
+          buildRuntimeScript('readRuntimeComponent', { path: input.path, componentType: input.componentType, inspectorProperties: [] })) : null;
+        if (identity && identity.found !== true) throw new Error(`RUNTIME_COMPONENT_UNAVAILABLE:${JSON.stringify(identity)}`);
+        const inspectorClassName = identity?.inspectorClassName || input.componentType;
+        const schema = input.inspector ? await this.options.requestCreator(selector, 'probe.component', {
+          runtimeInspector: { componentType: inspectorClassName }
+        }) as { propertyNames: string[] } : null;
+        if (schema && (!Array.isArray(schema.propertyNames) || schema.propertyNames.some((name) => typeof name !== 'string'))) {
+          throw new Error('Creator 未提供有效的原生属性描述，请刷新扩展');
+        }
         const raw = await this.driver.evaluate<Record<string, unknown>>(
           input.sessionId,
           buildRuntimeScript('readRuntimeComponent', {
             path: input.path,
-            componentType: input.componentType
+            componentType: input.componentType,
+            ...(schema ? { inspectorProperties: schema.propertyNames } : {})
           })
         );
         if (!raw || raw.found !== true) {
           throw new Error(`RUNTIME_COMPONENT_UNAVAILABLE:${JSON.stringify(raw ?? null)}`);
         }
+        const inspector = input.inspector ? await this.options.requestCreator(selector, 'probe.component', {
+          runtimeInspector: { componentType: inspectorClassName, values: raw.properties, writable: raw.writable, showEnabled: raw.showEnabled }
+        }) as Record<string, unknown> : {};
         return {
           ...RuntimeComponentSnapshotSchema.parse({
             source: 'preview-runtime',
@@ -223,6 +240,8 @@ export class RuntimeController {
               ? { propertyMeta: raw.propertyMeta }
               : {}),
             ...(Array.isArray(raw.skipped) ? { skipped: raw.skipped } : {}),
+            ...inspector,
+            ...(inspector.componentType === 'cc.Component' ? { componentType: input.componentType } : {}),
             ...(typeof raw.revision === 'number' ? { revision: raw.revision } : {}),
             capturedAt: new Date().toISOString()
           })
@@ -230,6 +249,20 @@ export class RuntimeController {
       }
       case 'server.runtimeSetProperty': {
         const input = RuntimeSetPropertySchema.parse(payload);
+        if (input.inspector) {
+          const snapshot = await this.request('server.runtimeComponent', input) as {
+            propertyMeta: Record<string, { editable: boolean; kind: string; min?: number; max?: number; step?: number }>;
+          };
+          const meta = snapshot.propertyMeta[input.property];
+          if (!meta?.editable) throw new Error('该属性在当前运行状态下只读');
+          if (meta.kind === 'number') {
+            const value = input.value;
+            if (typeof value !== 'number' || !Number.isFinite(value)
+              || (meta.min !== undefined && value < meta.min) || (meta.max !== undefined && value > meta.max)) {
+              throw new Error('数值超出原生属性允许的范围');
+            }
+          }
+        }
         const raw = await this.driver.evaluate<Record<string, unknown>>(
           input.sessionId,
           buildRuntimeScript('writeRuntimeProperty', {

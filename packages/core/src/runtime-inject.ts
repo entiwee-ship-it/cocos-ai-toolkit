@@ -248,6 +248,58 @@ function serializeRuntimeValue(value: unknown, depth: number, seen: Set<unknown>
   return null;
 }
 
+/**
+ * 采集原生 Inspector 所需的值和类身份；引用只传身份，声明对象不执行构造器。
+ *
+ * @param value 运行时字段值。
+ * @param runtimeModule 当前运行进程的 cc 模块，用于识别资源、组件、节点和注册类。
+ * @param depth 当前递归深度，最多六层。
+ * @param seen 当前对象链，用于拒绝循环展开。
+ * @returns 可送回 Creator 原生 Dump 的有界、带类型数据。
+ */
+function serializeRuntimeInspectorValue(value: any, runtimeModule: Record<string, any>, depth: number, seen: Set<unknown>): unknown {
+  if (value === null || value === undefined || typeof value !== 'object') return serializeRuntimeValue(value, depth, seen);
+  const className = runtimeModule.js?.getClassName(value) || value.constructor?.name || '';
+  const isNode = runtimeModule.Node ? value instanceof runtimeModule.Node : typeof value.uuid === 'string' && Array.isArray(value.children);
+  const isComponent = runtimeModule.Component && value instanceof runtimeModule.Component;
+  const isAsset = runtimeModule.Asset && value instanceof runtimeModule.Asset;
+  if (isNode || isComponent || isAsset) return {
+    __type: isNode ? 'node-reference' : isComponent ? 'component-reference' : 'asset-reference',
+    className, uuid: value.uuid || value._uuid || '', name: value.name || '',
+    ...(isComponent && value.node ? { node: serializeRuntimeInspectorValue(value.node, runtimeModule, depth + 1, seen) } : {})
+  };
+  if (seen.has(value)) return { __type: 'circular-reference' };
+  if (depth > 6) return { __type: 'max-depth-exceeded' };
+  seen.add(value);
+  if (Array.isArray(value)) {
+    // ponytail: 单数组最多展开 50 项并保留总数；需要浏览大数组时再增加分页。
+    const result = value.slice(0, 50).map((item) => serializeRuntimeInspectorValue(item, runtimeModule, depth + 1, seen));
+    if (value.length > 50) result.push({ __type: 'truncated', total: value.length });
+    seen.delete(value);
+    return result;
+  }
+  const declared = value.constructor?.__props__;
+  const keys = Array.isArray(declared) && declared.length ? declared : Object.keys(value);
+  const properties: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+    try {
+      if (typeof value[key] !== 'function' && value[key] !== undefined) properties[key] = serializeRuntimeInspectorValue(value[key], runtimeModule, depth + 1, seen);
+    } catch {
+      properties[key] = { __type: 'unavailable' };
+    }
+  }
+  // 原生事件编辑器通过组件 ID 显示类名；component 是旧格式字段，运行时通常为空。
+  if (className === 'cc.ClickEvent' && !properties.component && value._componentId) {
+    const targetClass = runtimeModule.js?.getClassById?.(value._componentId);
+    if (targetClass) properties.component = runtimeModule.js.getClassName(targetClass);
+  }
+  seen.delete(value);
+  return className && !['Object', 'object'].includes(className)
+    ? { __type: 'inspector-object', className, properties }
+    : properties;
+}
+
 /** 收集公开 own/prototype 属性，覆盖 Cocos 组件的 getter/setter。 */
 function listRuntimeProperties(value: unknown): string[] {
   const properties = new Set<string>();
@@ -752,7 +804,9 @@ async function locateRuntimeComponent(options: { path: string; componentType: st
   const components = Array.isArray(node.components) ? node.components : [];
   // 运行时内置组件类型名不带 cc. 前缀（__typename__ 为 UITransform 而非 cc.UITransform）；
   // 精确未命中时尝试去前缀兼容匹配，并回传实际匹配类型名。
-  let component = components.find((item) => readRuntimeComponentType(item) === options.componentType) as Record<string, unknown> | undefined;
+  let component = options.componentType === 'cc.Node'
+    ? node
+    : components.find((item) => readRuntimeComponentType(item) === options.componentType) as Record<string, unknown> | undefined;
   let actualComponentType = options.componentType;
   if (!component && options.componentType.startsWith('cc.')) {
     const bareType = options.componentType.slice(3);
@@ -780,10 +834,10 @@ async function locateRuntimeComponent(options: { path: string; componentType: st
 /**
  * 按节点路径与组件类型读取运行时组件属性包。
  *
- * @param options path 节点路径（如 Canvas/panel/btn）；componentType 组件类型（如 cc.Label）。
- * @returns found 命中标记、节点 uuid、序列化属性与被跳过的字段清单。
+ * @param options path 为节点路径；componentType 为组件类型或 cc.Node；inspectorProperties 为 Creator 原生指定的采集字段。
+ * @returns found、节点身份、属性值；原生采集同时返回 writable，普通读取保留 propertyMeta。
  */
-async function readRuntimeComponent(options: { path: string; componentType: string }): Promise<Record<string, unknown>> {
+async function readRuntimeComponent(options: { path: string; componentType: string; inspectorProperties?: string[] }): Promise<Record<string, unknown>> {
   const located = await locateRuntimeComponent(options);
   if (located.found !== true) return located;
   const component = located.component as Record<string, unknown>;
@@ -792,8 +846,19 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
   const seen = new Set<unknown>([component]);
   const properties: Record<string, unknown> = {};
   const propertyMeta: Record<string, Record<string, unknown>> = {};
-  for (const key of listRuntimeProperties(component)) {
-    if (key === 'constructor' || key.startsWith('__')) continue;
+  const writable: Record<string, boolean> = {};
+  let inspectorClassName = located.actualComponentType;
+  if (options.inspectorProperties) {
+    const js = (located.runtimeModule as Record<string, any>).js;
+    // 未加 @ccclass 的运行时子类不在 Creator 注册表中；使用实际已注册的祖先声明。
+    for (let ctor = component.constructor; typeof ctor === 'function' && ctor !== Function.prototype; ctor = Object.getPrototypeOf(ctor)) {
+      const name = js?.getClassName(ctor);
+      if (name && (!js.getClassByName || js.getClassByName(name) === ctor)) { inspectorClassName = name; break; }
+    }
+  }
+  for (const key of options.inspectorProperties ?? listRuntimeProperties(component)) {
+    if (['constructor', 'prototype', '__proto__'].includes(key)) continue;
+    if (!options.inspectorProperties && key.startsWith('__')) continue;
     let value: unknown;
     try {
       value = component[key];
@@ -803,6 +868,13 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
     }
     if (typeof value === 'function') {
       skipped.push(key);
+      continue;
+    }
+    if (options.inspectorProperties) {
+      if (value === undefined) { skipped.push(key); continue; }
+      properties[key] = serializeRuntimeInspectorValue(value, located.runtimeModule as Record<string, any>, 1, seen);
+      const descriptor = findRuntimePropertyDescriptor(component, key);
+      writable[key] = Boolean(descriptor?.set || descriptor?.writable);
       continue;
     }
     const serialized = serializeRuntimeValue(value, 1, seen);
@@ -822,6 +894,11 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
     componentType: located.actualComponentType,
     properties,
     propertyMeta,
+    ...(options.inspectorProperties ? {
+      writable,
+      inspectorClassName: options.componentType === 'cc.Node' ? 'cc.Node' : inspectorClassName,
+      showEnabled: ['start', 'update', 'lateUpdate', 'onEnable', 'onDisable'].some((name) => typeof component[name] === 'function')
+    } : {}),
     skipped
   };
 }
@@ -830,7 +907,8 @@ async function readRuntimeComponent(options: { path: string; componentType: stri
 function isRuntimeArgsSafe(value: unknown, depth: number): boolean {
   if (value === null) return true;
   const valueType = typeof value;
-  if (valueType === 'string' || valueType === 'number' || valueType === 'boolean') return true;
+  if (valueType === 'number') return Number.isFinite(value);
+  if (valueType === 'string' || valueType === 'boolean') return true;
   if (valueType !== 'object') return false;
   if (depth > 6) return false;
   if (Array.isArray(value)) return value.every((item) => isRuntimeArgsSafe(item, depth + 1));
@@ -1192,7 +1270,12 @@ function findRuntimePropertyDescriptor(target: unknown, key: string): PropertyDe
   return undefined;
 }
 
-/** 写入公开运行时属性并立即回读；默认拒绝内部字段与原型污染路径。 */
+/**
+ * 写入公开标量或 Cocos 值类型并立即回读；引用、数组及内部路径保持只读。
+ *
+ * @param options path 为节点路径；componentType 为组件或 cc.Node；property 为公开属性路径；value 为待写入的 JSON 值。
+ * @returns 写入标记、实际回读值与 revision；拒绝或失败时返回明确原因。
+ */
 async function writeRuntimeProperty(options: {
   path: string;
   componentType: string;
@@ -1206,21 +1289,46 @@ async function writeRuntimeProperty(options: {
   }
   const segments = options.property.split('.').filter((segment) => segment.length > 0);
   const component = located.component as Record<string, unknown>;
+  const runtimeModule = located.runtimeModule as Record<string, any>;
+  const referenceValue = (value: unknown): boolean => Array.isArray(value)
+    || [runtimeModule.Node, runtimeModule.Component, runtimeModule.Asset].some((ctor) => typeof ctor === 'function' && value instanceof ctor);
   let owner: Record<string, unknown> = component;
   for (const segment of segments.slice(0, -1)) {
     const next = owner[segment];
     if (next === null || typeof next !== 'object') {
       return { found: false, reason: 'property-parent-not-found', nodeUuid: located.nodeUuid, property: options.property };
     }
+    if (referenceValue(next)) return { found: false, reason: 'reference-read-only', nodeUuid: located.nodeUuid, property: options.property };
     owner = next as Record<string, unknown>;
   }
   const key = segments[segments.length - 1];
+  if (referenceValue(owner[key])) return { found: false, reason: 'reference-read-only', nodeUuid: located.nodeUuid, property: options.property };
+  const attrs = readRuntimeInspectorClassInfo(owner, runtimeModule).attrs;
+  const declaredCtor = attrs?.[`${key}$_$ctor`] as any;
+  const declaredReference = typeof declaredCtor === 'function'
+    && [runtimeModule.Node, runtimeModule.Component, runtimeModule.Asset].some((base) => typeof base === 'function' && (declaredCtor === base || declaredCtor.prototype instanceof base));
+  if (declaredReference || Array.isArray(attrs?.[`${key}$_$default`])) {
+    return { found: false, reason: 'reference-read-only', nodeUuid: located.nodeUuid, property: options.property };
+  }
   const descriptor = findRuntimePropertyDescriptor(owner, key);
   if (descriptor && descriptor.set === undefined && descriptor.writable === false) {
     return { found: false, reason: 'property-read-only', nodeUuid: located.nodeUuid, property: options.property };
   }
   try {
-    owner[key] = options.value;
+    let nextValue = options.value;
+    const previous = owner[key] as any;
+    if (runtimeModule.ValueType && previous instanceof runtimeModule.ValueType) {
+      const type = String(runtimeModule.js?.getClassName(previous) || previous.constructor.name).replace(/^cc\./, '');
+      const fields: Record<string, string[]> = { Vec2: ['x', 'y'], Vec3: ['x', 'y', 'z'], Vec4: ['x', 'y', 'z', 'w'], Color: ['r', 'g', 'b', 'a'], Size: ['width', 'height'], Rect: ['x', 'y', 'width', 'height'] };
+      const keys = fields[type];
+      const value = options.value as Record<string, unknown>;
+      if (!keys || !value || typeof value !== 'object' || Object.keys(value).length !== keys.length || keys.some((key) => typeof value[key] !== 'number' || !Number.isFinite(value[key]))) {
+        return { found: false, reason: 'value-type-invalid', nodeUuid: located.nodeUuid, property: options.property };
+      }
+      // 原生 ValueType 保留类身份；普通 JSON 覆盖会破坏自定义组件后续的 clone/set 等调用。
+      nextValue = Object.assign(previous.clone(), value);
+    }
+    owner[key] = nextValue;
     const readback = owner[key];
     const globalObject = globalThis as {
       System?: { import?: (name: string) => Promise<Record<string, unknown>> };
@@ -1323,6 +1431,7 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   readRuntimeResolution,
   readRuntimeComponentType,
   serializeRuntimeValue,
+  serializeRuntimeInspectorValue,
   listRuntimeProperties,
   readRuntimeInspectorClassInfo,
   readRuntimeInspectorAttribute,

@@ -60,6 +60,8 @@ Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，�
 
 选择 **Cocos AI → 打开运行工作台** 可打开三栏运行界面：左侧订阅 Creator 第三项 Simulator 中真实场景的实时节点树，中间读取并修改所选运行时组件的公开属性，右侧把同一 `SimulatorApp-Win32.exe` 原生窗口嵌入工作台，可直接接收鼠标和键盘操作。运行时写入只作用于当前进程，不会写回 Scene 或 Prefab；Workbench Host 只监听 `127.0.0.1`，不使用 Toolkit Token。
 
+属性面板采用当前 Creator 的原生 Dump 描述，并从同一 Simulator 采集真实值：继承声明、显示顺序、分组、枚举、范围和动态显隐保持引擎语义；节点变换、Widget 对齐及单位、Label 字体样式使用相应控件。资源、节点、组件引用及数组可展开只读检查。写入前复核当前原生可写状态，写入后真实回读，Cocos 值类型保留类身份；节点名称和 UUID 集中显示在选择区。
+
 通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 
 ## 启动 AI 正式入口 MCP Server

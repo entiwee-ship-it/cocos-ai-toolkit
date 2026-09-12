@@ -48,6 +48,106 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('Creator 原生 Inspector 采集', () => {
+  it('事件数组通过真实组件 ID 显示回调类名，且不改写运行时旧格式字段', async () => {
+    class LoginViewComp {}
+    class EventHandler {
+      static __props__ = ['component', '_componentId', 'handler', 'customEventData'];
+      component = '';
+      _componentId = 'login-script-id';
+      handler = 'loginBtn';
+      customEventData = 'wechat';
+    }
+    const event = new EventHandler();
+    const node = fakeNode({ name: 'button' });
+    node.components = [{ __typename__: 'Button', clickEvents: [event] } as never];
+    const scene = fakeNode({ name: 'main', children: [node] });
+    vi.stubGlobal('System', { import: async () => ({ director: { getScene: () => scene }, js: {
+      getClassName: (value: any) => value === LoginViewComp ? 'LoginViewComp' : value instanceof EventHandler ? 'cc.ClickEvent' : '',
+      getClassById: (id: string) => id === 'login-script-id' ? LoginViewComp : undefined
+    } }) });
+    const result = await runScript('readRuntimeComponent', { path: 'main/button', componentType: 'Button', inspectorProperties: ['clickEvents'] }) as Record<string, any>;
+    expect(result.properties.clickEvents[0].properties).toMatchObject({ component: 'LoginViewComp', _componentId: 'login-script-id', handler: 'loginBtn', customEventData: 'wechat' });
+    expect(event.component).toBe('');
+  });
+
+  it('未注册的运行时子类使用已注册祖先的声明，同时保留真实组件名', async () => {
+    class Component {}
+    class TimerManager extends Component { __typename__ = 'TimerManager'; update() {} }
+    const node = fakeNode({ name: 'manager' });
+    node.components = [new TimerManager() as never];
+    const scene = fakeNode({ name: 'main', children: [node] });
+    vi.stubGlobal('System', { import: async () => ({ director: { getScene: () => scene }, js: {
+      getClassName: (ctor: unknown) => ctor === Component ? 'cc.Component' : 'TimerManager',
+      getClassByName: (name: string) => name === 'cc.Component' ? Component : undefined
+    } }) });
+    expect(await runScript('readRuntimeComponent', { path: 'main/manager', componentType: 'TimerManager', inspectorProperties: [] })).toMatchObject({
+      componentType: 'TimerManager', inspectorClassName: 'cc.Component', showEnabled: true
+    });
+  });
+
+  it('值类型写回保留类身份，资源引用、引用成员和数组拒绝写入', async () => {
+    class ValueType {}
+    class Vec3 extends ValueType {
+      constructor(public x = 0, public y = 0, public z = 0) { super(); }
+      clone() { return new Vec3(this.x, this.y, this.z); }
+    }
+    class Asset { name = 'frame'; }
+    class Example {
+      static __attrs__ = { 'emptyFrame$_$ctor': Asset, 'emptyItems$_$default': [] };
+    }
+    const old = new Vec3(1, 2, 3);
+    const component = { constructor: Example, __typename__: 'Example', offset: old, frame: new Asset(), items: [1], emptyFrame: null, emptyItems: null };
+    const node = fakeNode({ name: 'panel' });
+    node.components = [component as never];
+    const scene = fakeNode({ name: 'main', children: [node] });
+    vi.stubGlobal('System', { import: async () => ({ director: { getScene: () => scene }, ValueType, Asset, js: { getClassName: (value: object) => `cc.${value.constructor.name}` } }) });
+    const write = (property: string, value: unknown) => runScript('writeRuntimeProperty', { path: 'main/panel', componentType: 'Example', property, value });
+    expect(await write('offset', { x: 4, y: 5, z: 6 })).toMatchObject({ written: true, readback: { x: 4, y: 5, z: 6 } });
+    expect(component.offset).toBeInstanceOf(Vec3);
+    expect(old.x).toBe(1);
+    expect(await write('offset', { x: 4 })).toMatchObject({ reason: 'value-type-invalid' });
+    for (const [property, value] of [['frame', {}], ['frame.name', 'changed'], ['items', []], ['emptyFrame', {}], ['emptyItems', []]] as const) {
+      expect(await write(property, value)).toMatchObject({ reason: 'reference-read-only' });
+    }
+    expect(component.frame.name).toBe('frame');
+    expect(component.items).toEqual([1]);
+  });
+
+  it('严格采集原生指定字段，并保留值类型和资源身份', async () => {
+    class Color { r = 1; g = 2; b = 3; a = 255; }
+    class Asset { _uuid = 'sprite-frame-uuid'; name = 'icon'; }
+    class SpriteFrame extends Asset {}
+    const component = { __typename__: 'Sprite', color: new Color(), spriteFrame: new SpriteFrame(), _declared: 7, renderCache: 999 };
+    const node = fakeNode({ name: 'bg' });
+    node.components = [component as never];
+    const scene = fakeNode({ name: 'main', children: [node] });
+    vi.stubGlobal('System', { import: async () => ({
+      director: { getScene: () => scene }, Asset,
+      js: { getClassName: (value: object) => `cc.${value.constructor.name}` }
+    }) });
+    const result = await runScript('readRuntimeComponent', {
+      path: 'main/bg', componentType: 'Sprite', inspectorProperties: ['color', 'spriteFrame', '_declared']
+    }) as Record<string, any>;
+    expect(Object.keys(result.properties)).toEqual(['color', 'spriteFrame', '_declared']);
+    expect(result.properties.color).toEqual({ __type: 'inspector-object', className: 'cc.Color', properties: { r: 1, g: 2, b: 3, a: 255 } });
+    expect(result.properties.spriteFrame).toMatchObject({ __type: 'asset-reference', className: 'cc.SpriteFrame', uuid: 'sprite-frame-uuid' });
+    expect(result.writable).toMatchObject({ color: true, spriteFrame: true, _declared: true });
+  });
+
+  it('节点 Inspector 读取和写回都定位节点本身，旋转使用欧拉角', async () => {
+    const node = fakeNode({ name: 'panel' });
+    node.eulerAngles = { x: 0, y: 0, z: 10 };
+    node.rotation = { x: 0, y: 0, z: 0, w: 1 };
+    installScene(fakeNode({ name: 'main', children: [node] }));
+    const read = await runScript('readRuntimeComponent', { path: 'main/panel', componentType: 'cc.Node', inspectorProperties: ['eulerAngles'] }) as Record<string, any>;
+    expect(read.found).toBe(true);
+    const write = await runScript('writeRuntimeProperty', { path: 'main/panel', componentType: 'cc.Node', property: 'eulerAngles', value: { x: 0, y: 0, z: 20 } }) as Record<string, any>;
+    expect(write.readback).toEqual({ x: 0, y: 0, z: 20 });
+    expect(node.rotation).toEqual({ x: 0, y: 0, z: 0, w: 1 });
+  });
+});
+
 describe('buildRuntimeScript', () => {
   it('拼接后的脚本自包含且函数间可调用', async () => {
     installScene(fakeNode({ name: 'Scene', fileId: 'scene-file', children: [] }));

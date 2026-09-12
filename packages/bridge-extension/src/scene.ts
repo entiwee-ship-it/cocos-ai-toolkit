@@ -20,6 +20,7 @@ import type { WriteOperation } from './write-types';
 import { readNodeBounds } from './scene-bounds';
 import { buildNodeWriteCapabilities, type NodeWriteCapabilities } from './write-applicability';
 import { readDumpValue } from './raw-reflection';
+import { readRuntimeInspector } from './runtime-inspector';
 
 const { director, Vec3 } = require('cc') as {
   director: { getScene(): unknown };
@@ -334,6 +335,10 @@ function readOptionalOperationString(operation: WriteOperation, field: string): 
 async function probeComponent(request: unknown): Promise<unknown> {
   const input = readObject(unwrapRequest(request));
   const componentRequest = readObject(input.request);
+  if (componentRequest.runtimeInspector && typeof componentRequest.runtimeInspector === 'object') {
+    const native = (globalThis as Record<string, any>).cce;
+    return readRuntimeInspector(readObject(componentRequest.runtimeInspector), require('cc'), native.Dump.encode, (key) => (Editor as any).I18n.t(key));
+  }
   const uuid = requireUuid(componentRequest);
   const scriptPathsByUuid = readScriptPathsByUuid(input.scriptPathsByUuid);
   const raw = await Editor.Message.request('scene', 'query-component', uuid);

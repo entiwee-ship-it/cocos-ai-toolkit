@@ -426,9 +426,10 @@ async function probeEditorStateWithDocumentIdentity(): Promise<unknown> {
 }
 
 async function probeComponent(request: unknown): Promise<unknown> {
+  const componentRequest = readObject(request);
   return forwardToScene('probeComponent', {
-    request: readObject(request),
-    scriptPathsByUuid: await readScriptPathsBestEffort()
+    request: componentRequest,
+    ...(componentRequest.runtimeInspector ? {} : { scriptPathsByUuid: await readScriptPathsBestEffort() })
   });
 }
 
