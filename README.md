@@ -62,6 +62,8 @@ Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，�
 
 属性面板采用当前 Creator 的原生 Dump 描述，并从同一 Simulator 采集真实值：继承声明、显示顺序、分组、枚举、范围和动态显隐保持引擎语义；节点变换、Widget 对齐及单位、Label 字体样式使用相应控件。资源、节点、组件引用及数组可展开只读检查。写入前复核当前原生可写状态，写入后真实回读，Cocos 值类型保留类身份；节点名称和 UUID 集中显示在选择区。
 
+调试控制台通过同一运行代理采集 `console.log/info/warn/error/debug`、Cocos 日志和 JSB 异常，保留日志发生时间并支持级别筛选、文本搜索、堆栈展开及自动跟随。界面保留最近 500 条记录，停止后仍可查看，新运行使用独立日志；清空只影响当前视图。三栏宽度和控制台高度支持拖动及方向键调整，属性面板在后台刷新时保留阅读位置和详情展开状态。
+
 通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 
 ## 启动 AI 正式入口 MCP Server

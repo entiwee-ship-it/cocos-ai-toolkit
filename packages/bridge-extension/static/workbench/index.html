@@ -25,8 +25,8 @@
         <header class="pane-header"><h1 id="treeTitle">实时节点树</h1></header>
         <div class="tree-search">
           <label class="search-control">
-            <span aria-hidden="true">⌕</span>
-            <input id="treeSearch" type="search" placeholder="搜索节点名称、UUID 或路径" autocomplete="off">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="m13 13 4 4"></path></svg>
+            <input id="treeSearch" type="search" placeholder="搜索节点名称、UUID 或路径" aria-label="搜索节点" autocomplete="off">
           </label>
         </div>
         <div id="treeView" class="tree-view" role="tree" aria-label="实时运行节点树">
@@ -35,15 +35,17 @@
         <footer class="pane-footer"><span id="treeMeta">0 个节点 · revision —</span></footer>
       </section>
 
-      <div class="splitter" data-splitter="tree" role="separator" aria-orientation="vertical" aria-label="调整节点树宽度"></div>
+      <div class="splitter" data-splitter="tree" role="separator" tabindex="0" aria-orientation="vertical" aria-label="调整节点树宽度"></div>
 
       <section class="pane inspector-pane" aria-labelledby="inspectorTitle">
-        <header class="pane-header"><h1 id="inspectorTitle">运行时属性</h1></header>
+        <header class="pane-header"><h1 id="inspectorTitle">运行时属性</h1><button id="toggleComponentsButton" class="quiet-button" type="button" disabled>全部折叠</button></header>
         <div id="selectionHeader" class="selection-header empty">
           <strong id="selectedName">未选择节点</strong>
-          <code id="selectedUuid">—</code>
-          <code id="selectedPath">—</code>
           <span id="selectionMeta" class="selection-meta">选择节点后显示可用属性</span>
+          <details class="selection-details">
+            <summary>节点信息</summary>
+            <dl><dt>UUID</dt><dd><code id="selectedUuid">—</code></dd><dt>路径</dt><dd><code id="selectedPath">—</code></dd></dl>
+          </details>
         </div>
         <div id="propertyView" class="property-view">
           <div class="empty-state">从左侧选择一个运行时节点</div>
@@ -57,7 +59,7 @@
         </footer>
       </section>
 
-      <div class="splitter" data-splitter="inspector" role="separator" aria-orientation="vertical" aria-label="调整属性面板宽度"></div>
+      <div class="splitter" data-splitter="inspector" role="separator" tabindex="0" aria-orientation="vertical" aria-label="调整属性面板宽度"></div>
 
       <section class="pane preview-pane" aria-labelledby="previewTitle">
         <header class="pane-header preview-heading">
@@ -84,18 +86,27 @@
           <div id="nativeViewport" class="native-viewport" aria-label="Creator 原生模拟器交互区域">
             <div id="previewPlaceholder" class="preview-placeholder">
               <span class="preview-icon" aria-hidden="true">▶</span>
-              <strong>等待嵌入原生 Simulator</strong>
-              <span>启动后可直接操作游戏画面</span>
+              <strong>准备开始调试</strong>
+              <span>启动模拟器，查看场景、属性与运行日志</span>
             </div>
           </div>
         </div>
+        <div class="splitter console-splitter" data-splitter="console" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="调整控制台高度"></div>
         <section class="console-panel" aria-labelledby="consoleTitle">
           <header class="console-heading">
             <h2 id="consoleTitle">调试控制台</h2>
             <span id="consoleMeta">等待运行</span>
-            <button id="clearConsoleButton" type="button" title="清空当前日志">清空</button>
+            <button id="clearConsoleButton" class="quiet-button" type="button" title="清空当前日志">清空</button>
           </header>
-          <pre id="consoleView" class="console-view">启动模拟器后显示调试输出</pre>
+          <div class="console-toolbar">
+            <label class="search-control compact">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="m13 13 4 4"></path></svg>
+              <input id="consoleSearch" type="search" placeholder="筛选日志" aria-label="筛选日志内容" autocomplete="off">
+            </label>
+            <select id="consoleLevel" aria-label="日志级别"><option value="all">全部级别</option><option value="info">日志与信息</option><option value="warn">警告</option><option value="error">错误</option><option value="debug">调试</option></select>
+            <button id="consoleFollowButton" class="quiet-button" type="button" aria-pressed="true" title="自动滚动到最新日志">跟随日志</button>
+          </div>
+          <div id="consoleView" class="console-view" role="log" aria-label="运行日志" aria-live="off" tabindex="0"><div class="console-empty">启动模拟器后，日志会实时显示在这里</div></div>
         </section>
         <footer class="preview-footer">
           <span id="embedMeta">等待嵌入</span>

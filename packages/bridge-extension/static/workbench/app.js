@@ -24,7 +24,10 @@
     consoleSessionId: '',
     consoleSeq: 0,
     consoleBusy: false,
-    consoleHasEntries: false,
+    consoleEntries: [],
+    consoleGeneration: 0,
+    consoleFollow: true,
+    consoleCleared: false,
     userStopped: false,
     autoStarting: false
   };
@@ -34,7 +37,7 @@
     'treeSearch', 'treeView', 'treeMeta', 'selectionHeader', 'selectedName', 'selectedUuid', 'selectedPath', 'selectionMeta',
     'propertyView', 'applyButton', 'revertButton', 'applyStatus', 'liveState', 'processName', 'previewStage', 'previewPlaceholder', 'embedMeta',
     'runtimeId', 'sceneEpoch', 'lastUpdated', 'workspace', 'toast', 'resolutionSelect', 'orientationSelect',
-    'consoleMeta', 'consoleView', 'clearConsoleButton'
+    'consoleMeta', 'consoleView', 'clearConsoleButton', 'consoleSearch', 'consoleLevel', 'consoleFollowButton', 'toggleComponentsButton'
   ].map(function (id) { return [id, document.getElementById(id)]; }));
 
   async function api(path, options) {
@@ -54,6 +57,7 @@
       else if (nextSessionId) state.userStopped = false;
       if (previousSessionId !== nextSessionId) {
         resetConsole(nextSessionId);
+        if (!nextSessionId) { state.hierarchy = null; renderTree(); }
         void refreshSettings();
         if (previousSessionId && hasPendingChanges()) {
           showToast('运行连接已变化，未应用修改已保留', true);
@@ -99,12 +103,15 @@
     }
   }
 
+  /** 停止当前运行，保留可查日志和草稿，清除已失效的运行节点树。 */
   async function stopSession() {
     setBusy(true);
     try {
+      await refreshConsole();
       state.host = await api('/api/stop', { method: 'POST' });
       resetConsole('');
       state.hierarchy = null;
+      renderTree();
       clearSelection();
       renderState();
     } catch (error) {
@@ -153,6 +160,7 @@
     }
   }
 
+  /** 同步连接状态、控制台和操作可用性。 */
   function renderState() {
     var host = state.host || {};
     var runtime = host.runtime || {};
@@ -187,7 +195,8 @@
       ? (size ? size.width + ' × ' + size.height + ' · 可直接操作' : '原生窗口已嵌入')
       : nativeWindow.state === 'error' ? '嵌入失败' : '等待嵌入';
     elements.previewPlaceholder.classList.toggle('hidden', embedded);
-    elements.treeMeta.textContent = (state.hierarchy?.nodeCount || 0) + ' 个节点 · revision ' + (state.hierarchy?.revision ?? '—');
+    elements.treeMeta.textContent = (state.hierarchy?.nodeCount || 0) + ' 个节点' + (connected ? ' · 实时同步' : '');
+    elements.treeMeta.title = 'revision ' + (state.hierarchy?.revision ?? '—');
     elements.startButton.disabled = busy;
     elements.startButton.textContent = host.status === 'starting'
       ? '正在启动…'
@@ -196,7 +205,8 @@
     elements.startButton.className = running ? 'danger' : 'primary';
     elements.resolutionSelect.disabled = !state.settings || busy;
     elements.orientationSelect.disabled = !state.settings || busy;
-    elements.consoleMeta.textContent = connected ? (state.consoleHasEntries ? '实时' : '暂无日志') : '等待运行';
+    renderConsoleMeta();
+    updateComponentToggle();
     if (host.error && host.error !== state.lastToast) showToast(host.error, true);
     if (nativeWindow.error && nativeWindow.error !== state.lastToast) showToast(nativeWindow.error, true);
     if (connected && session.sessionId && nativeWindow.state === 'idle') scheduleNativeEmbed(false);
@@ -363,6 +373,7 @@
    */
   async function selectNode(node, options) {
     options = options || {};
+    const sameNode = state.selectedPath === node.path;
     var preserveChanges = options.preserveChanges === true
       || (state.selectedPath === node.path && hasPendingChanges());
     if (!preserveChanges && state.selectedPath && state.selectedPath !== node.path && hasPendingChanges()) {
@@ -379,7 +390,7 @@
     updateSelectionHeader();
     renderTree();
     renderApplyState();
-    elements.propertyView.innerHTML = '<div class="empty-state">正在读取组件属性</div>';
+    if (!sameNode) elements.propertyView.innerHTML = '<div class="empty-state">正在读取组件属性</div>';
     var selectedPath = node.path;
     var results = await Promise.all([{ type: 'cc.Node' }].concat(node.components || []).map(async function (component) {
       try {
@@ -412,7 +423,15 @@
       : '选择节点后显示可用属性';
   }
 
+  /** 按原生属性描述更新组件区域，保留草稿及展开状态。 */
   function renderProperties() {
+    const scrollTop = elements.propertyView.scrollTop;
+    const openDetails = new Set();
+    elements.propertyView.querySelectorAll('.property-row').forEach(function (row) {
+      row.querySelectorAll('details').forEach(function (detail, index) {
+        if (detail.open) openDetails.add(row.dataset.pendingKey + ':' + index);
+      });
+    });
     elements.propertyView.textContent = '';
     if (!state.components.length) {
       elements.propertyView.innerHTML = '<div class="empty-state">没有可读取的公开属性</div>';
@@ -425,7 +444,28 @@
     state.components.forEach(function (component, index) {
       elements.propertyView.appendChild(createComponentPanel(component, index));
     });
+    // 后台层级刷新只更新属性快照，当前查看位置和数组展开状态保持不变。
+    elements.propertyView.querySelectorAll('.property-row').forEach(function (row) {
+      row.querySelectorAll('details').forEach(function (detail, index) {
+        detail.open = openDetails.has(row.dataset.pendingKey + ':' + index);
+      });
+    });
+    elements.propertyView.scrollTop = scrollTop;
     renderApplyState();
+    updateComponentToggle();
+  }
+
+  /** 同步批量折叠按钮，保留组件的原生字段与未应用草稿。 */
+  function updateComponentToggle() {
+    elements.toggleComponentsButton.disabled = !state.components.length;
+    elements.toggleComponentsButton.textContent = state.componentExpanded.size ? '全部折叠' : '全部展开';
+  }
+
+  /** 在已有组件展开状态上批量切换，不改变属性值或草稿。 */
+  function toggleAllComponents() {
+    if (state.componentExpanded.size) state.componentExpanded.clear();
+    else state.components.forEach(function (component, index) { state.componentExpanded.add(componentKey(component, index)); });
+    renderProperties();
   }
 
   function componentKey(component, index) {
@@ -518,6 +558,7 @@
       panel.classList.toggle('collapsed', !nextExpanded);
       title.setAttribute('aria-expanded', String(nextExpanded));
       arrow.textContent = nextExpanded ? '⌄' : '›';
+      updateComponentToggle();
     }
     title.addEventListener('click', toggle);
     title.addEventListener('keydown', function (event) {
@@ -761,7 +802,9 @@
     var currentValue = pending ? pending.value : value;
     var row = document.createElement('div');
     row.className = 'property-row' + (pending ? ' pending' : '') + (state.invalid.has(key) ? ' invalid' : '');
+    if (meta.kind === 'array' || meta.kind === 'object') row.classList.add('property-row-expanded');
     row.dataset.property = name;
+    row.dataset.kind = meta.kind || 'unknown';
     row.dataset.component = component.componentType || component.type || '';
     row.dataset.pendingKey = key;
     var label = document.createElement('div');
@@ -1399,15 +1442,23 @@
     };
   }
 
+  /** 按会话与游标读取日志；清空或切换期间返回的旧响应不能重新显示。 */
   async function refreshConsole() {
-    var sessionId = state.host?.session?.sessionId || '';
+    const sessionId = state.host?.session?.sessionId || '';
     if (!sessionId || state.host?.status !== 'ready' || state.consoleBusy) return;
     if (state.consoleSessionId !== sessionId) resetConsole(sessionId);
+    const generation = state.consoleGeneration;
     state.consoleBusy = true;
     try {
-      var result = await api('/api/console?sinceSeq=' + encodeURIComponent(String(state.consoleSeq)));
-      (result.entries || []).forEach(appendConsoleEntry);
-      if (typeof result.nextSeq === 'number') state.consoleSeq = result.nextSeq;
+      const result = await api('/api/console?sinceSeq=' + encodeURIComponent(String(state.consoleSeq)));
+      if (state.consoleSessionId !== sessionId) return;
+      if (typeof result.nextSeq === 'number') state.consoleSeq = Math.max(state.consoleSeq, result.nextSeq);
+      if (generation !== state.consoleGeneration) return;
+      if (result.entries?.length) {
+        state.consoleEntries = state.consoleEntries.concat(result.entries).slice(-500);
+        state.consoleCleared = false;
+        renderConsole();
+      } else renderConsoleMeta();
     } catch (error) {
       if (!String(error.message).includes('NOT_READY')) showToast(error.message || String(error), true);
     } finally {
@@ -1415,32 +1466,108 @@
     }
   }
 
+  /**
+   * 新运行使用独立日志缓冲，停止时保留记录供定位问题。
+   * @param sessionId 当前运行会话标识，空值表示已停止。
+   */
   function resetConsole(sessionId) {
+    if (state.consoleSessionId === (sessionId || '')) return;
     state.consoleSessionId = sessionId || '';
-    state.consoleSeq = 0;
-    state.consoleHasEntries = false;
-    elements.consoleView.textContent = '启动模拟器后显示调试输出';
-    elements.consoleMeta.textContent = sessionId ? '读取中' : '等待运行';
-  }
-
-  function appendConsoleEntry(entry) {
-    if (!state.consoleHasEntries) {
-      elements.consoleView.textContent = '';
-      state.consoleHasEntries = true;
+    state.consoleGeneration += 1;
+    if (sessionId) {
+      state.consoleSeq = 0;
+      state.consoleEntries = [];
+      state.consoleFollow = true;
+      state.consoleCleared = false;
     }
-    var line = document.createElement('div');
-    line.className = 'console-line ' + (entry.level || 'log');
-    line.textContent = '[' + formatTime(entry.timestamp) + '] [' + (entry.level || 'log') + '] ' + (entry.text || '')
-      + (entry.stack ? '\n' + entry.stack : '');
-    elements.consoleView.appendChild(line);
-    while (elements.consoleView.childElementCount > 500) elements.consoleView.firstElementChild.remove();
-    elements.consoleView.scrollTop = elements.consoleView.scrollHeight;
+    renderConsole();
   }
 
+  /**
+   * 组合日志级别与文本过滤，搜索范围包含错误堆栈。
+   * @param entry 原始日志记录。
+   * @param level 所选级别，info 同时包含普通 log。
+   * @param query 用户输入的筛选文本。
+   * @returns 当前记录是否匹配。
+   */
+  function consoleMatches(entry, level, query) {
+    const matchesLevel = level === 'all' || entry.level === level || (level === 'info' && entry.level === 'log');
+    return matchesLevel && (String(entry.text || '') + '\n' + String(entry.stack || '')).toLowerCase().includes(String(query || '').trim().toLowerCase());
+  }
+
+  /** 呈现最近日志；用户向上阅读时保持滚动位置，筛选不丢弃原始记录。 */
+  function renderConsole() {
+    const scrollTop = elements.consoleView.scrollTop;
+    const expandedStacks = new Set(Array.from(elements.consoleView.querySelectorAll('.console-stack[open]')).map(function (stack) { return stack.dataset.seq; }));
+    const entries = state.consoleEntries.filter(function (entry) {
+      return consoleMatches(entry, elements.consoleLevel.value, elements.consoleSearch.value);
+    });
+    const fragment = document.createDocumentFragment();
+    const levels = { log: '日志', info: '信息', warn: '警告', error: '错误', debug: '调试' };
+    for (const entry of entries) {
+      const level = levels[entry.level] ? entry.level : 'log';
+      const line = document.createElement('div');
+      line.className = 'console-line ' + level;
+      const time = document.createElement('time');
+      time.className = 'console-time';
+      const date = new Date(entry.timestamp);
+      time.textContent = Number.isNaN(date.valueOf()) ? '—' : date.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
+      time.title = entry.timestamp || '';
+      const badge = document.createElement('span');
+      badge.className = 'console-level';
+      badge.textContent = levels[level];
+      const content = document.createElement('div');
+      content.className = 'console-content';
+      const message = document.createElement('div');
+      message.textContent = entry.text || '';
+      content.appendChild(message);
+      if (entry.stack) {
+        const stack = document.createElement('details');
+        stack.className = 'console-stack';
+        stack.dataset.seq = String(entry.seq);
+        stack.open = expandedStacks.has(String(entry.seq));
+        const summary = document.createElement('summary');
+        summary.textContent = '查看堆栈';
+        const text = document.createElement('pre');
+        text.textContent = entry.stack;
+        stack.append(summary, text);
+        content.appendChild(stack);
+      }
+      line.append(time, badge, content);
+      fragment.appendChild(line);
+    }
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'console-empty';
+      empty.textContent = state.consoleEntries.length ? '没有匹配的日志，试试其他级别或关键词'
+        : state.consoleCleared ? '日志已清空，新的输出会继续显示'
+          : state.consoleSessionId ? '正在等待运行日志…' : '启动模拟器后，日志会实时显示在这里';
+      fragment.appendChild(empty);
+    }
+    elements.consoleView.replaceChildren(fragment);
+    elements.consoleView.scrollTop = state.consoleFollow ? elements.consoleView.scrollHeight : scrollTop;
+    renderConsoleMeta();
+  }
+
+  /** 更新数量、筛选计数和跟随状态，不干扰正在阅读的日志内容。 */
+  function renderConsoleMeta() {
+    const count = state.consoleEntries.length;
+    const connected = state.host?.status === 'ready' && state.host?.runtime?.connected === true && Boolean(state.consoleSessionId);
+    elements.consoleMeta.textContent = (connected ? '实时' : count ? '已停止，记录已保留' : '等待运行') + (count ? ' · ' + count + ' 条' : '');
+    elements.consoleMeta.title = elements.consoleMeta.textContent;
+    const labels = { all: '全部', info: '日志与信息', warn: '警告', error: '错误', debug: '调试' };
+    for (const option of elements.consoleLevel.options) {
+      option.textContent = labels[option.value] + ' (' + state.consoleEntries.filter(function (entry) { return consoleMatches(entry, option.value, ''); }).length + ')';
+    }
+    elements.consoleFollowButton.setAttribute('aria-pressed', String(state.consoleFollow));
+  }
+
+  /** 清空当前视图并使在途旧响应失效，保留递增游标。 */
   function clearConsole() {
-    state.consoleHasEntries = false;
-    elements.consoleView.textContent = '日志已清空';
-    elements.consoleMeta.textContent = state.consoleSessionId ? '实时' : '等待运行';
+    state.consoleEntries = [];
+    state.consoleGeneration += 1;
+    state.consoleCleared = true;
+    renderConsole();
   }
 
   function setBusy(value) {
@@ -1470,32 +1597,70 @@
     return value && typeof value === 'object' && !Array.isArray(value);
   }
 
+  /** 分隔条统一支持鼠标拖动和方向键调整，始终为预览保留可用空间。 */
   function installSplitters() {
     document.querySelectorAll('.splitter').forEach(function (splitter) {
+      const kind = splitter.dataset.splitter;
+      const vertical = kind === 'console';
+      const property = vertical ? '--console-height' : kind === 'tree' ? '--tree-width' : '--inspector-width';
+      const pane = vertical ? splitter.nextElementSibling : splitter.previousElementSibling;
+      function limits() {
+        const minimum = vertical ? 132 : kind === 'tree' ? 176 : 300;
+        if (vertical) return { minimum: minimum, maximum: Math.max(minimum, splitter.parentElement.clientHeight - 220) };
+        const otherPane = document.querySelector(kind === 'tree' ? '.inspector-pane' : '.tree-pane');
+        const style = getComputedStyle(elements.workspace);
+        const maximum = elements.workspace.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - otherPane.getBoundingClientRect().width - 292;
+        return { minimum: minimum, maximum: Math.max(minimum, maximum) };
+      }
+      function updateRange(value) {
+        const bounds = limits();
+        splitter.setAttribute('aria-valuemin', String(bounds.minimum));
+        splitter.setAttribute('aria-valuemax', String(Math.round(bounds.maximum)));
+        splitter.setAttribute('aria-valuenow', String(Math.round(value)));
+        splitter.setAttribute('aria-valuetext', Math.round(value) + ' 像素');
+      }
+      function applySize(value) {
+        const bounds = limits();
+        const size = Math.min(bounds.maximum, Math.max(bounds.minimum, value));
+        document.documentElement.style.setProperty(property, size + 'px');
+        updateRange(size);
+      }
+      const initialRect = pane.getBoundingClientRect();
+      updateRange(vertical ? initialRect.height : initialRect.width);
+      window.addEventListener('resize', function () {
+        const rect = pane.getBoundingClientRect();
+        updateRange(vertical ? rect.height : rect.width);
+      });
+      splitter.addEventListener('keydown', function (event) {
+        const direction = vertical ? { ArrowUp: 1, ArrowDown: -1 } : { ArrowRight: 1, ArrowLeft: -1 };
+        if (!direction[event.key]) return;
+        event.preventDefault();
+        const rect = pane.getBoundingClientRect();
+        applySize((vertical ? rect.height : rect.width) + direction[event.key] * 16);
+        scheduleNativeEmbed(false);
+      });
       splitter.addEventListener('pointerdown', function (event) {
-        var kind = splitter.dataset.splitter;
-        var startX = event.clientX;
-        var property = kind === 'tree' ? '--tree-width' : '--inspector-width';
-        var minimum = kind === 'tree' ? 220 : 300;
-        var startWidth = splitter.previousElementSibling.getBoundingClientRect().width;
-        var otherPane = document.querySelector(kind === 'tree' ? '.inspector-pane' : '.tree-pane');
-        var workspaceStyle = getComputedStyle(elements.workspace);
-        var workspacePadding = parseFloat(workspaceStyle.paddingLeft) + parseFloat(workspaceStyle.paddingRight);
-        var maximum = Math.max(minimum, elements.workspace.clientWidth - workspacePadding - otherPane.getBoundingClientRect().width - 390);
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const start = vertical ? event.clientY : event.clientX;
+        const rect = pane.getBoundingClientRect();
+        const initialSize = vertical ? rect.height : rect.width;
         splitter.classList.add('dragging');
         splitter.setPointerCapture(event.pointerId);
         function move(moveEvent) {
-          var width = Math.min(maximum, Math.max(minimum, startWidth + moveEvent.clientX - startX));
-          document.documentElement.style.setProperty(property, width + 'px');
+          const delta = (vertical ? moveEvent.clientY : moveEvent.clientX) - start;
+          applySize(initialSize + (vertical ? -delta : delta));
         }
         function up() {
           splitter.classList.remove('dragging');
           splitter.removeEventListener('pointermove', move);
           splitter.removeEventListener('pointerup', up);
+          splitter.removeEventListener('pointercancel', up);
           scheduleNativeEmbed(false);
         }
         splitter.addEventListener('pointermove', move);
         splitter.addEventListener('pointerup', up);
+        splitter.addEventListener('pointercancel', up);
       });
     });
   }
@@ -1507,6 +1672,20 @@
   elements.resolutionSelect.addEventListener('change', scheduleSettingsApply);
   elements.orientationSelect.addEventListener('change', scheduleSettingsApply);
   elements.clearConsoleButton.addEventListener('click', clearConsole);
+  elements.consoleSearch.addEventListener('input', renderConsole);
+  elements.consoleLevel.addEventListener('change', renderConsole);
+  elements.consoleFollowButton.addEventListener('click', function () {
+    state.consoleFollow = !state.consoleFollow;
+    if (state.consoleFollow) elements.consoleView.scrollTop = elements.consoleView.scrollHeight;
+    renderConsoleMeta();
+  });
+  elements.consoleView.addEventListener('scroll', function () {
+    if (state.consoleFollow && elements.consoleView.scrollHeight - elements.consoleView.clientHeight - elements.consoleView.scrollTop > 24) {
+      state.consoleFollow = false;
+      renderConsoleMeta();
+    }
+  });
+  elements.toggleComponentsButton.addEventListener('click', toggleAllComponents);
   new ResizeObserver(function () { scheduleNativeEmbed(false); }).observe(elements.previewStage);
   window.addEventListener('pagehide', function () {
     navigator.sendBeacon('/api/native-window/detach');

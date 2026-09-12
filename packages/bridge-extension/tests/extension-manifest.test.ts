@@ -116,12 +116,12 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).toContain("state.invalid.set(key, errorMessage)");
     expect(workbenchApp).toContain("elements.revertButton.addEventListener('click', revertPending)");
     expect(workbenchApp).toContain("nativeWindow.state === 'idle'");
-    expect(workbenchApp).toContain('splitter.previousElementSibling.getBoundingClientRect().width');
+    expect(workbenchApp).toContain('pane.getBoundingClientRect()');
     expect(workbenchApp).not.toContain("parseFloat(styles.getPropertyValue(property)) / 100 * window.innerWidth");
     expect(workbenchStyle).toContain('.tree-children::before');
     expect(workbenchStyle).toContain('.tree-row.parent .tree-name');
-    expect(workbenchStyle).toContain('height: 100%; min-width: 0; background: var(--app-bg);');
-    expect(workbenchStyle).toContain('minmax(180px, var(--tree-width)) 5px minmax(260px, var(--inspector-width)) 5px minmax(320px, 1fr)');
+    expect(workbenchHtml).toContain('data-splitter="console"');
+    expect(workbenchHtml).toContain('aria-orientation="horizontal"');
     expect(workbenchStyle).not.toContain('.workspace { overflow-x: auto; }');
     expect(nativeHost).toContain('WaitForWindow(parentProcessId, parentTitles, 10000);');
     expect(nativeHost).toContain('return found != IntPtr.Zero ? found : fallback;');

@@ -10,7 +10,7 @@ import type {
   RuntimeDispatchInput,
   RuntimeDispatchReceipt
 } from '@cocos-ai/core';
-import type { PreviewSession, Resolution } from '@cocos-ai/protocol';
+import { ConsoleEntrySchema, type PreviewSession, type Resolution } from '@cocos-ai/protocol';
 
 const execFile = promisify(execFileCallback);
 const DEFAULT_INSPECTOR_PORT = 6_086;
@@ -524,6 +524,7 @@ class CreatorSimulatorRuntimeBrowser implements RuntimeBrowser {
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    await this.page?.close();
   }
 
   async getSessionMetadata(): Promise<Partial<PreviewSession>> {
@@ -684,6 +685,11 @@ function rewriteInspectorWebSocketUrl(value: string, localPort: number): string 
 
 class CreatorSimulatorRuntimePage implements RuntimeBrowserPage {
   private closed = false;
+  private consoleListener?: Parameters<RuntimeBrowserPage['onConsole']>[0];
+  private consoleTimer?: NodeJS.Timeout;
+  private consoleCursor = 0;
+  private consolePolling = false;
+  private consoleErrorReported = false;
 
   constructor(private readonly browser: CreatorSimulatorRuntimeBrowser) {}
 
@@ -695,11 +701,50 @@ class CreatorSimulatorRuntimePage implements RuntimeBrowserPage {
     return this.browser.evaluate(fn as never, arg) as Promise<R>;
   }
 
-  onConsole(): void {}
+  /** 订阅同一 Simulator 的日志，沿用已有 Preview Bridge 求值通道。 */
+  onConsole(listener: Parameters<RuntimeBrowserPage['onConsole']>[0]): void {
+    this.consoleListener = listener;
+    void this.pollConsole();
+  }
+
+  /** JSB 的 onError 已转发到 console.error，统一由日志通道交付，避免重复记录。 */
   onPageError(): void {}
+
+  /** 按游标拉取有界增量；断连或关闭后停止，短暂失败只提示一次。 */
+  private async pollConsole(): Promise<void> {
+    if (this.isClosed() || !this.consoleListener || this.consolePolling) return;
+    this.consolePolling = true;
+    try {
+      const result = await this.browser.evaluate(
+        `globalThis.__cocosAiSimulatorRuntimeAgent.readConsole(${this.consoleCursor})`
+      ) as { entries: unknown[]; nextSeq: number };
+      if (this.isClosed()) return;
+      if (!result || !Array.isArray(result.entries) || !Number.isSafeInteger(result.nextSeq) || result.nextSeq < this.consoleCursor) {
+        throw new Error('CREATOR_SIMULATOR_CONSOLE_RESULT_INVALID');
+      }
+      // 原生进程返回的数据仍需按协议检查，错误条目不能污染宿主缓冲。
+      const entries = result.entries.map((entry) => ConsoleEntrySchema.parse(entry));
+      for (const entry of entries) this.consoleListener(entry);
+      this.consoleCursor = result.nextSeq;
+      this.consoleErrorReported = false;
+    } catch (error) {
+      if (!this.isClosed() && !this.consoleErrorReported) {
+        this.consoleErrorReported = true;
+        this.consoleListener({ level: 'warn', text: `模拟器日志暂时无法读取：${error instanceof Error ? error.message : String(error)}` });
+      }
+    } finally {
+      this.consolePolling = false;
+      if (!this.isClosed()) {
+        this.consoleTimer = setTimeout(() => { void this.pollConsole(); }, 500);
+        this.consoleTimer.unref();
+      }
+    }
+  }
 
   async close(): Promise<void> {
     this.closed = true;
+    clearTimeout(this.consoleTimer);
+    this.consoleListener = undefined;
   }
 
   isClosed(): boolean {

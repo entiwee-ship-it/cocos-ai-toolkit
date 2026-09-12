@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 export interface RuntimeBrowserPage {
   goto(url: string): Promise<void>;
   evaluate<R>(fn: ((...args: never[]) => R | Promise<R>) | string, arg?: unknown): Promise<R>;
-  onConsole(listener: (entry: { level: string; text: string; stack?: string }) => void): void;
+  onConsole(listener: (entry: { level: string; text: string; stack?: string; timestamp?: string }) => void): void;
   onPageError(listener: (error: { message: string; stack?: string }) => void): void;
   close(): Promise<void>;
   isClosed(): boolean;
@@ -138,8 +138,8 @@ export class ConsoleBuffer {
     private readonly options: { capacity?: number; now?: () => Date } = {}
   ) {}
 
-  /** 追加一条 console 条目，返回分配的游标。 */
-  push(entry: { level: string; text: string; stack?: string }): number {
+  /** 追加日志并分配本地游标；原生代理提供发生时间，浏览器事件使用接收时间。 */
+  push(entry: { level: string; text: string; stack?: string; timestamp?: string }): number {
     const capacity = this.options.capacity ?? 1_000;
     const seq = this.nextSeqValue;
     this.nextSeqValue += 1;
@@ -148,7 +148,7 @@ export class ConsoleBuffer {
       level: normalizeConsoleLevel(entry.level),
       text: entry.text,
       ...(entry.stack ? { stack: entry.stack } : {}),
-      timestamp: (this.options.now?.() ?? new Date()).toISOString()
+      timestamp: entry.timestamp ?? (this.options.now?.() ?? new Date()).toISOString()
     });
     this.entries.push(normalized);
     if (this.entries.length > capacity) {
