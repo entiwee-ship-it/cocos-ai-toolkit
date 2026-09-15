@@ -145,6 +145,9 @@ describe('bridge extension manifest', () => {
     expect(nativeHost).toContain('d3dContext->CopySubresourceRegion');
     expect(nativeHost).toMatch(/SetWindowLongPtrChecked\(\s*simulatorWindow,\s*GWLP_HWNDPARENT,\s*reinterpret_cast<LONG_PTR>\(parentWindow\),\s*"SET_SIMULATOR_OWNER_FAILED"\s*\)/);
     expect(nativeHost).toContain('SetLayeredWindowAttributes(simulatorWindow, 0, 0, LWA_ALPHA)');
+    expect(nativeHost).toContain('GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 16');
+    expect(nativeHost).toContain('GetSystemMetrics(SM_YVIRTUALSCREEN) - height - 16');
+    expect(nativeHost).toContain('SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW');
     expect(nativeHost).toContain('FindWindowExW(simulatorWindow, nullptr, L"RICHEDIT50W"');
     expect(nativeHost).toContain('AttachThreadInput(currentThread, editThread, TRUE)');
     expect(nativeHost).toContain('SendNotifyMessageW(editBox, message, wParam, lParam)');

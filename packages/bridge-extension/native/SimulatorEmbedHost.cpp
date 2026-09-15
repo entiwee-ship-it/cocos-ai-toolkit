@@ -947,11 +947,11 @@ void HideSimulatorWindow()
     CheckWin32(GetWindowRect(simulatorWindow, &current), "GET_SIMULATOR_RECT_FAILED");
     int width = std::max(1L, current.right - current.left);
     int height = std::max(1L, current.bottom - current.top);
-    MONITORINFO monitor{sizeof(monitor)};
-    CheckWin32(GetMonitorInfoW(MonitorFromWindow(parentWindow, MONITOR_DEFAULTTONEAREST), &monitor),
-        "GET_WORKBENCH_MONITOR_FAILED");
-    CheckWin32(SetWindowPos(simulatorWindow, HWND_BOTTOM, monitor.rcMonitor.left, monitor.rcMonitor.top, width, height,
-        SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW), "PARK_SIMULATOR_WINDOW_FAILED");
+    // 移出整个虚拟桌面，避免系统捕获边框覆盖 Workbench，同时不改变 owned window 的 Z 顺序。
+    int x = GetSystemMetrics(SM_XVIRTUALSCREEN) - width - 16;
+    int y = GetSystemMetrics(SM_YVIRTUALSCREEN) - height - 16;
+    CheckWin32(SetWindowPos(simulatorWindow, nullptr, x, y, width, height,
+        SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW), "PARK_SIMULATOR_WINDOW_FAILED");
 }
 
 void RestoreSimulator()
