@@ -8,8 +8,10 @@ const source = readFileSync(new URL('../static/runtime-agent.js', import.meta.ur
 async function startAgent() {
   const original = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map((level) => [level, vi.fn()]));
   const runtimeConsole = { ...original };
+  const editBoxMethods = { hide: vi.fn(), show: vi.fn() };
   const cc: Record<string, any> = {
     settings: { querySettings: () => ({ baseUrl: 'http://127.0.0.1/runtime' }) },
+    EditBox: { prototype: { _hideLabels: editBoxMethods.hide, _showLabels: editBoxMethods.show } },
     DebugMode: { INFO: 1 },
     _resetDebugSetting: vi.fn(() => {
       cc.log = runtimeConsole.log;
@@ -30,10 +32,17 @@ async function startAgent() {
   };
   runInNewContext(source, context);
   await new Promise(setImmediate);
-  return { context, original, cc, agent: (context as any).__cocosAiSimulatorRuntimeAgent };
+  return { context, original, cc, editBoxMethods, agent: (context as any).__cocosAiSimulatorRuntimeAgent };
 }
 
 describe('Simulator 运行代理日志', () => {
+  it('捕获原生输入框时保留 Cocos 文本标签，并在停止后恢复', async () => {
+    const { agent, cc, editBoxMethods } = await startAgent();
+    expect(cc.EditBox.prototype._hideLabels).toBe(editBoxMethods.show);
+    agent.stop();
+    expect(cc.EditBox.prototype._hideLabels).toBe(editBoxMethods.hide);
+  });
+
   it('命令长轮询成功后立即续订，只在连接失败时退避', async () => {
     const { context } = await startAgent();
     expect(context.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 0);

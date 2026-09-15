@@ -14,6 +14,12 @@
     const consoleEntries = [];
     const consoleMethods = [];
     let consoleSequence = 0;
+    const editBoxPrototype = cc.EditBox && cc.EditBox.prototype;
+    const originalHideEditBoxLabels = editBoxPrototype && editBoxPrototype._hideLabels;
+    if (editBoxPrototype && typeof originalHideEditBoxLabels === 'function' && typeof editBoxPrototype._showLabels === 'function') {
+      // 原生 RichEdit 不进入窗口捕获画面；保留场景 Label 显示正在编辑的文本。
+      editBoxPrototype._hideLabels = editBoxPrototype._showLabels;
+    }
 
     function isSensitiveKey(key) {
       const normalized = String(key).replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -134,6 +140,9 @@
         stopped = true;
         for (const method of consoleMethods) {
           if (console[method.level] === method.wrapped) console[method.level] = method.original;
+        }
+        if (editBoxPrototype && editBoxPrototype._hideLabels === editBoxPrototype._showLabels && typeof originalHideEditBoxLabels === 'function') {
+          editBoxPrototype._hideLabels = originalHideEditBoxLabels;
         }
       }
     };
