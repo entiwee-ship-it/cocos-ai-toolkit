@@ -397,6 +397,9 @@ export class WorkbenchHost {
         }
       );
       this.state = 'ready';
+      setTimeout(() => {
+        void this.closeSimulatorDebugger().catch(() => undefined);
+      }, 500);
       return session;
     })().catch((error) => {
       this.state = 'error';
@@ -407,6 +410,15 @@ export class WorkbenchHost {
     });
     this.starting = starting;
     return starting;
+  }
+
+  private async closeSimulatorDebugger(): Promise<void> {
+    const client = this.requestCreator ? await createClient() : this.requireClient();
+    try {
+      await client.request('probe.simulatorDebuggerClose', { selector: this.selector, params: {} });
+    } finally {
+      if (client !== this.client) await client.close().catch(() => undefined);
+    }
   }
 
   private async readState(): Promise<Record<string, unknown>> {

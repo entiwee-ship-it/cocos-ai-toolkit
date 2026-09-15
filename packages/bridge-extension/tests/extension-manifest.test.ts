@@ -143,6 +143,7 @@ describe('bridge extension manifest', () => {
     expect(nativeHost).toContain('capture::GraphicsCaptureSession::IsSupported()');
     expect(nativeHost).toContain('CreateDirect3D11DeviceFromDXGIDevice');
     expect(nativeHost).toContain('d3dContext->CopySubresourceRegion');
+    expect(nativeHost).toMatch(/SetWindowLongPtrChecked\(\s*simulatorWindow,\s*GWLP_HWNDPARENT,\s*reinterpret_cast<LONG_PTR>\(parentWindow\),\s*"SET_SIMULATOR_OWNER_FAILED"\s*\)/);
     expect(nativeHost).toContain('SetLayeredWindowAttributes(simulatorWindow, 0, 0, LWA_ALPHA)');
     expect(nativeHost).toContain('FindWindowExW(simulatorWindow, nullptr, L"RICHEDIT50W"');
     expect(nativeHost).toContain('AttachThreadInput(currentThread, editThread, TRUE)');

@@ -938,6 +938,8 @@ void PrepareSimulatorForCapture()
 
 void HideSimulatorWindow()
 {
+    SetWindowLongPtrChecked(simulatorWindow, GWLP_HWNDPARENT,
+        reinterpret_cast<LONG_PTR>(parentWindow), "SET_SIMULATOR_OWNER_FAILED");
     LONG_PTR exStyle = originalSimulatorExStyle | static_cast<LONG_PTR>(WS_EX_LAYERED);
     SetWindowLongPtrChecked(simulatorWindow, GWL_EXSTYLE, exStyle, "SET_SIMULATOR_EXSTYLE_FAILED");
     CheckWin32(SetLayeredWindowAttributes(simulatorWindow, 0, 0, LWA_ALPHA), "HIDE_SIMULATOR_WINDOW_FAILED");

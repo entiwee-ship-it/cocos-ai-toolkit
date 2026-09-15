@@ -46,6 +46,7 @@ describe('WorkbenchHost', () => {
       if (method === 'probe.simulatorRuntimeStatus') {
         return { connected: runtimeConnected, runtimeId: runtimeConnected ? 'runtime-1' : null };
       }
+      if (method === 'probe.simulatorDebuggerClose') return { closed: true };
       if (method === 'server.runtimeComponent') {
         return { componentType: 'Boost', properties: { speed: 2 } };
       }
@@ -142,6 +143,10 @@ describe('WorkbenchHost', () => {
         selector: { projectId: 'project-1', editorInstanceId: 'editor-1' },
         params: { platform: 'creator-simulator' }
       });
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith('probe.simulatorDebuggerClose', {
+        selector: { projectId: 'project-1', editorInstanceId: 'editor-1' },
+        params: {}
+      }));
       await fetch(`${url}api/selection`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: 'session-1', path: '/main~0/root~0' }) });
       // 独立工具直接请求宿主，沿用页面会话及选择，无需再 launch 一个 RuntimeController。
       await expect(host.readSnapshot({ view: 'node' })).resolves.toMatchObject({ previewSessionId: 'session-1', path: '/main~0/root~0', origin: { sourceUrl: 'db://assets/ui.prefab' } });
