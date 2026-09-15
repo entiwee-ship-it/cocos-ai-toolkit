@@ -130,6 +130,7 @@ describe('bridge extension manifest', () => {
     expect(workbenchApp).toContain("addEventListener('wheel'");
     expect(workbenchApp).toContain("['keydown', 'keyup']");
     expect(workbenchApp).toContain('pumpNativeInput');
+    expect(workbenchApp).toMatch(/applySize\(initialSize \+ \(vertical \? -delta : delta\)\);\s*scheduleNativeEmbed\(false\);/);
     expect(workbenchApp).toContain('setInterval(refreshHierarchy, 500)');
     expect(workbenchApp).toContain('setInterval(refreshConsole, 1000)');
     expect(workbenchApp).toContain('pane.getBoundingClientRect()');

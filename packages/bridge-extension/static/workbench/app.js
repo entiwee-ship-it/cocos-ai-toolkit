@@ -1906,6 +1906,7 @@
         function move(moveEvent) {
           const delta = (vertical ? moveEvent.clientY : moveEvent.clientX) - start;
           applySize(initialSize + (vertical ? -delta : delta));
+          scheduleNativeEmbed(false);
         }
         function up() {
           splitter.classList.remove('dragging');
