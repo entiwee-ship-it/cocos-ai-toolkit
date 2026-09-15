@@ -42,6 +42,10 @@
         <div id="selectionHeader" class="selection-header empty">
           <strong id="selectedName">未选择节点</strong>
           <span id="selectionMeta" class="selection-meta">选择节点后显示可用属性</span>
+          <div id="nodeSource" class="node-source hidden">
+            <div class="source-heading"><span id="sourceKind"></span><button id="revealSourceButton" class="quiet-button" type="button" disabled>定位资源</button></div>
+            <code id="sourcePath"></code>
+          </div>
           <details class="selection-details">
             <summary>节点信息</summary>
             <dl><dt>UUID</dt><dd><code id="selectedUuid">—</code></dd><dt>路径</dt><dd><code id="selectedPath">—</code></dd></dl>
@@ -84,10 +88,15 @@
         </div>
         <div id="previewStage" class="preview-stage">
           <div id="nativeViewport" class="native-viewport" aria-label="Creator 原生模拟器交互区域">
+            <div id="gameSurface" class="game-surface" tabindex="0" aria-label="游戏画面，可使用鼠标和键盘操作">
+              <svg id="nodeOverlay" class="node-overlay hidden" aria-hidden="true" preserveAspectRatio="none"><polygon id="nodeOutline"></polygon><circle id="nodeAnchor" r="3"></circle></svg>
+              <div id="hoverCaption" class="hover-caption hidden"></div>
+            </div>
             <div id="previewPlaceholder" class="preview-placeholder">
               <span class="preview-icon" aria-hidden="true">▶</span>
               <strong>准备开始调试</strong>
               <span>启动模拟器，查看场景、属性与运行日志</span>
+              <button id="retryFrameButton" class="quiet-button hidden" type="button">重新连接画面</button>
             </div>
           </div>
         </div>
@@ -110,7 +119,7 @@
         </section>
         <footer class="preview-footer">
           <span id="embedMeta">等待嵌入</span>
-          <span>原生窗口随工作台自动同步</span>
+          <span id="highlightHint">悬停节点查看范围</span>
         </footer>
       </section>
     </main>

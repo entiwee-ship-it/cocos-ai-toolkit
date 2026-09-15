@@ -158,6 +158,21 @@ describe('RuntimeController', () => {
     expect(driver.launch).toHaveBeenCalledOnce();
   });
 
+  it('Workbench 完整输入复用公开运行时派发入口', async () => {
+    const driver = fakeDriver();
+    const controller = new RuntimeController({
+      captureRoot: await tempRoot(),
+      requestCreator: vi.fn(),
+      driver: driver as unknown as RuntimeDriver
+    });
+    await controller.request('server.runtimeDispatchInput', {
+      sessionId: 'session-1', inputType: 'pointerdown', x: 100, y: 50, button: 0, buttons: 1
+    });
+    expect(driver.dispatchInput).toHaveBeenCalledWith('session-1', {
+      inputType: 'pointerdown', x: 100, y: 50, button: 0, buttons: 1
+    });
+  });
+
   it('实时节点树只在 revision 或 sceneEpoch 变化时推送', async () => {
     const captureRoot = await tempRoot();
     const driver = fakeDriver();

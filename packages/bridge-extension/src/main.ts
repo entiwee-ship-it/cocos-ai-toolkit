@@ -22,7 +22,7 @@ import {
   reloadPreviewPages
 } from './preview';
 import { ProbeError } from './probe-errors';
-import { WorkbenchHost } from './workbench-host';
+import { WorkbenchHost, type WorkbenchCreatorRequest } from './workbench-host';
 
 interface ToolCatalogEntry {
   name: string;
@@ -92,6 +92,22 @@ const handlers: Readonly<Record<string, (payload: unknown) => Promise<unknown>>>
   },
   'probe.managerPanelOpen': () => openToolManager(),
   'probe.workbenchOpen': () => openWorkbench(),
+  'probe.workbenchRead': async (payload) => {
+    if (!workbenchHost) return { status: 'idle', session: null, selectedPath: null, url: null };
+    return workbenchHost.readSnapshot(readObject(payload));
+  },
+  'probe.assetReveal': async (payload) => {
+    const uuid = readObject(payload).uuid;
+    if (typeof uuid !== 'string' || !uuid) throw new ProbeError('UUID_REQUIRED');
+    const info = await Editor.Message.request('asset-db', 'query-asset-info', uuid);
+    if (!info || info.uuid !== uuid) throw new ProbeError('ASSET_NOT_FOUND');
+    await Editor.Panel.open('assets');
+    Editor.Selection.clear('asset');
+    Editor.Selection.select('asset', uuid);
+    const selected = Editor.Selection.getSelected('asset').includes(uuid);
+    if (!selected) throw new ProbeError('ASSET_SELECTION_VERIFY_FAILED');
+    return { selected, uuid, url: info.url };
+  },
   'probe.openAsset': async (payload) => {
     const uuid = readObject(payload).uuid;
     if (typeof uuid !== 'string' || !uuid) throw new ProbeError('UUID_REQUIRED');
@@ -394,7 +410,7 @@ async function ensureWorkbenchHost(): Promise<{ url: string }> {
     workbenchHost = new WorkbenchHost({
       projectId: descriptor.projectId,
       editorInstanceId: descriptor.editorInstanceId
-    });
+    }, undefined, undefined, requestWorkbenchCreator);
   }
   try {
     return await workbenchHost.start();
@@ -404,6 +420,16 @@ async function ensureWorkbenchHost(): Promise<{ url: string }> {
     throw error;
   }
 }
+
+const requestWorkbenchCreator: WorkbenchCreatorRequest = async (selector, method, payload) => {
+  const descriptor = buildDescriptor();
+  if (selector.projectId !== descriptor.projectId || selector.editorInstanceId !== descriptor.editorInstanceId) {
+    throw new ProbeError('EDITOR_INSTANCE_NOT_FOUND', { ...selector });
+  }
+  const handler = handlers[method];
+  if (!handler) throw new ProbeError('METHOD_NOT_ALLOWED', { method });
+  return handler(payload);
+};
 
 async function closeWorkbench(): Promise<{ detached: boolean }> {
   await workbenchHost?.stopSession(true);

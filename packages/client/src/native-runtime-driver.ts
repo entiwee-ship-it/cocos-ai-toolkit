@@ -1,22 +1,38 @@
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import { connect as connectHttp2, type ClientHttp2Session } from 'node:http2';
+import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type {
-  RuntimeBrowser,
-  RuntimeBrowserPage,
-  RuntimeDispatchInput,
-  RuntimeDispatchReceipt
+import {
+  dispatchRuntimeInput,
+  type RuntimeBrowser,
+  type RuntimeBrowserPage,
+  type RuntimeDispatchInput,
+  type RuntimeDispatchReceipt
 } from '@cocos-ai/core';
 import { ConsoleEntrySchema, type PreviewSession, type Resolution } from '@cocos-ai/protocol';
 
 const execFile = promisify(execFileCallback);
+const loadModule = createRequire(import.meta.url);
 const DEFAULT_INSPECTOR_PORT = 6_086;
 const DEFAULT_INSPECTOR_PORT_OFFSET = 37_000;
+const DEFAULT_CREATOR_SIMULATOR_INSPECTOR_PORT = 5_086;
 const DEFAULT_GRPC_PORT = 8_554;
 const DEFAULT_START_TIMEOUT_MS = 30_000;
+
+/** Windows Graphics Capture 输入；HWND 使用十进制，窗口移到屏幕外后仍持续采集。 */
+export function creatorSimulatorCaptureSource(handle: string, maxFramerate: number): string {
+  if (!/^[1-9]\d*$/.test(handle)) throw new Error('CREATOR_SIMULATOR_WINDOW_HANDLE_INVALID');
+  if (!Number.isInteger(maxFramerate) || maxFramerate <= 0) throw new Error('CREATOR_SIMULATOR_FRAMERATE_INVALID');
+  return `gfxcapture=hwnd=${handle}:capture_cursor=false:max_framerate=${maxFramerate}`;
+}
+
+/** gfxcapture 输出 GPU 帧；编码或缩放前必须下载到 BGRA 系统内存。 */
+export function creatorSimulatorVideoFilter(resolution?: Resolution): string {
+  return ['hwdownload', 'format=bgra', ...(resolution ? [`scale=${resolution.width}:${resolution.height}`] : [])].join(',');
+}
 
 export interface AndroidRuntimeOptions {
   packageName: string;
@@ -52,6 +68,18 @@ interface WebSocketLike {
 
 type WebSocketConstructor = new (url: string) => WebSocketLike;
 
+function resolveWebSocketConstructor(): WebSocketConstructor {
+  const globalConstructor = (globalThis as unknown as { WebSocket?: WebSocketConstructor }).WebSocket;
+  if (globalConstructor) return globalConstructor;
+  const module = loadModule('ws') as unknown;
+  if (typeof module === 'function') return module as WebSocketConstructor;
+  const exported = module && typeof module === 'object'
+    ? (module as { WebSocket?: unknown }).WebSocket
+    : undefined;
+  if (typeof exported === 'function') return exported as WebSocketConstructor;
+  throw new Error('NATIVE_WEBSOCKET_UNAVAILABLE');
+}
+
 interface CdpResponse {
   id?: number;
   result?: Record<string, unknown>;
@@ -74,8 +102,7 @@ class CdpConnection {
   }
 
   static async connect(url: string): Promise<CdpConnection> {
-    const WebSocketImpl = (globalThis as unknown as { WebSocket?: WebSocketConstructor }).WebSocket;
-    if (!WebSocketImpl) throw new Error('NATIVE_WEBSOCKET_UNAVAILABLE');
+    const WebSocketImpl = resolveWebSocketConstructor();
     const socket = new WebSocketImpl(url);
     await new Promise<void>((resolve, reject) => {
       socket.onopen = () => resolve();
@@ -170,7 +197,7 @@ class CdpConnection {
 }
 
 interface InspectorTarget {
-  webSocketDebuggerUrl: string;
+  webSocketDebuggerUrl?: string;
 }
 
 async function discoverInspectorTarget(port: number): Promise<InspectorTarget | undefined> {
@@ -184,9 +211,29 @@ async function discoverInspectorTarget(port: number): Promise<InspectorTarget | 
     const target = targets.find((item) => (
       item && typeof item === 'object' && typeof (item as Record<string, unknown>).webSocketDebuggerUrl === 'string'
     )) as Record<string, unknown> | undefined;
-    return target ? { webSocketDebuggerUrl: target.webSocketDebuggerUrl as string } : undefined;
+    if (target) return { webSocketDebuggerUrl: target.webSocketDebuggerUrl as string };
+    return targets.some((item) => item && typeof item === 'object') ? {} : undefined;
   } catch {
     return undefined;
+  }
+}
+
+async function connectCreatorSimulatorInspector(runtimeId: string): Promise<CreatorSimulatorInspector> {
+  const target = await discoverInspectorTarget(DEFAULT_CREATOR_SIMULATOR_INSPECTOR_PORT);
+  if (!target) throw new Error('CREATOR_SIMULATOR_INSPECTOR_TARGET_NOT_READY');
+  if (!target.webSocketDebuggerUrl) throw new Error('CREATOR_SIMULATOR_INSPECTOR_TARGET_ATTACHED');
+  const inspector = await CdpConnection.connect(
+    rewriteInspectorWebSocketUrl(target.webSocketDebuggerUrl, DEFAULT_CREATOR_SIMULATOR_INSPECTOR_PORT)
+  );
+  try {
+    const actualRuntimeId = await inspector.evaluate(
+      'globalThis.__cocosAiSimulatorRuntimeAgent && globalThis.__cocosAiSimulatorRuntimeAgent.runtimeId'
+    );
+    if (actualRuntimeId !== runtimeId) throw new Error('CREATOR_SIMULATOR_INSPECTOR_RUNTIME_MISMATCH');
+    return inspector;
+  } catch (error) {
+    inspector.close();
+    throw error;
   }
 }
 
@@ -319,6 +366,9 @@ class AndroidRuntimeBrowser implements RuntimeBrowser {
       await this.adb(['shell', 'input', 'keyevent', keyCode]);
       return { dispatched: true, inputType: 'key', key: input.key };
     }
+    if (input.inputType !== 'tap' && input.inputType !== 'click') {
+      throw new Error(`ANDROID_INPUT_UNAVAILABLE:${input.inputType}`);
+    }
     if (typeof input.x !== 'number' || typeof input.y !== 'number') {
       throw new Error('INPUT_COORDINATES_REQUIRED');
     }
@@ -379,7 +429,7 @@ class AndroidRuntimeBrowser implements RuntimeBrowser {
         try {
           await this.adb(['forward', `tcp:${localPort}`, `tcp:${remotePort}`]);
           const target = await discoverInspectorTarget(localPort);
-          if (!target) throw new Error('NATIVE_INSPECTOR_TARGET_NOT_READY');
+          if (!target?.webSocketDebuggerUrl) throw new Error('NATIVE_INSPECTOR_TARGET_NOT_READY');
           this.cdp = await CdpConnection.connect(rewriteInspectorWebSocketUrl(target.webSocketDebuggerUrl, localPort));
           this.inspectorDevicePort = remotePort;
           this.inspectorLocalPort = localPort;
@@ -494,26 +544,36 @@ export interface CreatorSimulatorRuntimeOptions {
   ffmpegPath?: string;
   screenSize?: Resolution;
   startTimeoutMs?: number;
+  /** 由目标 editorInstanceId 解析，保证多开 Creator 时窗口归属一致。 */
+  creatorProcessId?: number;
 }
 
 export interface CreatorSimulatorRuntimeBridge {
   status(): Promise<{ connected: boolean; runtimeId: string | null }>;
-  evaluate(runtimeId: string, expression: string): Promise<unknown>;
+  prepareInspector?(): Promise<void>;
 }
 
-/** Creator 第三项 Native Simulator：运行数据走预览代理，画面采集自同一原生窗口。 */
+interface CreatorSimulatorInspector {
+  evaluate(expression: string): Promise<unknown>;
+  close(): void;
+}
+
+/** Creator 第三项 Native Simulator：运行数据走 V8 Inspector，画面采集自同一原生窗口。 */
 class CreatorSimulatorRuntimeBrowser implements RuntimeBrowser {
   private page: CreatorSimulatorRuntimePage | undefined;
+  private starting: Promise<void> | undefined;
   private started = false;
   private closing = false;
   private lost = false;
   private screen: Resolution | undefined;
   private runtimeId = '';
-  private window: { pid: number; title: string } | undefined;
+  private inspector: CreatorSimulatorInspector | undefined;
+  private window: { pid: number; title: string; handle: string } | undefined;
 
   constructor(
     private readonly options: CreatorSimulatorRuntimeOptions,
-    private readonly bridge: CreatorSimulatorRuntimeBridge
+    private readonly bridge: CreatorSimulatorRuntimeBridge,
+    private readonly connectInspector: (runtimeId: string) => Promise<CreatorSimulatorInspector> = connectCreatorSimulatorInspector
   ) {}
 
   async newPage(): Promise<RuntimeBrowserPage> {
@@ -525,6 +585,8 @@ class CreatorSimulatorRuntimeBrowser implements RuntimeBrowser {
     if (this.closing) return;
     this.closing = true;
     await this.page?.close();
+    this.inspector?.close();
+    this.inspector = undefined;
   }
 
   async getSessionMetadata(): Promise<Partial<PreviewSession>> {
@@ -535,7 +597,7 @@ class CreatorSimulatorRuntimeBrowser implements RuntimeBrowser {
       pageSource: 'native-runtime',
       ...(window ? { appPid: window.pid } : {}),
       runtimeInstanceId: this.runtimeId,
-      runtimeTransport: 'creator-preview-plugin+loopback-http+window-capture'
+      runtimeTransport: 'creator-v8-inspector+window-capture'
     };
   }
 
@@ -544,8 +606,9 @@ class CreatorSimulatorRuntimeBrowser implements RuntimeBrowser {
     const expression = typeof fn === 'string'
       ? fn
       : `(${fn.toString()})(${arg === undefined ? '' : JSON.stringify(arg)})`;
+    if (!this.inspector) throw new Error('CREATOR_SIMULATOR_INSPECTOR_NOT_READY');
     try {
-      return await this.bridge.evaluate(this.runtimeId, expression);
+      return await this.inspector.evaluate(expression);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (reason.includes('NOT_CONNECTED') || reason.includes('REPLACED')) this.lost = true;
@@ -556,11 +619,12 @@ class CreatorSimulatorRuntimeBrowser implements RuntimeBrowser {
   async capture(): Promise<Buffer> {
     await this.start();
     const window = await this.resolveWindow();
+    const source = creatorSimulatorCaptureSource(window.handle, 1);
     const result = await execFile(this.options.ffmpegPath ?? 'ffmpeg', [
       '-y', '-loglevel', 'error',
-      '-f', 'gdigrab',
-      '-framerate', '1',
-      '-i', `title=${window.title}`,
+      '-f', 'lavfi',
+      '-i', source,
+      '-vf', creatorSimulatorVideoFilter(),
       '-frames:v', '1',
       '-f', 'image2pipe',
       '-vcodec', 'png',
@@ -584,18 +648,16 @@ class CreatorSimulatorRuntimeBrowser implements RuntimeBrowser {
     const window = await this.resolveWindow();
     const sourceSize = await this.runtimeResolution();
     const requested = options?.resolution;
-    const scale = requested ? ['-vf', `scale=${requested.width}:${requested.height}`] : [];
     const child = spawn(this.options.ffmpegPath ?? 'ffmpeg', [
       '-loglevel', 'error',
-      '-f', 'gdigrab',
-      '-framerate', '30',
-      '-i', `title=${window.title}`,
-      ...scale,
+      '-f', 'lavfi',
+      '-i', creatorSimulatorCaptureSource(window.handle, 60),
+      '-vf', creatorSimulatorVideoFilter(requested),
       '-f', 'image2pipe',
       '-vcodec', 'mjpeg',
       '-q:v', '5',
       'pipe:1'
-    ], { stdio: ['ignore', 'pipe', 'ignore'] });
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     let pending = Buffer.alloc(0);
     child.stdout.on('data', (chunk: Buffer) => {
       pending = Buffer.concat([pending, Buffer.from(chunk)]);
@@ -639,34 +701,69 @@ class CreatorSimulatorRuntimeBrowser implements RuntimeBrowser {
 
   async dispatch(input: RuntimeDispatchInput): Promise<RuntimeDispatchReceipt> {
     await this.start();
-    throw new Error(`CREATOR_SIMULATOR_INPUT_UNAVAILABLE:${input.inputType}`);
+    if (!this.inspector) throw new Error('CREATOR_SIMULATOR_INSPECTOR_NOT_READY');
+    const result = await this.inspector.evaluate(
+      `globalThis.__cocosAiDispatchRuntimeInput(${JSON.stringify(input)})`
+    ) as RuntimeDispatchReceipt;
+    if (result?.dispatched !== true) throw new Error('CREATOR_SIMULATOR_INPUT_RESULT_INVALID');
+    return result;
   }
 
   private async start(): Promise<void> {
     if (this.started) return;
+    const starting = this.starting ??= this.startOnce();
+    try {
+      await starting;
+    } finally {
+      if (this.starting === starting) this.starting = undefined;
+    }
+  }
+
+  private async startOnce(): Promise<void> {
     const deadline = Date.now() + (this.options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS);
+    let inspectorError = '';
+    let preparedRuntimeId = '';
     while (Date.now() < deadline) {
       const status = await this.bridge.status().catch(() => ({ connected: false, runtimeId: null }));
       if (status.connected && status.runtimeId) {
-        this.runtimeId = status.runtimeId;
-        this.started = true;
-        return;
+        let inspector: CreatorSimulatorInspector | undefined;
+        try {
+          inspector = await this.connectInspector(status.runtimeId);
+          await inspector.evaluate(`globalThis.__cocosAiDispatchRuntimeInput = (${dispatchRuntimeInput.toString()}); true`);
+          this.runtimeId = status.runtimeId;
+          this.inspector = inspector;
+          this.started = true;
+          return;
+        } catch (error) {
+          inspector?.close();
+          inspectorError = error instanceof Error ? error.message : String(error);
+          if (
+            inspectorError.includes('CREATOR_SIMULATOR_INSPECTOR_TARGET_ATTACHED')
+            && preparedRuntimeId !== status.runtimeId
+            && this.bridge.prepareInspector
+          ) {
+            await this.bridge.prepareInspector();
+            preparedRuntimeId = status.runtimeId;
+          }
+        }
       }
-      await delay(250);
+      await delay(status.connected ? 50 : 250);
     }
-    throw new Error('CREATOR_SIMULATOR_RUNTIME_NOT_READY');
+    throw new Error(inspectorError
+      ? `CREATOR_SIMULATOR_INSPECTOR_NOT_READY:${inspectorError}`
+      : 'CREATOR_SIMULATOR_RUNTIME_NOT_READY');
   }
 
   isClosed(): boolean {
     return this.closing || this.lost;
   }
 
-  private async resolveWindow(): Promise<{ pid: number; title: string }> {
+  private async resolveWindow(): Promise<{ pid: number; title: string; handle: string }> {
     if (this.options.windowTitle) {
-      const detected = await findCreatorSimulatorWindow().catch(() => undefined);
-      return { pid: detected?.pid ?? 1, title: this.options.windowTitle };
+      const detected = await findCreatorSimulatorWindow(this.options.creatorProcessId).catch(() => undefined);
+      return { pid: detected?.pid ?? 1, title: this.options.windowTitle, handle: detected?.handle ?? '' };
     }
-    this.window = await findCreatorSimulatorWindow() ?? this.window;
+    this.window = await findCreatorSimulatorWindow(this.options.creatorProcessId) ?? this.window;
     if (!this.window) throw new Error('CREATOR_SIMULATOR_WINDOW_NOT_FOUND');
     return this.window;
   }
@@ -735,7 +832,7 @@ class CreatorSimulatorRuntimePage implements RuntimeBrowserPage {
     } finally {
       this.consolePolling = false;
       if (!this.isClosed()) {
-        this.consoleTimer = setTimeout(() => { void this.pollConsole(); }, 500);
+        this.consoleTimer = setTimeout(() => { void this.pollConsole(); }, 1_000);
         this.consoleTimer.unref();
       }
     }
@@ -776,9 +873,10 @@ class CreatorSimulatorRuntimePage implements RuntimeBrowserPage {
 
 export function launchCreatorSimulatorRuntimeBrowser(
   options: CreatorSimulatorRuntimeOptions,
-  bridge: CreatorSimulatorRuntimeBridge
+  bridge: CreatorSimulatorRuntimeBridge,
+  connectInspector?: (runtimeId: string) => Promise<CreatorSimulatorInspector>
 ): Promise<RuntimeBrowser> {
-  return Promise.resolve(new CreatorSimulatorRuntimeBrowser(options, bridge));
+  return Promise.resolve(new CreatorSimulatorRuntimeBrowser(options, bridge, connectInspector));
 }
 
 export function isCreatorSimulatorOptions(value: unknown): value is CreatorSimulatorRuntimeOptions {
@@ -791,18 +889,23 @@ export function isCreatorSimulatorOptions(value: unknown): value is CreatorSimul
     && (input.screenSize === undefined || isResolution(input.screenSize));
 }
 
-async function findCreatorSimulatorWindow(): Promise<{ pid: number; title: string } | undefined> {
-  const command = "$value = Get-Process -Name 'SimulatorApp-Win32' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } | Sort-Object StartTime -Descending | Select-Object -First 1 Id, MainWindowTitle; if ($value) { $value | ConvertTo-Json -Compress }";
+async function findCreatorSimulatorWindow(creatorProcessId?: number): Promise<{ pid: number; title: string; handle: string } | undefined> {
+  if (creatorProcessId !== undefined && (!Number.isInteger(creatorProcessId) || creatorProcessId <= 0)) throw new Error('CREATOR_PROCESS_ID_INVALID');
+  const command = "$ids = @(Get-CimInstance Win32_Process -Filter \"Name = 'SimulatorApp-Win32.exe'\""
+    + (creatorProcessId ? ` | Where-Object { $_.ParentProcessId -eq ${creatorProcessId} }` : '')
+    + " | Select-Object -ExpandProperty ProcessId); $value = Get-Process -Id $ids -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } | Sort-Object StartTime -Descending | Select-Object -First 1 Id, MainWindowTitle, @{n='Handle';e={$_.MainWindowHandle.ToInt64().ToString()}}; if ($value) { $value | ConvertTo-Json -Compress }";
   const result = await execFile('powershell.exe', ['-NoProfile', '-Command', command], {
     timeout: 5_000,
+    windowsHide: true,
     encoding: 'utf8'
   }) as { stdout: string };
   const text = String(result.stdout).trim();
   if (!text) return undefined;
-  const value = JSON.parse(text) as { Id?: unknown; MainWindowTitle?: unknown };
+  const value = JSON.parse(text) as { Id?: unknown; MainWindowTitle?: unknown; Handle?: unknown };
   const pid = Number(value.Id);
   const title = typeof value.MainWindowTitle === 'string' ? value.MainWindowTitle : '';
-  return Number.isSafeInteger(pid) && pid > 0 && title ? { pid, title } : undefined;
+  const handle = typeof value.Handle === 'string' ? value.Handle : '';
+  return Number.isSafeInteger(pid) && pid > 0 && title && /^[1-9]\d*$/.test(handle) ? { pid, title, handle } : undefined;
 }
 
 function isResolution(value: unknown): value is Resolution {

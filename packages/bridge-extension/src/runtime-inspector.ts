@@ -190,4 +190,19 @@ function applyComponentVisibility(dump: Data): void {
     if (fields.fontFamily) fields.fontFamily.visible = fields.fontFamily.visible && fields.useSystemFont?.value === true;
     if (fields.font) fields.font.visible = fields.font.visible && fields.useSystemFont?.value !== true;
   }
+  if (dump.type === 'cc.ScrollView') {
+    if (fields.horizontalScrollBar) fields.horizontalScrollBar.visible = fields.horizontalScrollBar.visible && fields.horizontal?.value === true;
+    if (fields.verticalScrollBar) fields.verticalScrollBar.visible = fields.verticalScrollBar.visible && fields.vertical?.value === true;
+    if (fields.brake) fields.brake.visible = fields.brake.visible && fields.inertia?.value === true;
+    if (fields.bounceDuration) fields.bounceDuration.visible = fields.bounceDuration.visible && fields.elastic?.value === true;
+  }
+  if (['cc.PointLight', 'cc.SphereLight', 'cc.SpotLight', 'cc.RangedDirectionalLight'].includes(dump.type)) {
+    if (fields.luminousFlux) fields.luminousFlux.visible = fields.luminousFlux.visible && fields.term?.value === 0;
+    if (fields.luminance) fields.luminance.visible = fields.luminance.visible && fields.term?.value === 1;
+  }
+  if (dump.type === 'cc.VideoPlayer') {
+    if (fields.remoteURL) fields.remoteURL.visible = fields.remoteURL.visible && fields.resourceType?.value === 0;
+    if (fields.clip) fields.clip.visible = fields.clip.visible && fields.resourceType?.value !== 0;
+  }
+  if (dump.type === 'cc.Terrain' && fields.info) fields.info.visible = false;
 }

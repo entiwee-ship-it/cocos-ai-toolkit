@@ -29,7 +29,7 @@ Creator Bridge 使用 Windows Named Pipe 接受单次短连接，不需要启动
 `cocos_prefab_create` 复用直写通道执行 `prefab.create_from_node`，自动保存并重开验证重建后的 Prefab 实例；若重开后 dirty，会自动补一次保存并再次确认 clean，仍 dirty 才返回 `DOCUMENT_DIRTY_AFTER_PREFAB_CREATE`。`cocos_document_save` 保存后仍 dirty 会返回 `DOCUMENT_DIRTY_AFTER_SAVE`，都不能当成成功。
 10. 需要视觉或交互验证时运行 Preview 工具，最后用 `cocos_preview_stop` 清理会话。
 
-Creator 未打开或 Bridge 未启用时，MCP 仍会正常注册 44 个公开工具；`cocos_editor_list` 返回空 `editors` 和 `backend` IPC 状态。Creator Bridge 发布 Named Pipe 端点后，同一 MCP 任务会立即发现，不需要重新加载工具表。其它工具在 Creator 不可达时通过 `structuredContent.error.code=CREATOR_IPC_UNAVAILABLE` 返回可重试错误。
+Creator 未打开或 Bridge 未启用时，MCP 仍会正常注册 45 个公开工具；`cocos_editor_list` 返回空 `editors` 和 `backend` IPC 状态。Creator Bridge 发布 Named Pipe 端点后，同一 MCP 任务会立即发现，不需要重新加载工具表。其它工具在 Creator 不可达时通过 `structuredContent.error.code=CREATOR_IPC_UNAVAILABLE` 返回可重试错误。
 
 `cocos_nodes_read` 默认并发 4，仍保持输入顺序、单项错误隔离、32 项上限和输出预算。所有工具失败都同时提供人读文本与 `structuredContent.error`；程序应读取 `code/details/stage/nextAction/retryable`。
 
@@ -62,6 +62,20 @@ Prefab 实例化使用 `prefabUuid + parentUuid/parentPath`，成功后直接读
 `writeCapabilities` 是当前文档的写入适用性快照。Prefab 编辑模式下，嵌套实例根只开放 Creator 已确认有效的整实例与放置类操作，实例内容节点会关闭节点和组件写入，并通过 `nextAction` 指向 `cocos_prefab_open`。调用方应显式决定是否打开源 Prefab，Toolkit 不会自动切换文档；文档身份未知时仍由写后重读验证兜底。
 
 ## 4. Preview 与运行态验证
+
+用户正在操作运行工作台时，优先用 `cocos_workbench_read` 读取同一会话，无需先启动 Preview：
+
+| view | 返回内容 |
+| --- | --- |
+| `overview` | 当前会话、runtimeId、选择、窗口与帧状态 |
+| `hierarchy` | 有深度/节点数上限的实时树及来源类别 |
+| `node` | 当前或指定节点的组件摘要、源 Prefab 路径、真实相机投影和层级 |
+| `component` | 指定组件与工作台一致的原生 Inspector 属性 |
+| `console` | 按 sinceSeq/level 读取日志 |
+
+提供 `projectId`，同项目多实例时必须给 `editorInstanceId`；可传 overview 返回的 `sessionId` 作为会话检查。`node` / `component` 的 path 缺省使用当前选择。`cocos_preview_sessions` 只列当前 MCP 客户端拥有的 Preview，空列表不能证明用户工作台没有运行。
+
+工作台的原生画面按精确 HWND 通过已有 FFmpeg 帧流显示，鼠标/键盘输入通过同一 Simulator 的 5086 V8 Inspector 进入 Cocos 输入缓存。悬停遮罩使用节点自身四角及实际渲染相机；预制体来源来自引擎 PrefabInfo，定位操作只选择资源，不切换编辑文档。
 
 常用顺序：
 

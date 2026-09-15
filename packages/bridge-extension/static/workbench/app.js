@@ -14,6 +14,18 @@
     draftSessionId: '',
     nativeTimer: 0,
     nativeBusy: false,
+    nativeSessionId: '',
+    nativeFailedSessionId: '',
+    nativePending: false,
+    nativeInputQueue: [],
+    nativePointerMove: null,
+    nativeInputBusy: false,
+    nativeHighlightKey: '',
+    hoveredPath: '',
+    hoverGeneration: 0,
+    hoverTimer: 0,
+    nodeDetails: null,
+    selectionGeneration: 0,
     polling: false,
     toastTimer: 0,
     lastToast: '',
@@ -37,7 +49,9 @@
     'treeSearch', 'treeView', 'treeMeta', 'selectionHeader', 'selectedName', 'selectedUuid', 'selectedPath', 'selectionMeta',
     'propertyView', 'applyButton', 'revertButton', 'applyStatus', 'liveState', 'processName', 'previewStage', 'previewPlaceholder', 'embedMeta',
     'runtimeId', 'sceneEpoch', 'lastUpdated', 'workspace', 'toast', 'resolutionSelect', 'orientationSelect',
-    'consoleMeta', 'consoleView', 'clearConsoleButton', 'consoleSearch', 'consoleLevel', 'consoleFollowButton', 'toggleComponentsButton'
+    'consoleMeta', 'consoleView', 'clearConsoleButton', 'consoleSearch', 'consoleLevel', 'consoleFollowButton', 'toggleComponentsButton',
+    'gameSurface', 'nodeOverlay', 'nodeOutline', 'nodeAnchor', 'hoverCaption', 'highlightHint',
+    'nodeSource', 'sourceKind', 'sourcePath', 'revealSourceButton', 'retryFrameButton'
   ].map(function (id) { return [id, document.getElementById(id)]; }));
 
   async function api(path, options) {
@@ -56,6 +70,11 @@
       if (state.host?.userStopped === true) state.userStopped = true;
       else if (nextSessionId) state.userStopped = false;
       if (previousSessionId !== nextSessionId) {
+        stopVideo();
+        clearNodeHighlight();
+        state.nativeFailedSessionId = '';
+        state.selectionGeneration += 1;
+        state.nodeDetails = null;
         resetConsole(nextSessionId);
         if (!nextSessionId) { state.hierarchy = null; renderTree(); }
         void refreshSettings();
@@ -108,6 +127,8 @@
     setBusy(true);
     try {
       await refreshConsole();
+      stopVideo();
+      clearNodeHighlight();
       state.host = await api('/api/stop', { method: 'POST' });
       resetConsole('');
       state.hierarchy = null;
@@ -142,8 +163,8 @@
         if (selectionStillExists && state.selectedNode && !hasPendingChanges()) {
           void selectNode(state.selectedNode, { preserveChanges: true });
         }
+        renderState();
       }
-      renderState();
     } catch (error) {
       if (!String(error.message).includes('NOT_READY')) showToast(error.message || String(error), true);
     } finally {
@@ -168,7 +189,8 @@
     var nativeWindow = host.nativeWindow || {};
     var runtimeConnected = runtime.connected === true;
     var connected = runtimeConnected && host.status === 'ready';
-    var embedded = nativeWindow.state === 'ready';
+    var videoSize = currentFrameSize();
+    var embedded = nativeWindow.state === 'ready' && state.nativeSessionId === session.sessionId;
     var running = Boolean(session.sessionId)
       || host.status === 'ready'
       || (runtimeConnected && host.userStopped !== true);
@@ -181,20 +203,21 @@
     );
     elements.liveState.className = 'live-state ' + (embedded ? 'connected' : '');
     elements.liveState.innerHTML = '<span class="live-dot"></span>' + (
-      embedded ? '已嵌入' : connected ? '准备嵌入' : '等待连接'
+      embedded ? '实时画面' : connected ? '等待画面' : '等待连接'
     );
     elements.runtimeId.textContent = runtime.runtimeId || session.runtimeInstanceId || '—';
     elements.sceneEpoch.textContent = host.hierarchy?.sceneEpoch ?? state.hierarchy?.sceneEpoch ?? '—';
     elements.lastUpdated.textContent = formatTime(host.lastUpdateAt);
     elements.sceneName.textContent = state.hierarchy?.root?.name || '—';
-    var size = session.actualResolution || currentDeviceSize();
+    var size = videoSize || session.actualResolution || currentDeviceSize();
     elements.resolution.textContent = size ? size.width + ' × ' + size.height : '—';
     elements.processName.textContent = 'SimulatorApp-Win32.exe · PID '
       + (session.appPid || nativeWindow.childProcessId || '—');
     elements.embedMeta.textContent = embedded
-      ? (size ? size.width + ' × ' + size.height + ' · 可直接操作' : '原生窗口已嵌入')
-      : nativeWindow.state === 'error' ? '嵌入失败' : '等待嵌入';
+      ? (size ? size.width + ' × ' + size.height + ' · 原生运行' : '原生运行')
+      : state.nativeFailedSessionId ? '画面连接失败' : '等待画面';
     elements.previewPlaceholder.classList.toggle('hidden', embedded);
+    elements.retryFrameButton.classList.toggle('hidden', !connected || !state.nativeFailedSessionId);
     elements.treeMeta.textContent = (state.hierarchy?.nodeCount || 0) + ' 个节点' + (connected ? ' · 实时同步' : '');
     elements.treeMeta.title = 'revision ' + (state.hierarchy?.revision ?? '—');
     elements.startButton.disabled = busy;
@@ -209,8 +232,9 @@
     updateComponentToggle();
     if (host.error && host.error !== state.lastToast) showToast(host.error, true);
     if (nativeWindow.error && nativeWindow.error !== state.lastToast) showToast(nativeWindow.error, true);
-    if (connected && session.sessionId && nativeWindow.state === 'idle') scheduleNativeEmbed(false);
+    if (connected && session.sessionId && !embedded && !state.nativeFailedSessionId) scheduleNativeEmbed(false);
     renderApplyState();
+    layoutGameSurface();
   }
 
   function renderSettings() {
@@ -293,17 +317,20 @@
     var row = document.createElement('div');
     row.className = 'tree-row'
       + (children.length ? ' parent' : '')
-      + (node.active === false ? ' inactive' : '')
+      + (node.active === false || node.activeInHierarchy === false ? ' inactive' : '')
       + (state.selectedPath === node.path ? ' selected' : '');
     row.setAttribute('role', 'treeitem');
     row.setAttribute('aria-level', String(depth + 1));
     row.setAttribute('aria-selected', String(state.selectedPath === node.path));
+    row.tabIndex = state.selectedPath === node.path ? 0 : -1;
+    row.dataset.path = node.path;
+    row.style.setProperty('--node-indent', (Math.min(depth, 8) * 10 + 4) + 'px');
     if (children.length) row.setAttribute('aria-expanded', String(expanded));
     row.title = [
       node.path || '',
       node.uuid ? 'UUID: ' + node.uuid : '',
       (node.components || []).length + ' 个组件',
-      node.active === false ? '未激活' : '激活'
+      node.active === false || node.activeInHierarchy === false ? '未激活' : '激活'
     ].filter(Boolean).join('\n');
 
     var toggle = document.createElement('button');
@@ -318,7 +345,9 @@
       renderTree();
     });
     var icon = document.createElement('span');
-    icon.className = 'tree-node-icon ' + (depth === 0 ? 'scene' : 'node');
+    icon.className = 'tree-node-icon ' + (depth === 0 ? 'scene' : node.origin?.kind === 'prefab' ? 'prefab' : node.dynamic ? 'runtime' : 'node');
+    icon.title = node.origin?.kind === 'prefab' ? '预制体实例' : node.dynamic ? '运行时创建' : '场景节点';
+    if (node.origin?.kind === 'prefab') icon.innerHTML = '<svg viewBox="0 0 16 16"><path d="M8 1.5 14 5v6L8 14.5 2 11V5Z M2 5l6 3.5L14 5 M8 8.5v6"/></svg>';
     icon.setAttribute('aria-hidden', 'true');
     var name = document.createElement('span');
     name.className = 'tree-name';
@@ -328,16 +357,22 @@
     count.textContent = (node.components || []).length ? String(node.components.length) : '';
     count.title = (node.components || []).length + ' 个组件';
     var active = document.createElement('span');
-    active.className = 'tree-active' + (node.active === false ? ' inactive' : '');
-    active.title = node.active === false ? '未激活' : '激活';
+    active.className = 'tree-active' + (node.active === false || node.activeInHierarchy === false ? ' inactive' : '');
+    active.title = node.active === false || node.activeInHierarchy === false ? '未激活' : '激活';
     active.setAttribute('role', 'img');
     active.setAttribute('aria-label', active.title);
     row.append(toggle, icon, name, count, active);
     row.addEventListener('click', function () { void selectNode(node); });
+    row.addEventListener('pointerenter', function () { showNodeHighlight(node.path); });
+    row.addEventListener('focus', function () { showNodeHighlight(node.path); });
+    row.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void selectNode(node); }
+    });
     branch.appendChild(row);
     if (expanded && children.length) {
       var group = document.createElement('div');
       group.className = 'tree-children';
+      group.style.setProperty('--branch-indent', (Math.min(depth, 8) * 10 + 4) + 'px');
       group.setAttribute('role', 'group');
       children.forEach(function (child) { appendNode(child, depth + 1, group, query); });
       branch.appendChild(group);
@@ -382,6 +417,17 @@
     }
     state.selectedNode = node;
     state.selectedPath = node.path || '';
+    const selectionSessionId = currentSessionId();
+    const generation = ++state.selectionGeneration;
+    if (!sameNode) state.nodeDetails = null;
+    void api('/api/selection', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: selectionSessionId, path: state.selectedPath }) }).catch(function (error) { showToast(error.message, true); });
+    void api('/api/node?sessionId=' + encodeURIComponent(selectionSessionId) + '&path=' + encodeURIComponent(node.path)).then(function (details) {
+      if (generation !== state.selectionGeneration || currentSessionId() !== selectionSessionId) return;
+      state.nodeDetails = details;
+      renderNodeSource();
+    }).catch(function (error) {
+      if (generation === state.selectionGeneration) { elements.sourceKind.textContent = '来源读取失败'; elements.sourcePath.textContent = error.message; }
+    });
     if (!preserveChanges) {
       state.pending.clear();
       state.invalid.clear();
@@ -400,7 +446,7 @@
         return { componentType: component.type, properties: {}, error: error.message || String(error) };
       }
     }));
-    if (state.selectedPath !== node.path) return;
+    if (state.selectedPath !== node.path || generation !== state.selectionGeneration || currentSessionId() !== selectionSessionId) return;
     var previousExpanded = preserveChanges ? new Set(state.componentExpanded) : null;
     state.components = results;
     state.componentExpanded.clear();
@@ -421,6 +467,96 @@
     if (!node) elements.selectionMeta.textContent = hasPendingChanges()
       ? '未应用修改已保留，可还原但不能应用'
       : '选择节点后显示可用属性';
+    renderNodeSource();
+  }
+
+  /** 显示真实 PrefabInfo 来源；运行时节点不伪造资源路径或脚本归因。 */
+  function renderNodeSource() {
+    const origin = state.nodeDetails?.origin;
+    elements.nodeSource.classList.toggle('hidden', !state.selectedNode);
+    elements.sourceKind.textContent = !origin ? '读取节点来源…' : origin.kind === 'prefab' ? '预制体实例' : origin.kind === 'scene' ? '场景节点' : '运行时创建';
+    elements.sourcePath.textContent = origin?.sourceUrl || (origin?.kind === 'runtime' ? '引擎未记录具体创建者' : origin?.available === false ? '源资源当前不可用' : '');
+    elements.sourcePath.title = elements.sourcePath.textContent;
+    elements.revealSourceButton.disabled = !origin?.available || hasStalePendingChanges();
+  }
+
+  /** 根据当前节点回读源 UUID，再在 Creator 资源面板选择，不切换编辑文档。 */
+  async function revealNodeSource() {
+    if (!state.nodeDetails?.origin?.available) return;
+    try {
+      const result = await api('/api/reveal-source', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: currentSessionId(), path: state.selectedPath, assetUuid: state.nodeDetails.origin.assetUuid }) });
+      if (result.selected) showToast('已在 Creator 资源面板中定位');
+    } catch (error) { showToast(error.message, true); }
+  }
+
+  /** 清除悬停及迟到响应，遮罩不修改游戏节点。 */
+  function clearNodeHighlight() {
+    state.hoveredPath = '';
+    state.hoverGeneration += 1;
+    clearTimeout(state.hoverTimer);
+    elements.nodeOverlay.classList.add('hidden');
+    elements.hoverCaption.classList.add('hidden');
+    elements.highlightHint.textContent = '悬停节点查看范围';
+    syncNativeHighlight(null);
+  }
+
+  /** DWM overlay 覆盖页面 SVG，节点范围由同一原生窗口绘制。 */
+  function syncNativeHighlight(bounds) {
+    const sessionId = currentSessionId();
+    if (!sessionId || state.host?.nativeWindow?.state !== 'ready') {
+      state.nativeHighlightKey = '';
+      return;
+    }
+    const payload = bounds
+      ? { sessionId, viewport: bounds.viewport, points: bounds.points, anchor: bounds.anchor }
+      : { sessionId, clear: true };
+    const key = JSON.stringify(payload);
+    if (key === state.nativeHighlightKey) return;
+    state.nativeHighlightKey = key;
+    void api('/api/native-highlight', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: key
+    }).catch(function () {
+      if (state.nativeHighlightKey === key) state.nativeHighlightKey = '';
+    });
+  }
+
+  /**
+   * 悬停时读取同一会话的投影并持续更新，离开后立即清除。
+   * @param path 当前树行对应的运行时绝对路径。
+   */
+  function showNodeHighlight(path) {
+    if (state.hoveredPath === path) return;
+    clearNodeHighlight();
+    state.hoveredPath = path;
+    const generation = state.hoverGeneration;
+    const sessionId = currentSessionId();
+    async function refresh() {
+      if (generation !== state.hoverGeneration || !sessionId || sessionId !== currentSessionId()) return;
+      try {
+        const node = await api('/api/node?includeSource=false&sessionId=' + encodeURIComponent(sessionId) + '&path=' + encodeURIComponent(path));
+        if (generation !== state.hoverGeneration || sessionId !== currentSessionId()) return;
+        const bounds = node.bounds;
+        const visible = bounds?.hasBounds && bounds.points?.length === 4 && node.activeInHierarchy;
+        elements.nodeOverlay.classList.toggle('hidden', !visible);
+        elements.hoverCaption.classList.toggle('hidden', !visible);
+        if (visible) {
+          elements.nodeOverlay.setAttribute('viewBox', '0 0 ' + bounds.viewport.width + ' ' + bounds.viewport.height);
+          elements.nodeOutline.setAttribute('points', bounds.points.map(function (point) { return point.x + ',' + point.y; }).join(' '));
+          elements.nodeAnchor.setAttribute('cx', bounds.anchor.x);
+          elements.nodeAnchor.setAttribute('cy', bounds.anchor.y);
+          const size = bounds.size || bounds.rect;
+          elements.hoverCaption.textContent = node.name + ' · ' + Math.round(size.width) + ' × ' + Math.round(size.height) + ' · ' + node.layerName + ' · 层级 ' + node.depth + ' / 顺序 ' + node.siblingIndex;
+          elements.highlightHint.textContent = '半透明区域为节点自身范围';
+        } else elements.highlightHint.textContent = node.activeInHierarchy ? '该节点没有可投影的 UI 范围' : '该节点当前未激活';
+        syncNativeHighlight(visible ? bounds : null);
+      } catch (error) {
+        if (generation === state.hoverGeneration) { clearNodeHighlight(); elements.highlightHint.textContent = '节点已变化，请重新悬停'; }
+      }
+      if (generation === state.hoverGeneration) state.hoverTimer = setTimeout(refresh, 120);
+    }
+    state.hoverTimer = setTimeout(refresh, 60);
   }
 
   /** 按原生属性描述更新组件区域，保留草稿及展开状态。 */
@@ -1377,6 +1513,10 @@
     return state.host?.session?.sessionId || '';
   }
 
+  function currentFrameSize() {
+    return state.host?.session?.actualResolution || currentDeviceSize() || null;
+  }
+
   function hasStalePendingChanges() {
     var sessionId = currentSessionId();
     return Boolean(state.draftSessionId && state.draftSessionId !== sessionId)
@@ -1385,37 +1525,153 @@
     });
   }
 
+  function nativeInputPoint(event) {
+    var rect = elements.gameSurface.getBoundingClientRect();
+    var size = currentFrameSize();
+    if (!size || rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      x: Math.max(0, Math.min(size.width - 1, Math.round((event.clientX - rect.left) * size.width / rect.width))),
+      y: Math.max(0, Math.min(size.height - 1, Math.round((event.clientY - rect.top) * size.height / rect.height)))
+    };
+  }
+
+  function nativePointerButton(event) {
+    if (event.button >= 0 && event.button <= 2) return event.button;
+    return event.buttons & 1 ? 0 : event.buttons & 4 ? 1 : event.buttons & 2 ? 2 : 0;
+  }
+
+  function queueNativeInput(input) {
+    if (!state.nativeSessionId || state.nativeSessionId !== currentSessionId()) return;
+    if (input.type === 'pointermove') state.nativePointerMove = input;
+    else {
+      if (state.nativePointerMove) state.nativeInputQueue.push(state.nativePointerMove);
+      state.nativePointerMove = null;
+      state.nativeInputQueue.push(input);
+    }
+    void pumpNativeInput();
+  }
+
+  async function pumpNativeInput() {
+    if (state.nativeInputBusy) return;
+    state.nativeInputBusy = true;
+    try {
+      while (state.nativeInputQueue.length || state.nativePointerMove) {
+        var input = state.nativeInputQueue.shift() || state.nativePointerMove;
+        if (!input) break;
+        if (input === state.nativePointerMove) state.nativePointerMove = null;
+        var sessionId = currentSessionId();
+        if (!sessionId || state.nativeSessionId !== sessionId) continue;
+        await api('/api/native-input', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(Object.assign({ sessionId: sessionId }, input))
+        });
+      }
+    } catch (error) {
+      showToast('游戏输入未送达：' + (error.message || String(error)), true);
+    } finally {
+      state.nativeInputBusy = false;
+      if (state.nativeInputQueue.length || state.nativePointerMove) void pumpNativeInput();
+    }
+  }
+
+  function installNativeInput() {
+    elements.gameSurface.addEventListener('pointerdown', function (event) {
+      var point = nativeInputPoint(event);
+      if (!point) return;
+      event.preventDefault();
+      elements.gameSurface.focus({ preventScroll: true });
+      elements.gameSurface.setPointerCapture(event.pointerId);
+      queueNativeInput(Object.assign({ type: 'pointerdown', button: nativePointerButton(event), buttons: event.buttons }, point));
+    });
+    elements.gameSurface.addEventListener('pointermove', function (event) {
+      var point = nativeInputPoint(event);
+      if (point) queueNativeInput(Object.assign({ type: 'pointermove', button: nativePointerButton(event), buttons: event.buttons }, point));
+    });
+    ['pointerup', 'pointercancel'].forEach(function (type) {
+      elements.gameSurface.addEventListener(type, function (event) {
+        var point = nativeInputPoint(event);
+        if (!point) return;
+        queueNativeInput(Object.assign({ type: 'pointerup', button: nativePointerButton(event), buttons: 0 }, point));
+        if (elements.gameSurface.hasPointerCapture(event.pointerId)) elements.gameSurface.releasePointerCapture(event.pointerId);
+      });
+    });
+    elements.gameSurface.addEventListener('wheel', function (event) {
+      var point = nativeInputPoint(event);
+      if (!point) return;
+      event.preventDefault();
+      var scale = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? elements.gameSurface.clientHeight : 1;
+      queueNativeInput(Object.assign({ type: 'wheel', buttons: event.buttons || 0,
+        delta: Math.max(-10000, Math.min(10000, Math.round(-event.deltaY * scale))) }, point));
+    }, { passive: false });
+    ['keydown', 'keyup'].forEach(function (type) {
+      elements.gameSurface.addEventListener(type, function (event) {
+        if (event.key !== 'Tab') event.preventDefault();
+        queueNativeInput({ type: type, key: event.key, code: event.code || event.key,
+          keyCode: event.keyCode || event.which || 0 });
+      });
+    });
+    elements.gameSurface.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+  }
+
   function scheduleNativeEmbed(showErrors) {
+    layoutGameSurface();
     clearTimeout(state.nativeTimer);
-    state.nativeTimer = setTimeout(function () { void embedNativeWindow(showErrors); }, showErrors ? 0 : 80);
+    state.nativeTimer = setTimeout(function () { void embedNativeWindow(showErrors); }, showErrors ? 0 : 16);
   }
 
   async function embedNativeWindow(showErrors) {
     var sessionId = state.host?.session?.sessionId || '';
-    if (!sessionId || state.host?.status !== 'ready' || state.nativeBusy) return;
+    if (!sessionId || state.host?.status !== 'ready' || state.nativeFailedSessionId === sessionId) return;
+    if (state.nativeBusy) { state.nativePending = true; return; }
     state.nativeBusy = true;
     try {
       var result = await api('/api/native-window', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(Object.assign({ parentTitle: document.title }, nativeWindowBounds()))
+        body: JSON.stringify(Object.assign({ sessionId, parentTitle: document.title }, nativeWindowBounds()))
       });
       state.host.nativeWindow = result;
+      if (currentSessionId() !== sessionId) return;
+      state.nativeSessionId = sessionId;
+      layoutGameSurface();
       renderState();
     } catch (error) {
+      if (currentSessionId() !== sessionId) return;
+      stopVideo();
+      state.nativeFailedSessionId = sessionId;
       state.host.nativeWindow = { state: 'error', error: error.message || String(error) };
       elements.previewPlaceholder.classList.remove('hidden');
-      elements.embedMeta.textContent = '嵌入失败';
-      if (showErrors) showToast(error.message || String(error), true);
+      elements.embedMeta.textContent = '画面连接失败';
+      showToast('原生画面连接失败：' + (error.message || String(error)), true);
     } finally {
       state.nativeBusy = false;
+      if (state.nativePending) {
+        state.nativePending = false;
+        scheduleNativeEmbed(false);
+      }
       renderState();
     }
   }
 
+  /** 清除页面中的原生呈现标记；Simulator 与 overlay 生命周期由宿主管理。 */
+  function stopVideo() {
+    state.nativeSessionId = '';
+    state.nativeHighlightKey = '';
+    state.nativeInputQueue.length = 0;
+    state.nativePointerMove = null;
+  }
+
+  /** 画面与 SVG 遮罩共用等比显示区域，面板缩放不改变游戏设备分辨率。 */
+  function layoutGameSurface() {
+    const bounds = nativeWindowBounds();
+    elements.gameSurface.style.width = bounds.width + 'px';
+    elements.gameSurface.style.height = bounds.height + 'px';
+  }
+
   function nativeWindowBounds() {
     var rect = elements.previewStage.getBoundingClientRect();
-    var size = state.host?.session?.actualResolution || currentDeviceSize();
+    var size = currentFrameSize() || state.host?.session?.actualResolution || currentDeviceSize();
     var x = rect.left + 1;
     var y = rect.top + 1;
     var width = Math.max(32, rect.width - 2);
@@ -1686,10 +1942,15 @@
     }
   });
   elements.toggleComponentsButton.addEventListener('click', toggleAllComponents);
+  elements.revealSourceButton.addEventListener('click', revealNodeSource);
+  elements.treeView.addEventListener('pointerleave', clearNodeHighlight);
+  elements.treeView.addEventListener('focusout', function (event) { if (!elements.treeView.contains(event.relatedTarget)) clearNodeHighlight(); });
+  elements.retryFrameButton.addEventListener('click', function () { state.nativeFailedSessionId = ''; scheduleNativeEmbed(true); });
   new ResizeObserver(function () { scheduleNativeEmbed(false); }).observe(elements.previewStage);
   window.addEventListener('pagehide', function () {
-    navigator.sendBeacon('/api/native-window/detach');
+    if (state.nativeSessionId) stopVideo();
   });
+  installNativeInput();
   installSplitters();
   void refreshSettings();
   void refreshState().then(function () {
@@ -1700,6 +1961,6 @@
     }
   });
   setInterval(refreshState, 1000);
-  setInterval(refreshHierarchy, 200);
-  setInterval(refreshConsole, 500);
+  setInterval(refreshHierarchy, 500);
+  setInterval(refreshConsole, 1000);
 })();

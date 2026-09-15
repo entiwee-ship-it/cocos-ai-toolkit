@@ -32,7 +32,8 @@ function readPixel(buffer: Buffer, x: number, y: number): [number, number, numbe
 function installFake2DScene() {
   const uitransform = {
     __typename__: 'UITransform',
-    getBoundingBoxToWorld: () => ({ x: 100, y: 50, width: 200, height: 100 })
+    width: 200, height: 100, anchorX: 0, anchorY: 0,
+    convertToWorldSpaceAR: (point: { x: number; y: number }) => ({ x: 100 + point.x, y: 50 + point.y, z: 0 })
   };
   const button = {
     name: 'btn',
@@ -54,7 +55,10 @@ function installFake2DScene() {
   };
   const fakeCc = {
     UITransform: class {},
-    director: { getScene: () => scene },
+    Vec3: class { constructor(public x = 0, public y = 0, public z = 0) {} },
+    director: { getScene: () => scene, root: { batcher2D: { getFirstRenderCamera: () => ({
+      worldToScreen: (out: { x: number; y: number }, world: { x: number; y: number }) => Object.assign(out, { x: world.x + 480, y: world.y + 320 })
+    }) } } },
     screen: { windowSize: { width: 960, height: 640 } }
   };
   vi.stubGlobal('System', { import: async () => fakeCc });
@@ -77,7 +81,7 @@ describe('readRuntimeNodeBounds（页面注入：节点边界与锚点）', () =
       entries: Array<{ path: string; found: boolean; rect?: { x: number; y: number; width: number; height: number }; anchor?: { x: number; y: number } }>;
     };
     expect(result.entries).toHaveLength(1);
-    // winW/2=480, winH/2=320；rect(100,50,200,100) 世界左下 → css: x=580, y=640-(50+100+320)=170
+    // 由此测试相机产生 +480/+320 的投影；生产代码不再假设固定屏幕中心。
     expect(result.entries[0]).toMatchObject({
       path: 'Canvas/btn',
       found: true,

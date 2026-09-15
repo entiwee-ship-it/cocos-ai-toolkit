@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
-import { RUNTIME_METHODS, RuntimeController } from './runtime-controller.js';
+import { RUNTIME_METHODS, RuntimeController, type RuntimeControllerOptions } from './runtime-controller.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
@@ -44,6 +44,7 @@ export interface CreatorClientOptions {
   maxPayloadBytes?: number;
   endpointRoot?: string;
   captureRoot?: string;
+  requestCreator?: RuntimeControllerOptions['requestCreator'];
 }
 
 export class CreatorClientError extends Error {
@@ -80,7 +81,8 @@ export class CreatorClient {
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.maxPayloadBytes = options.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
     this.runtime = new RuntimeController({
-      requestCreator: (selector, method, payload) => this.requestCreator(selector, method, payload),
+      requestCreator: options.requestCreator
+        ?? ((selector, method, payload) => this.requestCreator(selector, method, payload)),
       captureRoot: options.captureRoot ?? defaultCaptureRoot()
     });
   }
@@ -107,7 +109,9 @@ export class CreatorClient {
       return this.runtime.request(method, payload);
     }
     const request = readForwardRequest(payload);
-    return this.requestCreator(request.selector, method, request.params);
+    return this.options.requestCreator
+      ? this.options.requestCreator(request.selector, method, request.params)
+      : this.requestCreator(request.selector, method, request.params);
   }
 
   getStatus(): CreatorClientStatus {

@@ -15,6 +15,21 @@
     const consoleMethods = [];
     let consoleSequence = 0;
 
+    function isSensitiveKey(key) {
+      const normalized = String(key).replace(/[^a-z0-9]/gi, '').toLowerCase();
+      return /(?:authorization|password|passwd|passcode|credentials?|secret|token|apikey|privatekey|cookie|setcookie)$/.test(normalized);
+    }
+
+    function redactText(value) {
+      return String(value)
+        .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, function (match) {
+          return match.slice(0, match.indexOf(' ') + 1) + '[REDACTED]';
+        })
+        .replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\b/g, '[REDACTED]')
+        .replace(/([?&](?:access_token|refresh_token|id_token|auth_token|session_token|token|password|passwd|passcode|secret|api_key|apikey)=)[^&#\s]*/gi, '$1[REDACTED]')
+        .replace(/("(?:authorization|password|passwd|passcode|credentials?|(?:access|refresh|id|auth|session)?_?token|client_?secret|api_?key|private_?key|cookie|set-cookie)"\s*:\s*)"(?:\\.|[^"\\])*"/gi, '$1"[REDACTED]"');
+    }
+
     /**
      * 将日志参数保存为有界快照，避免递归遍历整棵 Cocos 对象图或执行 getter。
      * @param value 当前参数或字段值。
@@ -24,16 +39,17 @@
      */
     function previewValue(value, depth, parents) {
       if (value === null || typeof value !== 'object') {
+        if (typeof value === 'string') return redactText(value);
         return typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol' ? String(value) : value;
       }
-      if (value instanceof Error) return String(value);
+      if (value instanceof Error) return redactText(value);
       if (parents.includes(value)) return '[Circular]';
       if (depth >= 3) return Array.isArray(value) ? '[Array]' : '[Object]';
       const result = Array.isArray(value) ? [] : Object.create(null);
       const keys = Object.keys(value);
       for (const key of keys.slice(0, 20)) {
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
-        const preview = descriptor && 'value' in descriptor
+        const preview = isSensitiveKey(key) ? '[REDACTED]' : descriptor && 'value' in descriptor
           ? previewValue(descriptor.value, depth + 1, parents.concat([value])) : '[Getter]';
         if (Array.isArray(result)) result.push(preview);
         else result[key] = preview;
@@ -49,8 +65,8 @@
      */
     function formatConsole(args) {
       function formatValue(value) {
-        if (value instanceof Error) return String(value);
-        return value && typeof value === 'object' ? JSON.stringify(previewValue(value, 0, [])) : String(value);
+        if (value instanceof Error) return redactText(value);
+        return value && typeof value === 'object' ? JSON.stringify(previewValue(value, 0, [])) : redactText(value);
       }
       if (!args.length) return '';
       let index = 1;
@@ -66,7 +82,7 @@
           return formatValue(value);
         });
       }
-      return [text, args.slice(index).map(formatValue).join(' ')].filter(Boolean).join(' ');
+      return redactText([text, args.slice(index).map(formatValue).join(' ')].filter(Boolean).join(' '));
     }
 
     /**
@@ -85,9 +101,9 @@
         const stack = error && error.stack ? error.stack : nativeException ? args[0] + '\n' + args[2] : '';
         consoleEntries.push({
           seq: consoleSequence++, level: level,
-          text: (nativeException ? args[1] : formatConsole(args.slice(0, 20))).slice(0, 4000),
+          text: redactText(nativeException ? args[1] : formatConsole(args.slice(0, 20))).slice(0, 4000),
           timestamp: new Date().toISOString(),
-          ...(stack ? { stack: String(stack).slice(0, 4000) } : {})
+          ...(stack ? { stack: redactText(stack).slice(0, 4000) } : {})
         });
         // ponytail: 最近 500 条缓冲；单次最多读取 100 条，避免日志突发超过现有 HTTP 消息上限。
         if (consoleEntries.length > 500) consoleEntries.shift();
@@ -145,6 +161,7 @@
 
     async function poll() {
       if (stopped) return;
+      var nextDelay = pollIntervalMs;
       try {
         var command = await request('GET', '/command?runtimeId=' + encodeURIComponent(runtimeId));
         if (command && typeof command.expression === 'string') {
@@ -161,10 +178,11 @@
             }).catch(function () {});
           }
         }
+        nextDelay = 0;
       } catch (_) {
         // Creator 或 Toolkit 暂不可用时静默重试，不影响游戏运行。
       }
-      if (!stopped) setTimeout(poll, pollIntervalMs);
+      if (!stopped) setTimeout(poll, nextDelay);
     }
 
     console.info('[CocosAI] 模拟器运行代理已就绪，日志采集已开启', runtimeId);

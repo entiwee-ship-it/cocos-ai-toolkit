@@ -84,6 +84,7 @@ export const COCOS_DIRECT_READONLY_TOOL_NAMES = [
   'cocos_extension_manager_open',
   'cocos_tool_manager_open',
   'cocos_workbench_open',
+  'cocos_workbench_read',
   'cocos_asset_search',
   'cocos_asset_inspect',
   'cocos_hierarchy',
@@ -214,6 +215,22 @@ export class CocosDirectToolService {
     ));
     if (result.opened !== true) throw new Error('WORKBENCH_OPEN_FAILED');
     return { editor, ...result };
+  }
+
+  /**
+   * 读取已打开工作台拥有的会话，不创建当前 MCP 进程的独立 Preview。
+   * @param input 项目/编辑器身份及所需视图，节点路径缺省时读取工作台当前选择。
+   * @returns 同一 Simulator 的概览、层级、来源/边界、原生属性或日志。
+   */
+  async readWorkbench(input: ProjectSelector & {
+    view?: 'overview' | 'hierarchy' | 'node' | 'component' | 'console';
+    sessionId?: string; path?: string; componentType?: string; maxDepth?: number; maxNodes?: number;
+    includeInactive?: boolean; sinceSeq?: number; level?: string;
+  }) {
+    const editor = await this.readonlyService.resolveEditor(input);
+    if (!editor.capabilities.includes('probe.workbenchRead')) throw new Error('EDITOR_CAPABILITY_MISSING:probe.workbenchRead');
+    const { projectId: _projectId, editorInstanceId: _editorInstanceId, ...params } = input;
+    return { editor, ...asRecord(await this.readonlyService.requestBridge(editor, 'probe.workbenchRead', params)) };
   }
 
   async searchAssets(input: ProjectSelector & {
@@ -1656,6 +1673,20 @@ export function registerCocosDirectReadonlyTools(
     outputSchema: ToolOutputSchema,
     annotations: WRITE_ANNOTATIONS
   }, async (input) => toToolResult(service.openWorkbench(input)));
+
+  server.registerTool('cocos_workbench_read', {
+    description: '读取用户已打开运行工作台的同一 Simulator：overview 返回当前会话/选择；hierarchy 返回有界实时树；node 返回预制体源路径、层级和相机投影范围；component 返回与界面相同的原生 Inspector 数据；console 按游标读取日志。无需启动 Preview，不改变运行状态；path 缺省使用工作台当前选择。',
+    inputSchema: {
+      ...ProjectSelectorInput,
+      view: z.enum(['overview', 'hierarchy', 'node', 'component', 'console']).optional(),
+      sessionId: z.string().min(1).optional(), path: z.string().min(1).optional(), componentType: z.string().min(1).optional(),
+      maxDepth: z.number().int().min(1).max(20).optional(), maxNodes: z.number().int().min(1).max(10000).optional(),
+      includeInactive: z.boolean().optional(), sinceSeq: z.number().int().nonnegative().optional(),
+      level: z.enum(['log', 'info', 'warn', 'error', 'debug']).optional()
+    },
+    outputSchema: ToolOutputSchema,
+    annotations: READONLY_ANNOTATIONS
+  }, async (input) => toToolResult(service.readWorkbench(input)));
 
   server.registerTool('cocos_asset_search', {
     description: '在 Creator AssetDB 索引中按文本搜索资产（找 Prefab/脚本 UUID），按 cursor 分页。',

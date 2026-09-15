@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 const RUNTIME_AGENT_FILE = join(__dirname, '..', 'static', 'runtime-agent.js');
 const RUNTIME_ACTIVE_MS = 2_000;
+const COMMAND_POLL_TIMEOUT_MS = 1_000;
 const EVALUATE_TIMEOUT_MS = 15_000;
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -38,10 +39,17 @@ interface PendingEvaluation {
   timer: NodeJS.Timeout;
 }
 
+interface PendingCommandPoll {
+  runtimeId: string;
+  response: ResponseLike;
+  timer: NodeJS.Timeout;
+}
+
 let activeRuntimeId: string | null = null;
 let lastSeenAt = 0;
 const commands: RuntimeCommand[] = [];
 const pending = new Map<string, PendingEvaluation>();
+const commandPolls = new Map<string, PendingCommandPoll>();
 
 const staticAgentRoute = {
   url: '/plugins/cocos-ai/*',
@@ -73,12 +81,9 @@ const runtimeRoute = {
           sendEmpty(response, 204);
           return;
         }
-        const index = commands.findIndex((command) => command.runtimeId === runtimeId);
-        if (index < 0) {
-          sendEmpty(response, 204);
-          return;
-        }
-        sendJson(response, 200, commands.splice(index, 1)[0]);
+        const command = takeCommand(runtimeId);
+        if (command) sendJson(response, 200, command);
+        else waitForCommand(runtimeId, response);
         return;
       }
       if (request.method === 'POST' && path === '/cocos-ai/runtime/evaluate') {
@@ -101,6 +106,7 @@ const runtimeRoute = {
         }, EVALUATE_TIMEOUT_MS);
         pending.set(id, { runtimeId, response, timer });
         commands.push({ id, runtimeId, expression });
+        deliverCommand(runtimeId);
         response.on?.('close', () => clearPending(id));
         return;
       }
@@ -134,7 +140,49 @@ export function resetSimulatorRuntimeServer(): void {
   activeRuntimeId = null;
   lastSeenAt = 0;
   commands.length = 0;
+  for (const poll of commandPolls.values()) {
+    clearTimeout(poll.timer);
+    sendEmpty(poll.response, 204);
+  }
+  commandPolls.clear();
   for (const id of [...pending.keys()]) clearPending(id);
+}
+
+function takeCommand(runtimeId: string): RuntimeCommand | undefined {
+  const index = commands.findIndex((command) => command.runtimeId === runtimeId);
+  return index >= 0 ? commands.splice(index, 1)[0] : undefined;
+}
+
+function waitForCommand(runtimeId: string, response: ResponseLike): void {
+  const previous = commandPolls.get(runtimeId);
+  if (previous) {
+    commandPolls.delete(runtimeId);
+    clearTimeout(previous.timer);
+    sendEmpty(previous.response, 204);
+  }
+  const timer = setTimeout(() => {
+    const current = commandPolls.get(runtimeId);
+    if (current?.response !== response) return;
+    commandPolls.delete(runtimeId);
+    sendEmpty(response, 204);
+  }, COMMAND_POLL_TIMEOUT_MS);
+  timer.unref();
+  commandPolls.set(runtimeId, { runtimeId, response, timer });
+  response.on?.('close', () => {
+    const current = commandPolls.get(runtimeId);
+    if (current?.response !== response) return;
+    commandPolls.delete(runtimeId);
+    clearTimeout(current.timer);
+  });
+}
+
+function deliverCommand(runtimeId: string): void {
+  const poll = commandPolls.get(runtimeId);
+  const command = poll ? takeCommand(runtimeId) : undefined;
+  if (!poll || !command) return;
+  commandPolls.delete(runtimeId);
+  clearTimeout(poll.timer);
+  sendJson(poll.response, 200, command);
 }
 
 function markRuntimeActive(runtimeId: string): boolean {
@@ -142,6 +190,12 @@ function markRuntimeActive(runtimeId: string): boolean {
     return false;
   }
   if (activeRuntimeId && activeRuntimeId !== runtimeId) {
+    for (const [id, poll] of commandPolls) {
+      if (id === runtimeId) continue;
+      commandPolls.delete(id);
+      clearTimeout(poll.timer);
+      sendEmpty(poll.response, 204);
+    }
     for (const [id, evaluation] of pending) {
       if (evaluation.runtimeId !== runtimeId) {
         clearTimeout(evaluation.timer);

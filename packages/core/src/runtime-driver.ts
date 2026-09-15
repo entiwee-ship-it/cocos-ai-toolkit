@@ -84,12 +84,18 @@ export interface RuntimeLaunchOptions {
   native?: unknown;
 }
 
-/** 输入描述：tap/click 为画布内坐标点击，key 为按键。 */
+/** 输入描述：公开工具使用 tap/click/key，Workbench 可复用同一通道派发完整原生输入。 */
 export interface RuntimeDispatchInput {
-  inputType: 'tap' | 'click' | 'key';
+  inputType: 'tap' | 'click' | 'key' | 'pointerdown' | 'pointermove' | 'pointerup' | 'wheel' | 'keydown' | 'keyup' | 'text';
   x?: number;
   y?: number;
   key?: string;
+  code?: string;
+  keyCode?: number;
+  button?: number;
+  buttons?: number;
+  delta?: number;
+  text?: string;
 }
 
 /** 输入派发回执。 */
@@ -426,6 +432,9 @@ export class RuntimeDriver {
       if (!input.key) throw new Error('INPUT_KEY_REQUIRED');
       await managed.page.keyPress(input.key);
       return { dispatched: true, inputType: 'key', key: input.key };
+    }
+    if (input.inputType !== 'tap' && input.inputType !== 'click') {
+      throw new Error(`INPUT_TYPE_UNAVAILABLE:${input.inputType}`);
     }
     if (typeof input.x !== 'number' || typeof input.y !== 'number') {
       throw new Error('INPUT_COORDINATES_REQUIRED');

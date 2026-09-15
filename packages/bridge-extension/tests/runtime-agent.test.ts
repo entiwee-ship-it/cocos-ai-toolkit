@@ -34,6 +34,11 @@ async function startAgent() {
 }
 
 describe('Simulator 运行代理日志', () => {
+  it('命令长轮询成功后立即续订，只在连接失败时退避', async () => {
+    const { context } = await startAgent();
+    expect(context.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 0);
+  });
+
   it('JSB 异步异常正文与源码堆栈分开展示，源码占位符不被再次格式化', async () => {
     const { context, original, agent } = await startAgent();
     const location = 'file.js:10\nconsole.log("%c%s", style, text);\n^';
@@ -49,6 +54,26 @@ describe('Simulator 运行代理日志', () => {
     const { context, agent } = await startAgent();
     context.console.log('%c%s %o count=%d', 'color:orange', '[网络日志]', { ready: true }, 2);
     expect(agent.readConsole(0).entries.at(-1).text).toBe('[网络日志] {"ready":true} count=2');
+  });
+
+  it('写入工作台前脱敏认证和登录凭据，但不修改游戏原始日志', async () => {
+    const { context, original, agent } = await startAgent();
+    const payload = {
+      headers: { authorization: 'Bearer header-secret' },
+      credentials: { account: 'demo', password: 'password-secret' },
+      accessToken: 'access-secret',
+      mergedConfig: JSON.stringify({ authorization: 'Bearer nested-secret', password: 'nested-password' })
+    };
+    const query = 'https://example.test/login?token=query-secret&safe=1';
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature-secret';
+    context.console.log('请求', payload, query, jwt);
+    const text = agent.readConsole(0).entries.at(-1).text;
+    for (const secret of ['header-secret', 'password-secret', 'access-secret', 'nested-secret', 'nested-password', 'query-secret', jwt]) {
+      expect(text).not.toContain(secret);
+    }
+    expect(text).toContain('[REDACTED]');
+    expect(text).toContain('safe=1');
+    expect(original.log).toHaveBeenCalledWith('请求', payload, query, jwt);
   });
 
   it('采集原生和 Cocos 日志，保留真实时间、异常堆栈并仍调用原有输出', async () => {
@@ -78,7 +103,7 @@ describe('Simulator 运行代理日志', () => {
     expect(typeof agent.readConsole).toBe('function');
     const getter = vi.fn(() => { throw new Error('不应执行'); });
     const value: Record<string, unknown> = { count: 1 };
-    Object.defineProperty(value, 'secret', { enumerable: true, get: getter });
+    Object.defineProperty(value, 'computed', { enumerable: true, get: getter });
     value.self = value;
     context.console.log(value);
     value.count = 2;

@@ -2,7 +2,7 @@
 
 这是一套专门供 AI 使用的 Cocos Creator 自动化工具。开发人员仍然使用 Creator 编辑器；AI 通过 MCP Server、受限 CLI 和项目内 Bridge 读取或执行操作，Cocos Creator 编辑器负责真正的 Scene、Prefab、节点、组件和保存语义。
 
-当前版本为 `0.9.5`，提供 44 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责 Preview、交互采样和视觉证据。
+当前版本为 `0.9.5`，提供 45 个公开 MCP 工具：编辑态写入按调用独立执行、自动保存并逐项重读验证；运行态工具负责工作台读取、Preview、交互采样和视觉证据。
 
 ## 架构
 
@@ -58,11 +58,15 @@ Bridge Extension 加载时会在 Creator 进程内创建 Windows Named Pipe，�
 
 管理窗口提供“运行状态”和“工具列表”两个切换页。“工具列表”由 Bridge 返回当前版本的完整 MCP 工具目录，按编辑器、资源、节点与组件、Prefab 与文档、Preview 与运行态分组，并标出只读、编辑器操作和潜在删除风险。
 
-选择 **Cocos AI → 打开运行工作台** 可打开三栏运行界面：左侧订阅 Creator 第三项 Simulator 中真实场景的实时节点树，中间读取并修改所选运行时组件的公开属性，右侧把同一 `SimulatorApp-Win32.exe` 原生窗口嵌入工作台，可直接接收鼠标和键盘操作。运行时写入只作用于当前进程，不会写回 Scene 或 Prefab；Workbench Host 只监听 `127.0.0.1`，不使用 Toolkit Token。
+选择 **Cocos AI → 打开运行工作台** 可打开三栏运行界面：左侧订阅 Creator 第三项 Simulator 中真实场景的实时节点树，中间读取并修改所选运行时组件的公开属性，右侧显示同一 `SimulatorApp-Win32.exe` 的实时帧。原生窗口句柄限定采集来源，首帧到达后源窗口移出工作区，工作台转发鼠标和键盘输入；调整面板仅缩放画面，不改变游戏设备分辨率。此路径复用现有 FFmpeg 采集能力。运行时写入只作用于当前进程，不会写回 Scene 或 Prefab；Workbench Host 只监听 `127.0.0.1`，不使用 Toolkit Token。
 
 属性面板采用当前 Creator 的原生 Dump 描述，并从同一 Simulator 采集真实值：继承声明、显示顺序、分组、枚举、范围和动态显隐保持引擎语义；节点变换、Widget 对齐及单位、Label 字体样式使用相应控件。资源、节点、组件引用及数组可展开只读检查。写入前复核当前原生可写状态，写入后真实回读，Cocos 值类型保留类身份；节点名称和 UUID 集中显示在选择区。
 
 调试控制台通过同一运行代理采集 `console.log/info/warn/error/debug`、Cocos 日志和 JSB 异常，保留日志发生时间并支持级别筛选、文本搜索、堆栈展开及自动跟随。界面保留最近 500 条记录，停止后仍可查看，新运行使用独立日志；清空只影响当前视图。三栏宽度和控制台高度支持拖动及方向键调整，属性面板在后台刷新时保留阅读位置和详情展开状态。
+
+悬停节点树会按实际渲染相机投影节点自身四角，叠加半透明范围、锚点、尺寸、渲染层和层级信息；旋转轮廓保留，未激活或没有 UITransform/渲染相机的节点会明确提示。预制体实例依据引擎 PrefabInfo 显示源资产路径，嵌套实例使用自己的源资源；“定位资源”只在 Creator 资源面板中选中该资产。运行时创建且引擎未记录创建者的节点不会猜测为某个预制体或脚本。
+
+AI 读取用户当前工作台时使用 `cocos_workbench_read`，提供 `projectId`，多实例时再提供 `editorInstanceId`。`view: overview` 返回当前会话及选择；`hierarchy` 返回有界节点树；`node` 返回来源、投影、层级和组件摘要；`component` 返回与界面一致的原生 Inspector 属性；`console` 按游标读取日志。节点路径缺省时使用工作台当前选择，可传回 `sessionId` 拒绝跨会话读取。此工具直接读取工作台拥有的会话，不需要启动新的 Preview。
 
 通常无需配置端点目录。只有隔离测试需要覆盖时才使用 `COCOS_AI_ENDPOINT_ROOT`。运行态截图由当前 MCP 进程管理并写入 `reports/runtime-captures`。
 
@@ -92,9 +96,9 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 
 安装脚本默认把 Codex MCP 指向固定运行 Worktree。健康检查会核对安装模式、精确工具集合、Creator 在线状态、Bridge 版本、Bridge 内容构建指纹、精确 capability 集合和项目 Bridge Junction 目标。修改 MCP 配置后需要重启 Codex 或新建会话。
 
-## MCP 工具面（全部公开 44 个）
+## MCP 工具面（全部公开 45 个）
 
-### 编辑态只读与编辑器操作 12 个（默认开放）
+### 编辑器、工作台与编辑态读取 13 个（默认开放）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -103,6 +107,7 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 | `cocos_extension_manager_open` | 直接打开目标 Creator 的内置扩展管理器，不修改项目或扩展启用状态 |
 | `cocos_tool_manager_open` | 直接打开目标 Creator 中的 Cocos AI 工具管理面板 |
 | `cocos_workbench_open` | 直接打开目标 Creator 中的 Cocos AI 运行工作台 |
+| `cocos_workbench_read` | 读取工作台当前会话、选择、实时树、节点来源/范围、原生属性及日志 |
 | `cocos_asset_search` | Bridge 内大小写无关包含搜索，短缓存复用全量索引；Bridge 只返回当前结果页，MCP cursor 仅编码分页位置和 revision |
 | `cocos_asset_inspect` | 按 UUID 直接读取资产详情、Meta、依赖和反向使用者 |
 | `cocos_hierarchy` | 读取当前文档节点树；默认返回紧凑结构并省略递归 `raw`，深层 `rootPath` 原生读取目标子树并保留 `truncated`；`query/fields/summary` 可进一步投影，明确 `compact=false` 才请求完整 raw |
@@ -144,7 +149,7 @@ MCP Server 不再使用工具开关；裸启动即注册全部工具。启动参
 
 ### 运行态 14 个（默认公开；动作工具仍执行运行态校验）
 
-`cocos_preview_launch/stop/sessions`、`cocos_runtime_get_hierarchy/inspect_component/set_property/get_console/watch_property/capture/invoke_method/sample_window/dispatch_input/instantiate_prefab/run_scenario`：启动 Preview、读取运行时节点树/组件/Console、修改并回读运行时公开属性、监听变化、截图、调用组件方法和运行时实例化 Prefab。`platform=creator-simulator` 会启动 Creator 工具栏第三项原生 Simulator，并由预览扩展脚本通过本机回环地址读取同一真实运行进程，不占用 Creator 已连接的 5086 Inspector，也不写回 Scene/Prefab。Scenario 支持 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；`stop(always:true)` 会在前序步骤默认中止后仍执行清理。视觉结果仅作辅助证据。
+`cocos_preview_launch/stop/sessions`、`cocos_runtime_get_hierarchy/inspect_component/set_property/get_console/watch_property/capture/invoke_method/sample_window/dispatch_input/instantiate_prefab/run_scenario`：启动 Preview、读取运行时节点树/组件/Console、修改并回读运行时公开属性、监听变化、截图、调用组件方法和运行时实例化 Prefab。`platform=creator-simulator` 会启动 Creator 工具栏第三项原生 Simulator，由预览扩展确认真实运行身份，再通过该 Simulator 的 5086 V8 Inspector 读取和派发输入；会话期间关闭 Creator 独立 Debugger 面板，也不写回 Scene/Prefab。Scenario 支持 `launch`、`wait-node`、`assert-property`、`dispatch-input`、`instantiate-prefab`、`assert-console`、`capture`、`assert-image-diff`、`stop`；`stop(always:true)` 会在前序步骤默认中止后仍执行清理。视觉结果仅作辅助证据。
 
 典型编辑流程：`cocos_editor_state` 确认当前文档；若 dirty，先用 `cocos_document_save` 确认已清除 → `cocos_asset_search` 找 UUID → `cocos_asset_inspect` 看类型/引用 → `cocos_prefab_open` / `cocos_scene_open` 打开 → `cocos_hierarchy` 寻址 → `cocos_node_read` 看现值 → 写工具修改（自动保存+回显）→ 需要视觉确认时 `cocos_preview_launch` + `cocos_runtime_capture`。
 

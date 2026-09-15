@@ -43,6 +43,7 @@ const ONLINE_EDITOR = {
     'probe.extensionManagerOpen',
     'probe.managerPanelOpen',
     'probe.workbenchOpen',
+    'probe.workbenchRead',
     'probe.component'
   ]
 };
@@ -299,6 +300,7 @@ function createRespond(overrides: Record<string, unknown> = {}) {
   if (method === 'probe.extensionManagerOpen') return { opened: true, panel: 'extension.manager' };
   if (method === 'probe.managerPanelOpen') return { opened: true, panel: 'cocos-ai-bridge' };
   if (method === 'probe.workbenchOpen') return { opened: true, panel: 'cocos-ai-bridge.workbench', url: 'http://127.0.0.1:62500/' };
+  if (method === 'probe.workbenchRead') return { previewSessionId: 'workbench-owned-session', path: '/main~0/UI~0', origin: { kind: 'prefab', sourceUrl: 'db://assets/ui/Test.prefab' } };
     if (method === 'probe.component') {
       return { data: { schema: COMPONENT_SCHEMA, raw: null }, raw: null, source: 'message-api' };
     }
@@ -492,6 +494,15 @@ describe('直写档只读工具', () => {
       method: 'probe.workbenchOpen',
       payload: { params: {} }
     });
+  });
+
+  it('AI 读取工作台拥有的实时会话，不调用本进程 Preview 启动或会话表', async () => {
+    const creatorClient = new RecordingCreatorClient(createRespond());
+    const { client } = await createHarness(creatorClient);
+    const result = await client.callTool({ name: 'cocos_workbench_read', arguments: { projectId: 'proj1', view: 'node' } });
+    expect(result.structuredContent).toMatchObject({ previewSessionId: 'workbench-owned-session', origin: { sourceUrl: 'db://assets/ui/Test.prefab' } });
+    expect(creatorClient.requests.at(-1)).toMatchObject({ method: 'probe.workbenchRead', payload: { params: { view: 'node' } } });
+    expect(creatorClient.requests.some(({ method }) => method.startsWith('server.preview'))).toBe(false);
   });
 
   it('cocos_asset_search 在 Bridge 内过滤资产，不拉取全量索引', async () => {

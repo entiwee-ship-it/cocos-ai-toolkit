@@ -54,7 +54,9 @@ describe('simulator runtime preview server', () => {
   });
 
   it('在同一 runtimeId 上完成 evaluate 命令往返', async () => {
-    await getRuntimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-1', socket: loopback }, new MockResponse(), () => {});
+    const command = new MockResponse();
+    await getRuntimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-1', socket: loopback }, command, () => {});
+    expect(command.ended).toBe(false);
 
     const evaluation = new MockResponse();
     await postRuntimeHandler({
@@ -64,9 +66,7 @@ describe('simulator runtime preview server', () => {
       socket: loopback
     }, evaluation, () => {});
     expect(evaluation.ended).toBe(false);
-
-    const command = new MockResponse();
-    await getRuntimeHandler({ method: 'GET', url: '/cocos-ai/runtime/command?runtimeId=sim-1', socket: loopback }, command, () => {});
+    expect(command.ended).toBe(true);
     expect(command.body).toMatchObject({ runtimeId: 'sim-1', expression: '1 + 1' });
     const id = (command.body as { id: string }).id;
 

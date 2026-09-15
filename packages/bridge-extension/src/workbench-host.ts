@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import {
   NativeSimulatorHost,
+  type NativeSimulatorHighlight,
+  type NativeSimulatorInput,
   type NativeSimulatorHostStatus,
   type NativeWindowLayout
 } from './native-simulator-host';
@@ -35,16 +37,24 @@ interface WorkbenchSelector {
   editorInstanceId: string;
 }
 
+export type WorkbenchCreatorRequest = (
+  selector: WorkbenchSelector,
+  method: string,
+  payload: unknown
+) => Promise<unknown>;
+
 interface WorkbenchNativeHost {
   getStatus(): NativeSimulatorHostStatus;
   start(layout: NativeWindowLayout): Promise<NativeSimulatorHostStatus>;
   stop(): Promise<void>;
+  setHighlight(value: NativeSimulatorHighlight | null): void;
 }
 
 type NativeHostFactory = (options: {
   parentProcessId: number;
   childProcessId: number;
   parentTitles: string[];
+  onInput: (input: NativeSimulatorInput) => void;
 }) => WorkbenchNativeHost;
 
 type WorkbenchState = 'idle' | 'starting' | 'stopping' | 'ready' | 'error';
@@ -63,18 +73,23 @@ export class WorkbenchHost {
   private lastError: string | null = null;
   private lastUpdateAt: string | null = null;
   private port = 0;
+  private selectedPath: string | null = null;
+  private readonly nativeInputEvents: Array<{ sessionId: string; input: NativeSimulatorInput }> = [];
+  private pendingNativePointerMove: { sessionId: string; input: NativeSimulatorInput } | null = null;
+  private nativeInputSending = false;
 
   constructor(
     private readonly selector: WorkbenchSelector,
     client?: WorkbenchClient,
-    private readonly createNativeHost: NativeHostFactory = (options) => new NativeSimulatorHost(options)
+    private readonly createNativeHost: NativeHostFactory = (options) => new NativeSimulatorHost(options),
+    private readonly requestCreator?: WorkbenchCreatorRequest
   ) {
     this.client = client ?? null;
   }
 
   async start(): Promise<{ url: string }> {
     if (this.server) return { url: this.url() };
-    if (!this.client) this.client = await createClient();
+    if (!this.client) this.client = await createClient(this.requestCreator);
     const server = createServer((request, response) => {
       void this.handleRequest(request, response).catch((error) => {
         sendJson(response, 500, { error: readReason(error) });
@@ -116,17 +131,15 @@ export class WorkbenchHost {
     const sessionId = typeof(session?.sessionId) === 'string' ? session.sessionId : '';
     const processId = Number(session?.appPid);
     const ownedSession = Boolean(sessionId) || (Number.isInteger(processId) && processId > 0);
-    await this.detachNativeWindow();
+    this.clearNativeInput();
     await this.stopHierarchy?.().catch(() => undefined);
     this.stopHierarchy = null;
     if (sessionId) {
       await this.client?.request('server.previewStop', { sessionId }).catch(() => undefined);
     }
-    await this.client?.request('probe.simulatorDebuggerClose', {
-      selector: this.selector,
-      params: {}
-    }).catch(() => undefined);
     const simulatorProcessFound = await terminateCreatorSimulatorProcesses(process.pid, processId);
+    // 先结束 Simulator，再退出透明 Native Host，停止时不会短暂恢复独立窗口。
+    await this.detachNativeWindow();
     if (ownedSession || simulatorProcessFound) await this.waitForRuntimeDisconnect();
     this.session = null;
     this.hierarchy = null;
@@ -180,6 +193,40 @@ export class WorkbenchHost {
         return;
       }
       sendJson(response, 200, this.hierarchy);
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/node') {
+      const path = url.searchParams.get('path');
+      if (!path) { sendJson(response, 400, { error: 'NODE_PATH_REQUIRED' }); return; }
+      if (url.searchParams.get('sessionId') !== this.session?.sessionId) {
+        sendJson(response, 409, { error: 'WORKBENCH_SESSION_CHANGED' }); return;
+      }
+      sendJson(response, 200, await this.readSnapshot({ view: 'node', path, includeSource: url.searchParams.get('includeSource') !== 'false' }));
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/selection') {
+      const body = await readJsonBody(request);
+      if (body.sessionId !== this.session?.sessionId || !body.sessionId) {
+        sendJson(response, 409, { error: 'WORKBENCH_SESSION_CHANGED' }); return;
+      }
+      if (body.path !== null && (typeof body.path !== 'string' || !body.path)) {
+        sendJson(response, 400, { error: 'NODE_PATH_REQUIRED' }); return;
+      }
+      this.selectedPath = body.path;
+      sendJson(response, 200, { selectedPath: this.selectedPath });
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/reveal-source') {
+      const body = await readJsonBody(request);
+      if (body.sessionId !== this.session?.sessionId || !body.sessionId) {
+        sendJson(response, 409, { error: 'WORKBENCH_SESSION_CHANGED' }); return;
+      }
+      if (typeof body.path !== 'string' || !body.path) { sendJson(response, 400, { error: 'NODE_PATH_REQUIRED' }); return; }
+      const node = await this.readSnapshot({ view: 'node', path: body.path });
+      if (!node.origin?.available || !node.origin.assetUuid || node.origin.assetUuid !== body.assetUuid) {
+        sendJson(response, 409, { error: 'NODE_SOURCE_CHANGED' }); return;
+      }
+      sendJson(response, 200, await this.requireClient().request('probe.assetReveal', { selector: this.selector, params: { uuid: node.origin.assetUuid } }));
       return;
     }
     if (request.method === 'GET' && url.pathname === '/api/component') {
@@ -262,6 +309,10 @@ export class WorkbenchHost {
     }
     if (request.method === 'POST' && url.pathname === '/api/native-window') {
       const body = await readJsonBody(request);
+      if (this.state !== 'ready' || !this.session?.sessionId || body.sessionId !== this.session.sessionId) {
+        sendJson(response, 409, { error: 'WORKBENCH_SESSION_CHANGED' });
+        return;
+      }
       let input: ReturnType<typeof readNativeWindowRequest>;
       try {
         input = readNativeWindowRequest(body);
@@ -275,6 +326,34 @@ export class WorkbenchHost {
     if (request.method === 'POST' && url.pathname === '/api/native-window/detach') {
       await this.detachNativeWindow();
       sendJson(response, 200, { detached: true });
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/native-input') {
+      const body = await readJsonBody(request);
+      if (this.state !== 'ready' || body.sessionId !== this.session?.sessionId || !body.sessionId) {
+        sendJson(response, 409, { error: 'WORKBENCH_SESSION_CHANGED' }); return;
+      }
+      if (!this.nativeHost || this.nativeHost.getStatus().state !== 'ready') {
+        sendJson(response, 409, { error: 'NATIVE_SIMULATOR_HOST_NOT_READY' }); return;
+      }
+      try {
+        this.enqueueNativeInput(readNativeInput(body));
+        sendJson(response, 202, { accepted: true });
+      } catch (error) { sendJson(response, 400, { error: readReason(error) }); }
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/native-highlight') {
+      const body = await readJsonBody(request);
+      if (this.state !== 'ready' || body.sessionId !== this.session?.sessionId || !body.sessionId) {
+        sendJson(response, 409, { error: 'WORKBENCH_SESSION_CHANGED' }); return;
+      }
+      if (!this.nativeHost || this.nativeHost.getStatus().state !== 'ready') {
+        sendJson(response, 409, { error: 'NATIVE_SIMULATOR_HOST_NOT_READY' }); return;
+      }
+      try {
+        this.nativeHost.setHighlight(body.clear === true ? null : readNativeHighlight(body));
+        sendJson(response, 200, { accepted: true });
+      } catch (error) { sendJson(response, 400, { error: readReason(error) }); }
       return;
     }
     if (request.method === 'GET' && url.pathname === '/api/health') {
@@ -298,6 +377,7 @@ export class WorkbenchHost {
         params: { platform: 'creator-simulator' }
       });
       this.session = session;
+      this.selectedPath = null;
       this.hierarchy = null;
       this.stopHierarchy = await this.requireClient().streamRuntimeHierarchy(
         this.requireSessionId(),
@@ -306,7 +386,7 @@ export class WorkbenchHost {
           this.lastUpdateAt = new Date().toISOString();
         },
         {
-          intervalMs: 100,
+          intervalMs: 500,
           maxDepth: 20,
           maxNodes: 10_000,
           includeInactive: true,
@@ -316,10 +396,6 @@ export class WorkbenchHost {
           }
         }
       );
-      await this.requireClient().request('probe.simulatorDebuggerClose', {
-        selector: this.selector,
-        params: {}
-      }).catch(() => undefined);
       this.state = 'ready';
       return session;
     })().catch((error) => {
@@ -340,6 +416,7 @@ export class WorkbenchHost {
     }).catch((error: unknown) => ({ connected: false, error: readReason(error) }));
     return {
       status: this.state,
+      selectedPath: this.selectedPath,
       session: this.session,
       runtime,
       hierarchy: this.hierarchy ? {
@@ -356,11 +433,54 @@ export class WorkbenchHost {
         childProcessId: null,
         parentWindowHandle: null,
         simulatorWindowHandle: null,
+        embeddedWindowHandle: null,
         error: null
       },
       userStopped: this.userStopped,
       error: this.lastError
     };
+  }
+
+  /**
+   * 直接读取本工作台拥有的运行会话，供 HTTP 界面与独立 AI 客户端共用。
+   * @param input view 指定概览、节点树、节点、组件或日志；path 缺省使用当前选择；其余字段控制读取范围。
+   * @returns 同一会话的真实快照；不会启动、重连或停止模拟器。
+   */
+  async readSnapshot(input: {
+    view?: 'overview' | 'hierarchy' | 'node' | 'component' | 'console';
+    sessionId?: string; path?: string; componentType?: string; maxDepth?: number; maxNodes?: number; includeInactive?: boolean;
+    includeSource?: boolean; sinceSeq?: number; level?: string;
+  } = {}): Promise<Record<string, any>> {
+    const view = input.view || 'overview';
+    const currentSessionId = this.session?.sessionId;
+    if (input.sessionId && input.sessionId !== currentSessionId) throw new Error('WORKBENCH_SESSION_CHANGED');
+    if (view === 'overview') {
+      const snapshot = await this.readState();
+      if (this.session?.sessionId !== currentSessionId) throw new Error('WORKBENCH_SESSION_CHANGED');
+      return { ...snapshot, url: this.url(), capturedAt: new Date().toISOString() };
+    }
+    const sessionId = this.requireSessionId();
+    if (this.state !== 'ready') throw new Error('WORKBENCH_SESSION_NOT_READY');
+    const path = input.path || this.selectedPath;
+    if ((view === 'node' || view === 'component') && !path) throw new Error('WORKBENCH_NODE_NOT_SELECTED');
+    let result: Record<string, any>;
+    if (view === 'hierarchy') {
+      result = await this.requireClient().request('server.runtimeHierarchy', {
+        sessionId, ...(input.path ? { path: input.path } : {}), maxDepth: input.maxDepth ?? 8, maxNodes: input.maxNodes ?? 2000,
+        includeInactive: input.includeInactive !== false
+      });
+    } else if (view === 'node') {
+      result = await this.requireClient().request('server.runtimeNode', { sessionId, path, includeSource: input.includeSource !== false });
+    } else if (view === 'component') {
+      if (!input.componentType) throw new Error('COMPONENT_TYPE_REQUIRED');
+      result = await this.requireClient().request('server.runtimeComponent', { sessionId, path, componentType: input.componentType, inspector: true });
+    } else if (view === 'console') {
+      result = await this.requireClient().request('server.runtimeConsole', { sessionId, sinceSeq: input.sinceSeq ?? 0, ...(input.level ? { level: input.level } : {}) });
+      result = { ...result, previewSessionId: sessionId, capturedAt: new Date().toISOString() };
+    } else throw new Error('WORKBENCH_VIEW_INVALID');
+    // 迟到响应不能混入用户刚启动的新会话。
+    if (this.session?.sessionId !== sessionId || this.state !== 'ready') throw new Error('WORKBENCH_SESSION_CHANGED');
+    return result;
   }
 
   async detachNativeWindow(): Promise<void> {
@@ -386,10 +506,54 @@ export class WorkbenchHost {
       this.nativeHost = this.createNativeHost({
         parentProcessId: process.pid,
         childProcessId,
-        parentTitles: [input.parentTitle, 'Cocos AI 运行工作台', 'Cocos AI Runtime Workbench']
+        parentTitles: [input.parentTitle, 'Cocos AI 运行工作台', 'Cocos AI Runtime Workbench'],
+        onInput: (nativeInput) => this.enqueueNativeInput(nativeInput)
       });
     }
     return this.nativeHost.start(input.layout);
+  }
+
+  /** 离散输入严格保序；mousemove 只保留最新值，且不会排在点击前面。 */
+  private enqueueNativeInput(input: NativeSimulatorInput): void {
+    const sessionId = this.session?.sessionId;
+    if (this.state !== 'ready' || !sessionId) return;
+    const queued = { sessionId, input };
+    if (input.type === 'pointermove') this.pendingNativePointerMove = queued;
+    else {
+      this.pendingNativePointerMove = null;
+      this.nativeInputEvents.push(queued);
+    }
+    void this.pumpNativeInput();
+  }
+
+  private async pumpNativeInput(): Promise<void> {
+    if (this.nativeInputSending) return;
+    this.nativeInputSending = true;
+    try {
+      while (this.nativeInputEvents.length > 0 || this.pendingNativePointerMove) {
+        const queued = this.nativeInputEvents.shift() ?? this.pendingNativePointerMove;
+        if (!queued) break;
+        if (queued === this.pendingNativePointerMove) this.pendingNativePointerMove = null;
+        if (this.state !== 'ready' || this.session?.sessionId !== queued.sessionId) continue;
+        try {
+          await this.requireClient().request('server.runtimeDispatchInput', {
+            sessionId: queued.sessionId,
+            inputType: queued.input.type,
+            ...queued.input
+          });
+        } catch (error) {
+          this.lastError = `输入未送达：${readReason(error)}`;
+        }
+      }
+    } finally {
+      this.nativeInputSending = false;
+      if (this.nativeInputEvents.length > 0 || this.pendingNativePointerMove) void this.pumpNativeInput();
+    }
+  }
+
+  private clearNativeInput(): void {
+    this.nativeInputEvents.length = 0;
+    this.pendingNativePointerMove = null;
   }
 
   private async serveStatic(pathname: string, response: ServerResponse): Promise<void> {
@@ -458,13 +622,13 @@ async function terminateCreatorSimulatorProcesses(parentProcessId: number, known
   return processIds.size > 0;
 }
 
-async function createClient(): Promise<WorkbenchClient> {
+async function createClient(requestCreator?: WorkbenchCreatorRequest): Promise<WorkbenchClient> {
   const entry = pathToFileURL(resolve(__dirname, '..', '..', 'client', 'dist', 'index.js')).href;
   const dynamicImport = new Function('specifier', 'return import(specifier)') as (
     specifier: string
-  ) => Promise<{ CreatorClient: new () => WorkbenchClient }>;
+  ) => Promise<{ CreatorClient: new (options?: { requestCreator?: WorkbenchCreatorRequest }) => WorkbenchClient }>;
   const module = await dynamicImport(entry);
-  const client = new module.CreatorClient();
+  const client = new module.CreatorClient(requestCreator ? { requestCreator } : undefined);
   await client.connect();
   return client;
 }
@@ -510,6 +674,51 @@ function readNativeWindowRequest(body: Record<string, any>): {
     ? body.parentTitle.replace(/[\r\n]+/g, ' ').trim().slice(0, 200)
     : '';
   return { layout, parentTitle };
+}
+
+function readNativeHighlight(body: Record<string, any>): NativeSimulatorHighlight {
+  const viewport = body.viewport;
+  const points = body.points;
+  const anchor = body.anchor;
+  if (
+    !viewport || typeof viewport !== 'object' || Array.isArray(viewport)
+    || !Number.isFinite(viewport.width) || viewport.width <= 0
+    || !Number.isFinite(viewport.height) || viewport.height <= 0
+    || !Array.isArray(points) || points.length !== 4
+    || points.some((point) => !point || typeof point !== 'object' || Array.isArray(point)
+      || !Number.isFinite(point.x) || !Number.isFinite(point.y))
+    || !anchor || typeof anchor !== 'object' || Array.isArray(anchor)
+    || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)
+  ) throw new Error('INVALID_NATIVE_HIGHLIGHT');
+  return { viewport, points, anchor } as NativeSimulatorHighlight;
+}
+
+function readNativeInput(body: Record<string, any>): NativeSimulatorInput {
+  const type = body.type;
+  if (type === 'keydown' || type === 'keyup') {
+    if (
+      typeof body.key !== 'string' || !body.key || body.key.length > 64
+      || typeof body.code !== 'string' || !body.code || body.code.length > 64
+      || !Number.isInteger(body.keyCode) || body.keyCode < 0 || body.keyCode > 65_535
+    ) throw new Error('INVALID_NATIVE_SIMULATOR_KEY');
+    return { type, key: body.key, code: body.code, keyCode: body.keyCode };
+  }
+  if (
+    !Number.isInteger(body.x) || body.x < 0
+    || !Number.isInteger(body.y) || body.y < 0
+    || !Number.isInteger(body.buttons) || body.buttons < 0 || body.buttons > 7
+  ) throw new Error('INVALID_NATIVE_SIMULATOR_POINTER');
+  if (type === 'wheel') {
+    if (!Number.isFinite(body.delta) || Math.abs(body.delta) > 10_000) {
+      throw new Error('INVALID_NATIVE_SIMULATOR_WHEEL');
+    }
+    return { type, x: body.x, y: body.y, buttons: body.buttons, delta: body.delta };
+  }
+  if (
+    (type === 'pointerdown' || type === 'pointermove' || type === 'pointerup')
+    && Number.isInteger(body.button) && body.button >= 0 && body.button <= 2
+  ) return { type, x: body.x, y: body.y, button: body.button, buttons: body.buttons };
+  throw new Error('INVALID_NATIVE_SIMULATOR_INPUT');
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, any>> {

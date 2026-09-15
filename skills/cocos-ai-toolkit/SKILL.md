@@ -99,6 +99,8 @@ Prefab/Scene 中的节点只要组件公开 Inspector 事件数组，就必须�
 
 ## 运行态工具
 
+读取用户已打开的工作台时优先 `cocos_workbench_read`：先用 `view=overview` 得到当前会话和选择，再用 `hierarchy`、`node`、`component`、`console` 读取同一真实进程。`node` 返回源 Prefab 路径、层级和相机投影范围；path 缺省使用工作台当前选择。可以传回 sessionId 防止会话切换。此工具不启动或停止 Simulator；`cocos_preview_sessions` 的空列表只表示当前 MCP 没有自建 Preview，不能据此重启用户工作台。
+
 只读组：`cocos_preview_sessions`、`cocos_runtime_get_hierarchy`、`cocos_runtime_inspect_component`、`cocos_runtime_get_console`、`cocos_runtime_watch_property`、`cocos_runtime_capture`（Game 视图截图，支持多分辨率、裁剪、节点边界叠加）。
 
 截图默认每会话保留 100 张、全局保留 50 会话/14 天。报告盘点只运行 `npm run reports:doctor`；归档和清理必须显式确认。

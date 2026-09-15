@@ -53,6 +53,41 @@ export const RuntimeComponentSummarySchema = z.object({
   properties: z.record(z.string(), z.unknown()).optional()
 });
 
+/** 来源以当前引擎实例信息为准；运行时创建者未记录时不猜测系统或业务脚本。 */
+export const RuntimeNodeOriginSchema = z.object({
+  kind: z.enum(['prefab', 'scene', 'runtime']),
+  assetUuid: z.string().min(1).optional(),
+  fileId: z.string().optional(),
+  rootUuid: z.string().optional(),
+  rootPath: z.string().optional(),
+  instanceRoot: z.boolean().optional(),
+  sourceUrl: z.string().nullable().optional(),
+  sourceName: z.string().nullable().optional(),
+  available: z.boolean().optional()
+});
+
+const RuntimePointSchema = z.object({ x: z.number(), y: z.number() });
+const RuntimeRectSchema = RuntimePointSchema.extend({ width: z.number().nonnegative(), height: z.number().nonnegative() });
+
+/** 画布 CSS 像素范围，原点在左上角；四角保留旋转后的真实形状。 */
+export const RuntimeNodeBoundsSchema = z.object({
+  path: z.string(), found: z.boolean(), hasBounds: z.boolean().optional(), reason: z.string().optional(),
+  points: z.array(RuntimePointSchema).length(4).optional(), rect: RuntimeRectSchema.optional(), anchor: RuntimePointSchema.optional(),
+  viewport: z.object({ width: z.number().positive(), height: z.number().positive() }).optional(),
+  size: z.object({ width: z.number(), height: z.number() }).optional(),
+  camera: z.object({ name: z.string(), priority: z.number() }).optional()
+});
+
+/** 工作台和 AI 共用的单节点实时详情。 */
+export const RuntimeNodeDetailsSchema = z.object({
+  source: z.literal('preview-runtime'), previewSessionId: z.string().min(1), capturedAt: z.string().min(1),
+  found: z.literal(true), nodeUuid: z.string().min(1), name: z.string(), path: z.string().min(1), parentUuid: z.string().nullable(),
+  active: z.boolean(), activeInHierarchy: z.boolean(), dynamic: z.boolean(),
+  layer: z.number().int().nonnegative(), layerName: z.string(), depth: z.number().int().nonnegative(), siblingIndex: z.number().int().nonnegative(),
+  components: z.array(RuntimeComponentSummarySchema), origin: RuntimeNodeOriginSchema, bounds: RuntimeNodeBoundsSchema,
+  sceneUuid: z.string(), sceneEpoch: z.number().int().nonnegative(), revision: z.number().int().nonnegative()
+});
+
 export interface RuntimeNodeInput {
   uuid: string;
   name: string;
@@ -60,8 +95,10 @@ export interface RuntimeNodeInput {
   path?: string;
   parentUuid?: string;
   active: boolean;
+  activeInHierarchy?: boolean;
   /** 动态创建节点（非场景序列化来源），与编辑态节点严格区分。 */
   dynamic: boolean;
+  origin?: z.infer<typeof RuntimeNodeOriginSchema>;
   components: Array<z.infer<typeof RuntimeComponentSummarySchema>>;
   children?: RuntimeNodeInput[];
   truncated?: boolean;
@@ -75,7 +112,9 @@ export const RuntimeNodeSchema: z.ZodType<RuntimeNodeInput> = z.lazy(() =>
         path: z.string().min(1).optional(),
         parentUuid: z.string().min(1).optional(),
         active: z.boolean(),
+        activeInHierarchy: z.boolean().optional(),
     dynamic: z.boolean(),
+    origin: RuntimeNodeOriginSchema.optional(),
     components: z.array(RuntimeComponentSummarySchema),
     children: z.array(RuntimeNodeSchema).optional(),
     /** 子树被深度或节点数上限截断（读取不完整，AI 必须知晓）。 */
@@ -384,6 +423,7 @@ export type Resolution = z.infer<typeof ResolutionSchema>;
 export type RuntimePlatform = z.infer<typeof RuntimePlatformSchema>;
 export type PreviewSession = z.infer<typeof PreviewSessionSchema>;
 export type RuntimeNodeSnapshot = z.infer<typeof RuntimeNodeSnapshotSchema>;
+export type RuntimeNodeDetails = z.infer<typeof RuntimeNodeDetailsSchema>;
 export type RuntimePropertyMetadata = z.infer<typeof RuntimePropertyMetadataSchema>;
 export type RuntimeComponentSnapshot = z.infer<typeof RuntimeComponentSnapshotSchema>;
 export type RuntimePropertyWriteSnapshot = z.infer<typeof RuntimePropertyWriteSnapshotSchema>;

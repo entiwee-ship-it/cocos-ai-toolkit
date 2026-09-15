@@ -8,6 +8,7 @@ async function runScript(entry: string, ...args: unknown[]): Promise<unknown> {
 }
 
 afterEach(() => {
+  delete (globalThis as Record<string, unknown>).__cocosAiRuntimeInputState;
   vi.unstubAllGlobals();
 });
 
@@ -37,6 +38,42 @@ describe('readCanvasRect（页面注入：画布区域读取）', () => {
 });
 
 describe('dispatchRuntimeInput（driver 输入换算与派发）', () => {
+  it('原生指针、滚轮和键盘事件使用有效的 Creator 窗口 ID', async () => {
+    const mouseDown = vi.fn();
+    const mouseMove = vi.fn();
+    const mouseUp = vi.fn();
+    const mouseWheel = vi.fn();
+    const keyDown = vi.fn();
+    const keyUp = vi.fn();
+    vi.stubGlobal('jsb', {
+      ISystemWindowManager: { getInstance: () => ({ getWindow: (id: number) => id === 1 ? { getViewSize: () => ({ width: 852, height: 393 }) } : null }) }
+    });
+    vi.stubGlobal('System', { import: async () => ({ input: {
+      _mouseInput: {
+        dispatchMouseDownEvent: mouseDown,
+        dispatchMouseMoveEvent: mouseMove,
+        dispatchMouseUpEvent: mouseUp,
+        dispatchScrollEvent: mouseWheel
+      },
+      _keyboardInput: { dispatchKeyboardDownEvent: keyDown, dispatchKeyboardUpEvent: keyUp }
+    } }) });
+
+    await runScript('dispatchRuntimeInput', { inputType: 'pointerdown', x: 426, y: 196, button: 0, buttons: 1 });
+    await runScript('dispatchRuntimeInput', { inputType: 'pointermove', x: 430, y: 200, buttons: 1 });
+    await runScript('dispatchRuntimeInput', { inputType: 'pointerup', x: 430, y: 200, button: 0, buttons: 0 });
+    await runScript('dispatchRuntimeInput', { inputType: 'wheel', x: 430, y: 200, delta: 120 });
+    await runScript('dispatchRuntimeInput', { inputType: 'key', key: 'Enter' });
+
+    expect(mouseDown).toHaveBeenCalledWith(expect.objectContaining({ x: 426, y: 196, button: 0, windowId: 1 }));
+    expect(mouseMove).toHaveBeenCalledWith(expect.objectContaining({ xDelta: 4, yDelta: 4, windowId: 1 }));
+    expect(mouseUp).toHaveBeenCalledWith(expect.objectContaining({ windowId: 1 }));
+    expect(mouseWheel).toHaveBeenCalledWith(expect.objectContaining({ wheelDeltaY: 1, windowId: 1 }));
+    expect(keyDown).toHaveBeenCalledWith({ code: 'Enter', keyCode: 13, windowId: 1 });
+    expect(keyUp).toHaveBeenCalledWith({ code: 'Enter', keyCode: 13, windowId: 1 });
+    await expect(runScript('dispatchRuntimeInput', { inputType: 'text', text: '中文' }))
+      .rejects.toThrow('CREATOR_SIMULATOR_TEXT_INPUT_UNAVAILABLE');
+  });
+
   it('tap 按画布偏移换算页面坐标并点击', async () => {
     const clicks: Array<{ x: number; y: number }> = [];
     const { RuntimeDriver } = await import('../src/runtime-driver.js');

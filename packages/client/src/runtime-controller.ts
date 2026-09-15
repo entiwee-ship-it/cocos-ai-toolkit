@@ -3,6 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import {
   ResolutionSchema,
   RuntimeComponentSnapshotSchema,
+  RuntimeNodeDetailsSchema,
   RuntimePropertyWriteSnapshotSchema,
   RuntimeSampleWindowInputSchema,
   RuntimeSampleWindowSnapshotSchema,
@@ -62,6 +63,7 @@ const RuntimeComponentSchema = SessionSchema.extend({
   componentType: z.string().min(1),
   inspector: z.boolean().optional()
 });
+const RuntimeNodeSchema = SessionSchema.extend({ path: z.string().min(1), includeSource: z.boolean().optional() });
 const RuntimeInvokeSchema = RuntimeComponentSchema.extend({
   method: z.string().min(1),
   args: z.array(z.unknown()).optional()
@@ -80,10 +82,16 @@ const RuntimeWatchSchema = RuntimeComponentSchema.extend({
   maxChanges: z.number().int().positive().max(100).optional()
 });
 const RuntimeInputSchema = SessionSchema.extend({
-  inputType: z.enum(['tap', 'click', 'key']),
-  x: z.number().optional(),
-  y: z.number().optional(),
-  key: z.string().min(1).optional()
+  inputType: z.enum(['tap', 'click', 'key', 'pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'keyup', 'text']),
+  x: z.number().finite().optional(),
+  y: z.number().finite().optional(),
+  key: z.string().min(1).max(64).optional(),
+  code: z.string().min(1).max(64).optional(),
+  keyCode: z.number().int().nonnegative().max(65_535).optional(),
+  button: z.number().int().min(0).max(2).optional(),
+  buttons: z.number().int().min(0).max(7).optional(),
+  delta: z.number().finite().min(-10_000).max(10_000).optional(),
+  text: z.string().max(128).optional()
 });
 const RuntimeInstantiateSchema = SessionSchema.extend({
   assetUuid: z.string().min(1),
@@ -122,6 +130,7 @@ export const RUNTIME_METHODS = new Set([
   'server.runtimeConsole',
   'server.runtimeHierarchy',
   'server.runtimeComponent',
+  'server.runtimeNode',
   'server.runtimeSetProperty',
   'server.runtimeInvoke',
   'server.runtimeSampleWindow',
@@ -160,17 +169,16 @@ export class RuntimeController {
         if (platform === 'creator-simulator') {
           if (!isCreatorSimulatorOptions(native)) throw new Error('CREATOR_SIMULATOR_OPTIONS_INVALID');
           const selector = { projectId, ...(editorInstanceId ? { editorInstanceId } : {}) };
-          return launchCreatorSimulatorRuntimeBrowser(native ?? {}, {
+          const creatorProcessId = Number(/:(\d+)$/.exec(editorInstanceId || '')?.[1]);
+          return launchCreatorSimulatorRuntimeBrowser({ ...((native ?? {}) as object), ...(creatorProcessId > 0 ? { creatorProcessId } : {}) }, {
+            prepareInspector: async () => {
+              await this.options.requestCreator(selector, 'probe.simulatorDebuggerClose', {});
+            },
             status: () => this.options.requestCreator(
               selector,
               'probe.simulatorRuntimeStatus',
               {}
-            ) as Promise<{ connected: boolean; runtimeId: string | null }>,
-            evaluate: (_runtimeId, expression) => this.options.requestCreator(
-              selector,
-              'probe.simulatorRuntimeEvaluate',
-              { runtimeId: _runtimeId, expression }
-            )
+            ) as Promise<{ connected: boolean; runtimeId: string | null }>
           });
         }
         return launchPlaywrightBrowser({ channel, headless });
@@ -246,6 +254,21 @@ export class RuntimeController {
             capturedAt: new Date().toISOString()
           })
         };
+      }
+      case 'server.runtimeNode': {
+        const input = RuntimeNodeSchema.parse(payload);
+        const session = this.driver.get(input.sessionId);
+        const raw = await this.driver.evaluate<Record<string, any>>(input.sessionId, buildRuntimeScript('readRuntimeNodeDetails', { path: input.path }));
+        if (raw?.found !== true) throw new Error(`RUNTIME_NODE_UNAVAILABLE:${raw?.reason || 'unknown'}`);
+        // 源 UUID 来自运行实例；只查询这一项 AssetDB，悬停投影不重复读取资产资料。
+        if (input.includeSource !== false && raw.origin?.assetUuid) {
+          const asset = await this.options.requestCreator({ projectId: session.projectId, ...(session.editorInstanceId ? { editorInstanceId: session.editorInstanceId } : {}) }, 'probe.assets', {
+            uuid: raw.origin.assetUuid, detailsOnly: true
+          }) as { details?: { uuid?: string; url?: string; name?: string; invalid?: boolean } | null };
+          const available = asset.details?.uuid === raw.origin.assetUuid && !asset.details?.invalid && typeof asset.details?.url === 'string';
+          raw.origin = { ...raw.origin, available, sourceUrl: available ? asset.details!.url : null, sourceName: available ? asset.details!.name || null : null };
+        }
+        return RuntimeNodeDetailsSchema.parse({ ...raw, source: 'preview-runtime', previewSessionId: input.sessionId, capturedAt: new Date().toISOString() });
       }
       case 'server.runtimeSetProperty': {
         const input = RuntimeSetPropertySchema.parse(payload);
@@ -352,13 +375,8 @@ export class RuntimeController {
         });
       }
       case 'server.runtimeDispatchInput': {
-        const input = RuntimeInputSchema.parse(payload);
-        return this.driver.dispatchInput(input.sessionId, {
-          inputType: input.inputType,
-          ...(input.x !== undefined ? { x: input.x } : {}),
-          ...(input.y !== undefined ? { y: input.y } : {}),
-          ...(input.key !== undefined ? { key: input.key } : {})
-        });
+        const { sessionId, ...input } = RuntimeInputSchema.parse(payload);
+        return this.driver.dispatchInput(sessionId, input);
       }
       case 'server.runtimeInstantiate': {
         const input = RuntimeInstantiateSchema.parse(payload);

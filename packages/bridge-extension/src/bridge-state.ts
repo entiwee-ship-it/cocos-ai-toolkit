@@ -13,6 +13,8 @@ export const BRIDGE_CAPABILITIES = [
   'probe.extensionManagerOpen',
   'probe.managerPanelOpen',
   'probe.workbenchOpen',
+  'probe.workbenchRead',
+  'probe.assetReveal',
   'probe.component',
   'probe.prefab',
   'probe.directWrite',

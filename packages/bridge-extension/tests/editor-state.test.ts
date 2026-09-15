@@ -5,7 +5,7 @@ import { normalizeAssetInfo } from '../src/asset-probe.js';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('buildBridgeHello', () => {
-  it('保留项目身份并只声明当前 Bridge 真实提供的写能力', () => {
+  it('保留项目身份并声明当前 Bridge 真实提供的能力', () => {
     const hello = buildBridgeHello({
       processId: 123,
       projectPath: 'E:/project',
@@ -27,6 +27,8 @@ describe('buildBridgeHello', () => {
     expect(BRIDGE_CAPABILITIES).toContain('probe.nodeSelect');
     expect(BRIDGE_CAPABILITIES).toContain('probe.extensionManagerOpen');
     expect(BRIDGE_CAPABILITIES).toContain('probe.managerPanelOpen');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.workbenchRead');
+    expect(BRIDGE_CAPABILITIES).toContain('probe.assetReveal');
     expect(BRIDGE_CAPABILITIES).toContain('probe.simulatorRuntimeEvaluate');
   });
 });

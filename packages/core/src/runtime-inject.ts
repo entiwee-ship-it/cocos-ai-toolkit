@@ -118,11 +118,105 @@ export async function readCanvasRect(): Promise<{ x: number; y: number; width: n
 }
 
 /**
- * 读取指定节点路径的边界矩形与锚点（画布 CSS 像素坐标系）。
- * 世界坐标（原点屏幕中心、Y 向上）经 cc.screen.windowSize 与画布 CSS 尺寸换算。
+ * 通过 Creator 自己的原生输入源派发事件，避免 Win32 消息缺失有效窗口上下文。
+ * 坐标为游戏画面像素，原点在左上角；Creator Simulator 3.8.x 的主窗口 ID 为 1。
+ *
+ * @param options 高层点击/按键，或 Workbench 的完整指针、滚轮和键盘事件。
+ * @returns 仅确认事件已进入 Creator 输入缓存，游戏响应仍需后续断言。
+ */
+export async function dispatchRuntimeInput(options: {
+  inputType: 'tap' | 'click' | 'key' | 'pointerdown' | 'pointermove' | 'pointerup' | 'wheel' | 'keydown' | 'keyup' | 'text';
+  x?: number; y?: number; key?: string; code?: string; keyCode?: number;
+  button?: number; buttons?: number; delta?: number; text?: string;
+}): Promise<Record<string, unknown>> {
+  if (options.inputType === 'text') throw new Error('CREATOR_SIMULATOR_TEXT_INPUT_UNAVAILABLE');
+  const globalObject = globalThis as {
+    System?: { import?: (name: string) => Promise<Record<string, any>> };
+    jsb?: { ISystemWindowManager?: { getInstance?: () => { getWindow?: (id: number) => { getViewSize?: () => { width: number; height: number } } | null } } };
+    __cocosAiRuntimeInputState?: { x: number; y: number; buttons: number };
+  };
+  const cc = await globalObject.System?.import?.('cc');
+  const windowId = 1;
+  const window = globalObject.jsb?.ISystemWindowManager?.getInstance?.().getWindow?.(windowId);
+  const size = window?.getViewSize?.();
+  if (!cc?.input || !size || !(size.width > 0) || !(size.height > 0)) {
+    throw new Error('CREATOR_SIMULATOR_INPUT_WINDOW_UNAVAILABLE');
+  }
+
+  const normalizeCode = (key: string): string => {
+    if (/^[a-z]$/i.test(key)) return `Key${key.toUpperCase()}`;
+    if (/^\d$/.test(key)) return `Digit${key}`;
+    if (key === ' ') return 'Space';
+    if (key === 'Esc') return 'Escape';
+    return key;
+  };
+  const keyCodes: Record<string, number> = {
+    Backspace: 8, Tab: 9, Enter: 13, ShiftLeft: 16, ControlLeft: 17, AltLeft: 18,
+    Escape: 27, Space: 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
+    ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46
+  };
+  if (options.inputType === 'key' || options.inputType === 'keydown' || options.inputType === 'keyup') {
+    const code = options.code || normalizeCode(options.key || '');
+    const keyCode = Number.isInteger(options.keyCode) ? options.keyCode!
+      : /^[a-z]$/i.test(options.key || '') ? (options.key || '').toUpperCase().charCodeAt(0)
+        : /^\d$/.test(options.key || '') ? (options.key || '').charCodeAt(0)
+          : keyCodes[code];
+    if (!code || !Number.isInteger(keyCode) || keyCode! < 0 || keyCode! > 65535) throw new Error('INPUT_KEY_REQUIRED');
+    const keyboard = cc.input._keyboardInput;
+    if (!keyboard?.dispatchKeyboardDownEvent || !keyboard?.dispatchKeyboardUpEvent) {
+      throw new Error('CREATOR_SIMULATOR_KEYBOARD_INPUT_UNAVAILABLE');
+    }
+    const event = { code, keyCode, windowId };
+    if (options.inputType !== 'keyup') keyboard.dispatchKeyboardDownEvent(event);
+    if (options.inputType !== 'keydown') keyboard.dispatchKeyboardUpEvent(event);
+    return { dispatched: true, inputType: options.inputType, key: options.key, code, keyCode, windowId };
+  }
+
+  if (!Number.isFinite(options.x) || !Number.isFinite(options.y)) throw new Error('INPUT_COORDINATES_REQUIRED');
+  const mouse = cc.input._mouseInput;
+  if (!mouse?.dispatchMouseDownEvent || !mouse?.dispatchMouseMoveEvent || !mouse?.dispatchMouseUpEvent || !mouse?.dispatchScrollEvent) {
+    throw new Error('CREATOR_SIMULATOR_MOUSE_INPUT_UNAVAILABLE');
+  }
+  const state = globalObject.__cocosAiRuntimeInputState ?? { x: options.x!, y: options.y!, buttons: 0 };
+  const x = Math.max(0, Math.min(size.width - 1, options.x!));
+  const y = Math.max(0, Math.min(size.height - 1, options.y!));
+  const buttons = Number.isInteger(options.buttons) && options.buttons! >= 0 && options.buttons! <= 7 ? options.buttons! : state.buttons;
+  const button = Number.isInteger(options.button) && options.button! >= 0 && options.button! <= 2
+    ? options.button! : (buttons & 1) ? 0 : (buttons & 4) ? 1 : (buttons & 2) ? 2 : 0;
+  const event = {
+    x, y, xDelta: x - state.x, yDelta: y - state.y, button, windowId,
+    wheelDeltaX: 0, wheelDeltaY: 0
+  };
+  if (options.inputType === 'tap' || options.inputType === 'click') {
+    mouse.dispatchMouseDownEvent(event);
+    mouse.dispatchMouseUpEvent(event);
+    state.buttons = 0;
+  } else if (options.inputType === 'pointerdown') {
+    mouse.dispatchMouseDownEvent(event);
+    state.buttons = buttons || (button === 0 ? 1 : button === 1 ? 4 : 2);
+  } else if (options.inputType === 'pointermove') {
+    mouse.dispatchMouseMoveEvent(event);
+    state.buttons = buttons;
+  } else if (options.inputType === 'pointerup') {
+    mouse.dispatchMouseUpEvent(event);
+    state.buttons = buttons;
+  } else if (options.inputType === 'wheel') {
+    if (!Number.isFinite(options.delta) || Math.abs(options.delta!) > 10000) throw new Error('INPUT_WHEEL_DELTA_INVALID');
+    event.wheelDeltaY = options.delta! / 120;
+    mouse.dispatchScrollEvent(event);
+  } else throw new Error(`INPUT_TYPE_UNAVAILABLE:${options.inputType}`);
+  state.x = x;
+  state.y = y;
+  globalObject.__cocosAiRuntimeInputState = state;
+  return { dispatched: true, inputType: options.inputType, x, y, button, buttons: state.buttons, windowId };
+}
+
+/**
+ * 通过 Creator 当前渲染相机投影节点自身四角，返回左上角为原点的画布坐标。
+ * 不使用包含后代的世界 AABB；旋转和实际相机视口都由引擎处理。
  *
  * @param options paths 节点路径列表。
- * @returns 逐项 found/rect/anchor；无 UITransform 的节点标注 hasBounds:false。
+ * @returns 逐项命中状态、四角 points、矩形 rect、锚点 anchor 和坐标基准 viewport；无法投影时附原因。
  */
 export async function readRuntimeNodeBounds(options: { paths: string[] }): Promise<Record<string, unknown>> {
   const globalObject = globalThis as {
@@ -130,21 +224,13 @@ export async function readRuntimeNodeBounds(options: { paths: string[] }): Promi
     document?: { getElementById?: (id: string) => { getBoundingClientRect?: () => { width: number; height: number } } | null };
   };
   if (!globalObject.System?.import) return { entries: [] };
-  const cc = await globalObject.System.import('cc') as {
-    director?: { getScene?: () => Record<string, unknown> | null };
-    screen: { windowSize: { width: number; height: number } };
-    UITransform?: unknown;
-  };
+  const cc = await globalObject.System.import('cc') as Record<string, any>;
   const scene = cc?.director?.getScene?.();
   if (!scene) return { entries: [] };
   const canvasRect = globalObject.document?.getElementById?.('GameCanvas')?.getBoundingClientRect?.();
   const winSize = cc.screen.windowSize;
   const scaleX = canvasRect && winSize.width > 0 ? canvasRect.width / winSize.width : 1;
   const scaleY = canvasRect && winSize.height > 0 ? canvasRect.height / winSize.height : 1;
-  const toCss = (worldX: number, worldY: number): { x: number; y: number } => ({
-    x: (worldX + winSize.width / 2) * scaleX,
-    y: (winSize.height - (worldY + winSize.height / 2)) * scaleY
-  });
 
   const entries: Array<Record<string, unknown>> = [];
   for (const path of options.paths ?? []) {
@@ -153,30 +239,109 @@ export async function readRuntimeNodeBounds(options: { paths: string[] }): Promi
       entries.push({ path, found: false });
       continue;
     }
-    const node = located.node as {
-      getComponent?: (type: unknown) => { getBoundingBoxToWorld?: () => { x: number; y: number; width: number; height: number } } | null;
-      worldPosition?: { x: number; y: number };
-    };
+    const node = located.node as Record<string, any>;
     const ui = typeof node.getComponent === 'function' ? node.getComponent(cc.UITransform) : null;
-    if (!ui || typeof ui.getBoundingBoxToWorld !== 'function') {
-      entries.push({ path, found: true, hasBounds: false });
+    if (!ui || typeof ui.convertToWorldSpaceAR !== 'function') {
+      entries.push({ path, found: true, hasBounds: false, reason: 'ui-transform-unavailable' });
       continue;
     }
-    const box = ui.getBoundingBoxToWorld();
-    const topLeft = toCss(box.x, box.y + box.height);
-    const bottomRight = toCss(box.x + box.width, box.y);
-    const entry: Record<string, unknown> = {
-      path,
-      found: true,
-      hasBounds: true,
-      rect: { x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y }
-    };
-    if (node.worldPosition) {
-      entry.anchor = toCss(node.worldPosition.x, node.worldPosition.y);
+    // 与 UITransform.cameraPriority 使用相同的相机选择入口，避免手猜 Canvas 或屏幕中心。
+    const camera = cc.director.root?.batcher2D?.getFirstRenderCamera(node);
+    if (!camera || typeof camera.worldToScreen !== 'function' || (camera.window && !camera.window.swapchain)) {
+      entries.push({ path, found: true, hasBounds: false, reason: 'render-camera-unavailable' });
+      continue;
     }
-    entries.push(entry);
+    const project = (world: unknown): { x: number; y: number } => {
+      const point = camera.worldToScreen(new cc.Vec3(), world);
+      return { x: point.x * scaleX, y: (winSize.height - point.y) * scaleY };
+    };
+    const left = -ui.anchorX * ui.width;
+    const bottom = -ui.anchorY * ui.height;
+    const points = [[left, bottom], [left + ui.width, bottom], [left + ui.width, bottom + ui.height], [left, bottom + ui.height]]
+      .map(([x, y]) => project(ui.convertToWorldSpaceAR(new cc.Vec3(x, y, 0))));
+    if (points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+      entries.push({ path, found: true, hasBounds: false, reason: 'projection-invalid' });
+      continue;
+    }
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+    entries.push({
+      path, found: true, hasBounds: true, points,
+      rect: { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
+      anchor: project(node.worldPosition),
+      viewport: { width: winSize.width * scaleX, height: winSize.height * scaleY },
+      size: { width: ui.width, height: ui.height },
+      camera: { name: camera.node?.name || '', priority: camera.priority || 0 }
+    });
   }
   return { entries };
+}
+
+/**
+ * 读取当前节点的绝对稳定路径；同名索引以真实兄弟列表为准。
+ * @param node 当前运行节点。
+ * @returns 含场景根的编码路径。
+ */
+function readRuntimeNodePath(node: Record<string, any>): string {
+  const segments: string[] = [];
+  let current: Record<string, any> | null = node;
+  while (current) {
+    const siblings = Array.isArray(current.parent?.children) ? current.parent.children : [current];
+    const index = siblings.filter((sibling: Record<string, any>) => sibling.name === current!.name).indexOf(current);
+    segments.unshift(encodeURIComponent(String(current.name || '')) + '~' + Math.max(0, index));
+    current = current.parent || null;
+  }
+  return '/' + segments.join('/');
+}
+
+/**
+ * 按引擎 PrefabInfo 和 IDGenerator 读取来源；没有实例证据时不沿父节点猜预制体。
+ * @param node 当前运行节点。
+ * @param scene 当前场景，提供场景资产身份。
+ * @returns 来源类别，以及存在时的源资产、文件 ID 和实例根身份。
+ */
+function readRuntimeNodeOrigin(node: Record<string, any>, scene: Record<string, any>): Record<string, unknown> {
+  const prefab = node.prefab || node._prefab;
+  const asset = prefab?.asset || prefab?.root?._prefab?.asset;
+  const assetUuid = asset?._uuid || asset?.uuid;
+  if (typeof assetUuid === 'string' && assetUuid) {
+    const root = prefab.root || node;
+    return { kind: 'prefab', assetUuid, fileId: String(prefab.fileId || ''), rootUuid: String(root.uuid || ''), rootPath: readRuntimeNodePath(root), instanceRoot: root === node };
+  }
+  // Creator 3.8.x Node 构造器始终分配 Node.<计数>，因此“存在 _id”不能证明来自场景。
+  const id = String(node._id || node.uuid || '');
+  if (!id || /^Node\.\d+$/.test(id)) return { kind: 'runtime' };
+  return { kind: 'scene', ...(typeof scene.uuid === 'string' ? { assetUuid: scene.uuid } : {}), fileId: id };
+}
+
+/**
+ * 读取单个运行节点的结构、来源和可视范围，供工作台与 AI 共用。
+ * @param options path 为当前会话内的绝对节点路径。
+ * @returns 命中状态、节点身份、层级、组件摘要、来源与投影；未命中时返回稳定原因。
+ */
+export async function readRuntimeNodeDetails(options: { path: string }): Promise<Record<string, unknown>> {
+  const globalObject = globalThis as { System?: { import?: (name: string) => Promise<Record<string, any>> } };
+  const cc = await globalObject.System?.import?.('cc');
+  const scene = cc?.director?.getScene?.();
+  if (!scene) return { found: false, reason: 'scene-missing' };
+  const located = findRuntimeNodeByPath(scene, options.path);
+  if (!located.node) return { found: false, reason: 'node-not-found' };
+  const node = located.node as Record<string, any>;
+  const path = readRuntimeNodePath(node);
+  const layer = Number(node.layer || 0) >>> 0;
+  const layerNames = Object.entries(cc!.Layers?.Enum || {}).filter(([, value]) => typeof value === 'number' && value !== 0 && ((value >>> 0) === layer));
+  const bounds = await readRuntimeNodeBounds({ paths: [path] }) as { entries: Record<string, unknown>[] };
+  const sceneState = readRuntimeSceneState(scene);
+  return {
+    found: true, nodeUuid: String(node.uuid || ''), name: String(node.name || ''), path,
+    parentUuid: node.parent?.uuid || null, active: node.active !== false, activeInHierarchy: node.activeInHierarchy !== false,
+    dynamic: !node._id || /^Node\.\d+$/.test(String(node._id)),
+    layer, layerName: layerNames[0]?.[0] || '0x' + layer.toString(16),
+    depth: path.split('/').filter(Boolean).length - 1,
+    siblingIndex: Array.isArray(node.parent?.children) ? Math.max(0, node.parent.children.indexOf(node)) : 0,
+    components: (node.components || []).map((component: unknown) => ({ type: readRuntimeComponentType(component) })),
+    origin: readRuntimeNodeOrigin(node, scene), bounds: bounds.entries[0], ...sceneState
+  };
 }
 
 /** 读取组件类型名（兼容压缩/自定义组件）。 */
@@ -690,8 +855,9 @@ async function readRuntimeHierarchy(options: {
       path,
       ...(parentUuid ? { parentUuid } : {}),
       active: node.active !== false,
-      // 场景序列化来源的节点带 fileId（_id），运行时动态创建的为空。
-      dynamic: !node._id,
+      activeInHierarchy: node.activeInHierarchy !== false,
+      dynamic: !node._id || /^Node\.\d+$/.test(String(node._id)),
+      origin: readRuntimeNodeOrigin(node, scene),
       components: (Array.isArray(node.components) ? node.components : []).map((component) => ({
         type: readRuntimeComponentType(component)
       }))
@@ -1459,6 +1625,10 @@ const RUNTIME_INJECT_FUNCTIONS: Array<(...args: never[]) => unknown> = [
   findRuntimePropertyDescriptor,
   writeRuntimeProperty,
   readCanvasRect,
+  dispatchRuntimeInput,
   readRuntimeNodeBounds,
+  readRuntimeNodePath,
+  readRuntimeNodeOrigin,
+  readRuntimeNodeDetails,
   instantiateRuntimePrefab
 ];

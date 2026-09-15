@@ -54,6 +54,24 @@ describe('CreatorClient named-pipe behavior', () => {
     await client.close();
   });
 
+  it('注入 Creator 请求时 probe 调用留在当前进程', async () => {
+    const endpointRoot = join(await temporaryRoot(), 'missing');
+    const requestCreator = vi.fn(async () => ({ state: 'ready' }));
+    const client = new CreatorClient({ endpointRoot, requestCreator });
+    await client.connect();
+
+    await expect(client.request('probe.editorState', {
+      selector: { projectId: 'project-id', editorInstanceId: 'project-id:1' },
+      params: { value: 7 }
+    })).resolves.toEqual({ state: 'ready' });
+    expect(requestCreator).toHaveBeenCalledWith(
+      { projectId: 'project-id', editorInstanceId: 'project-id:1' },
+      'probe.editorState',
+      { value: 7 }
+    );
+    await client.close();
+  });
+
   it('忽略已经失效的端点描述文件', async () => {
     const endpointRoot = await temporaryRoot();
     const stale = descriptor('stale');

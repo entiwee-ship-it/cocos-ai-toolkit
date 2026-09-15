@@ -23,7 +23,7 @@ describe('MCP 与 Creator 本机直连恢复', () => {
     ]);
     let bridge: Awaited<ReturnType<typeof startBridge>> | null = null;
     try {
-    expect((await client.listTools()).tools).toHaveLength(44);
+    expect((await client.listTools()).tools).toHaveLength(45);
       const offline = await client.callTool({ name: 'cocos_editor_list', arguments: {} });
       expect(offline.structuredContent).toMatchObject({
         editors: [],

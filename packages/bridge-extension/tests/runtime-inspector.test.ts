@@ -80,4 +80,34 @@ describe('Creator 原生运行时 Inspector', () => {
     expect(Object.keys(result.properties)).toEqual(['transition', 'editorTitle', 'clickEvents']);
     expect(result.propertyMeta.editorTitle.visible).toBe(true);
   });
+
+  it.each([
+    {
+      type: 'cc.ScrollView', values: { horizontal: true, vertical: false, inertia: true, elastic: false },
+      fields: ['horizontal', 'vertical', 'inertia', 'elastic', 'horizontalScrollBar', 'verticalScrollBar', 'brake', 'bounceDuration'],
+      visible: ['horizontal', 'vertical', 'inertia', 'elastic', 'horizontalScrollBar', 'brake']
+    },
+    {
+      type: 'cc.SphereLight', values: { term: 0 }, fields: ['term', 'luminousFlux', 'luminance'],
+      visible: ['term', 'luminousFlux']
+    },
+    {
+      type: 'cc.VideoPlayer', values: { resourceType: 0 }, fields: ['resourceType', 'remoteURL', 'clip'],
+      visible: ['resourceType', 'remoteURL']
+    },
+    {
+      type: 'cc.Terrain', values: {}, fields: ['_asset', 'info'], visible: ['_asset']
+    }
+  ])('按 Creator 3.8.8 原生 $type 面板规则筛选字段', ({ type, values, fields, visible }) => {
+    class Component { static __props__ = fields; }
+    const cc = { js: { getClassByName: () => Component, getClassName: () => type } };
+    const result = readRuntimeInspector({ componentType: type, values, writable: {} }, cc, {
+      encodeComponent: () => ({ type, value: Object.fromEntries(fields.map((name) => [name, {
+        type: name.toLowerCase().includes('bar') || name === 'clip' || name === 'asset' ? 'cc.Asset' : 'Number',
+        value: values[name] ?? null,
+        visible: true
+      }])) })
+    }, (key) => key);
+    expect(Object.keys(result.properties)).toEqual(visible);
+  });
 });
