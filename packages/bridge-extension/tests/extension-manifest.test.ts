@@ -144,6 +144,10 @@ describe('bridge extension manifest', () => {
     expect(nativeHost).toContain('CreateDirect3D11DeviceFromDXGIDevice');
     expect(nativeHost).toContain('d3dContext->CopySubresourceRegion');
     expect(nativeHost).toContain('SetLayeredWindowAttributes(simulatorWindow, 0, 0, LWA_ALPHA)');
+    expect(nativeHost).toContain('FindWindowExW(simulatorWindow, nullptr, L"RICHEDIT50W"');
+    expect(nativeHost).toContain('AttachThreadInput(currentThread, editThread, TRUE)');
+    expect(nativeHost).toContain('SendNotifyMessageW(editBox, message, wParam, lParam)');
+    expect(nativeHost).toContain('case WM_IME_CHAR:');
     expect(nativeHost).not.toContain('CreateRemoteThread');
     expect(nativeHost).not.toContain('simulator-frame-hook.dll');
     expect(nativeHost).toContain('Windows.Graphics.Capture');

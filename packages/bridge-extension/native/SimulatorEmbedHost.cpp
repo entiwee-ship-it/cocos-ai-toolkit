@@ -509,6 +509,27 @@ void WriteInput(char const* type, int x, int y, int button, int buttons, int del
         + std::to_string(keyCode));
 }
 
+HWND FindSimulatorEditBox()
+{
+    if (!IsWindow(simulatorWindow)) return nullptr;
+    HWND editBox = FindWindowExW(simulatorWindow, nullptr, L"RICHEDIT50W", nullptr);
+    if (!editBox) editBox = FindWindowExW(simulatorWindow, nullptr, L"Edit", nullptr);
+    return editBox && IsWindowVisible(editBox) ? editBox : nullptr;
+}
+
+bool ForwardSimulatorEditMessage(UINT message, WPARAM wParam, LPARAM lParam)
+{
+    HWND editBox = FindSimulatorEditBox();
+    if (!editBox) return false;
+    DWORD currentThread = GetCurrentThreadId();
+    DWORD editThread = GetWindowThreadProcessId(editBox, nullptr);
+    BOOL attached = editThread != currentThread && AttachThreadInput(currentThread, editThread, TRUE);
+    if (editThread == currentThread || attached) SetFocus(editBox);
+    BOOL sent = SendNotifyMessageW(editBox, message, wParam, lParam);
+    if (attached) AttachThreadInput(currentThread, editThread, FALSE);
+    return sent != FALSE;
+}
+
 void MapPointer(HWND window, int x, int y, int& mappedX, int& mappedY)
 {
     RECT destination{};
@@ -615,6 +636,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
     {
+        if (ForwardSimulatorEditMessage(message, wParam, lParam)) return 0;
         int keyCode = static_cast<int>(wParam);
         heldKeys.insert(keyCode);
         WriteInput("keydown", lastPointerX, lastPointerY, 0, pointerButtons, 0, keyCode);
@@ -623,11 +645,23 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_KEYUP:
     case WM_SYSKEYUP:
     {
+        if (ForwardSimulatorEditMessage(message, wParam, lParam)) return 0;
         int keyCode = static_cast<int>(wParam);
         heldKeys.erase(keyCode);
         WriteInput("keyup", lastPointerX, lastPointerY, 0, pointerButtons, 0, keyCode);
         return 0;
     }
+    case WM_CHAR:
+    case WM_SYSCHAR:
+    case WM_DEADCHAR:
+    case WM_SYSDEADCHAR:
+    case WM_IME_CHAR:
+        if (ForwardSimulatorEditMessage(message, wParam, lParam)) return 0;
+        break;
+    case WM_UNICHAR:
+        if (wParam == UNICODE_NOCHAR) return TRUE;
+        if (ForwardSimulatorEditMessage(message, wParam, lParam)) return 0;
+        break;
     case WM_KILLFOCUS:
         ReleaseInputState();
         return 0;
